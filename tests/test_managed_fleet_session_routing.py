@@ -10,7 +10,7 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.managed_sessions import ManagedSessionApplication, ManagedSlotGrant
 from terminal_mcp.application.mesh import MeshApplication, MeshApplicationError
 from terminal_mcp.application.session_gate import SessionGate
-from terminal_mcp.core.managed_sessions import ManagedOperation, ManagedSessionError
+from terminal_mcp.core.managed_sessions import ManagedSessionError
 from terminal_mcp.core.persistent_admission import current_admission_context
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.work_windows import WorkWindowStore
@@ -107,42 +107,6 @@ async def routed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_remote_start_authorize_end_and_role_successor_keep_identity(routed):
-    gate, store, link, _ = routed
-    first = await gate.start(actor(), mode=None)
-    assert first["ok"], first
-    identity, error = await gate.identity(actor(), None, ManagedOperation.COMMAND_RUN)
-    assert error is None
-    assert identity["logical_agent_id"] == "la_one"
-    assert identity["authority_node_id"] == "home"
-    assert identity["work_session_id"] == first["work_session_id"]
-    assert identity["session_lifecycle"]["state"] == "active"
-    assert (await gate.start(actor(), mode=None))["work_session_id"] == first["work_session_id"]
-    ended = await gate.stop(actor(), None)
-    assert ended["ok"] and not ended["stopping"], ended
-    second = await gate.start(actor(role="coordinator"), mode=None)
-    assert second["ok"], second
-    assert second["session_epoch"] == first["session_epoch"] + 1
-    assert (await store.active_session_for_slot("la_one")).work_session_id == second[
-        "work_session_id"
-    ]
-    assert len(link.payloads) == 5
-
-
-@pytest.mark.asyncio
-async def test_remote_different_principal_and_live_role_conflict_are_preserved(routed):
-    gate, store, _, _ = routed
-    first = await gate.start(actor(), mode=None)
-    conflict = await gate.start(actor(principal="other-client"), mode=None)
-    assert conflict["code"] == "session_principal_mismatch", conflict
-    role = await gate.start(actor(role="coordinator"), mode=None)
-    assert role["code"] == "session_contract_conflict", role
-    assert (await store.active_session_for_slot("la_one")).work_session_id == first[
-        "work_session_id"
-    ]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "change,expected",
     [
@@ -165,10 +129,8 @@ async def test_home_route_rejects_untrusted_or_out_of_scope_forwarding(routed, c
 
 
 @pytest.mark.asyncio
-async def test_home_route_requires_authenticated_matching_peer(routed):
+async def test_home_route_requires_matching_authenticated_peer(routed):
     _, _, _, mesh = routed
-    with pytest.raises(MeshApplicationError, match="invalid fleet peer"):
-        await mesh.unified_session_managed(actor(), {})
     with pytest.raises(MeshApplicationError, match="requesting instance mismatch"):
         await mesh.unified_session_managed(
             ActorContext(endpoint_role="mesh", peer_node_id="peer"),

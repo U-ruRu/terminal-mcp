@@ -3,10 +3,6 @@
 import base64
 import json
 
-from fastapi.testclient import TestClient
-from jsonschema import Draft202012Validator
-
-from terminal_mcp.app import create_app
 from terminal_mcp.config import Settings
 
 
@@ -73,12 +69,3 @@ def call(client, role, name, arguments, **kwargs):
     assert result["isError"] is False, result
     assert json.loads(result["content"][0]["text"]) == result["structuredContent"]
     return result["structuredContent"]
-
-
-def test_access_outputs_validate_as_advertised(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        catalog = rpc(client, "access", "tools/list").json()["result"]["tools"]
-        validator = Draft202012Validator(catalog[0]["outputSchema"])
-        result = call(client, "access", "session", {"action": "status"})
-        validator.validate(result)

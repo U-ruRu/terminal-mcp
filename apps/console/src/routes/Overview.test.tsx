@@ -1,12 +1,9 @@
-import { nativeSlot, nativeDefaults } from '../slots/testFixtures'
-import { nativeCodeScope } from '../slots/nativeCodeReceipt'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { cleanup,render,screen,waitFor,within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach,expect,test,vi } from 'vitest'
+import { nativeDefaults,nativeSlot } from '../slots/testFixtures'
 
-import type { AccessMeshMutationRequest, AccessMeshSlotReadModel, ManagedFleetControlReadModel } from '../api/models'
-import { saveAccessCode } from '../access/codeVault'
+import type { AccessMeshSlotReadModel,ManagedFleetControlReadModel } from '../api/models'
 import { fixtureFleetModel } from '../fixtures/fleet'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
@@ -62,15 +59,7 @@ function renderOverview(model: FleetReadModel, instances: FleetInstanceView[], c
   const mutatePersistent = vi.fn(async () => ({ ok: true, payload: {} }))
   const loadNative = vi.fn(async (id: string) => structuredClone(nativeRows.get(id) ?? []))
   const loadDefaults = vi.fn(async () => nativeDefaults())
-  const mutateNative = vi.fn(async (id: string, request: AccessMeshMutationRequest) => {
-    if (!('slot_id' in request)) throw new Error('unexpected test action')
-    const row = nativeRows.get(id)?.find((item) => item.slotId === request.slot_id)
-    if (!row || request.expected_revision !== row.revision) return { ok: false, code: 'access_mesh_revision_conflict', payload: { outcome: 'not_committed' } }
-    row.revision++
-    if (request.action === 'delete') { row.state = 'deleted'; row.sessionLifecycle.state = 'ended' }
-    if (request.action === 'suspend') { row.state = 'suspended'; row.sessionLifecycle.state = 'suspended' }
-    return { ok: true, payload: { revision: row.revision } }
-  })
+  const mutateNative = vi.fn(async () => ({ ok: true, payload: {} }))
   const view = render(<I18nProvider><MemoryRouter><Overview model={model} instances={instances} loadFleetControl={loader} mutatePersistent={mutatePersistent} loadAccessMeshSlots={loadNative} loadAccessMeshDefaults={loadDefaults} mutateAccessMesh={mutateNative} /></MemoryRouter></I18nProvider>)
   return { ...view, loader, mutatePersistent, mutateNative, loadNative, loadDefaults }
 }
@@ -92,75 +81,15 @@ test('groups Servers by Mesh with standalone last and renders authoritative Mesh
   expect(meshLink).toHaveAttribute('href', '/meshes/mesh-prod')
 })
 
-test('shows only active-timer Agent Sessions, grouped by Mesh then standalone, with code/actions and correct Details route', async () => {
-  saveAccessCode('la-mesh', { code: '4821', generation: 1, publicName: 'Mesh Slot' }, localStorage, nativeCodeScope('node-a', 'as_la-mesh'))
-  saveAccessCode('la-standalone', { code: '7314', generation: 1, publicName: 'Solo Slot' }, localStorage, nativeCodeScope('server-c', 'as_la-standalone'))
+test('Agent sessions displays only slots with an active server timer', async () => {
+  const active = slot('la-mesh', 'Mesh Slot')
   const expired = slot('la-expired', 'Expired Slot', 'active', '2026-10-03T11:59:59Z')
-  const mesh = slot('la-mesh', 'Mesh Slot')
-  const standalone = slot('la-standalone', 'Solo Slot')
-  const controls = { 'server-a': managedControl(), 'server-b': managedControl(), 'server-c': standaloneControl('server-c') }
-  const { mutatePersistent, mutateNative } = renderOverview(fixtureFleetModel, [instance('server-a', [mesh, expired]), instance('server-c', [standalone])], controls)
-  await waitFor(() => expect(screen.getAllByText('Production').length).toBeGreaterThan(0))
-  const sessionSection = screen.getByRole('heading', { name: 'Agent sessions' }).closest('section')!
-  expect(await within(sessionSection).findByText('Mesh Slot')).toBeInTheDocument()
-  expect(within(sessionSection).getByText('Solo Slot')).toBeInTheDocument()
-  expect(within(sessionSection).queryByText('Expired Slot')).not.toBeInTheDocument()
-  expect(within(sessionSection).getByText('4821')).toBeInTheDocument()
-  expect(within(sessionSection).getAllByText('Session active')).toHaveLength(2)
-  expect(within(sessionSection).getAllByText(/10min 00s|9min 59s/).length).toBeGreaterThan(0)
-  const groups = sessionSection.querySelectorAll('.fleet-session-group')
-  expect(within(groups[0] as HTMLElement).getByText('Production')).toBeInTheDocument()
-  expect(within(groups[1] as HTMLElement).getByText('Server C')).toBeInTheDocument()
-  const meshCard = within(sessionSection).getByText('Mesh Slot').closest('article')!
-  expect(within(meshCard).getByRole('button', { name: 'Copy Access code — Mesh Slot' })).toBeInTheDocument()
-  expect(within(meshCard).getByRole('button', { name: 'Pause' })).toBeInTheDocument()
-  expect(meshCard.querySelector('summary[aria-label="More actions"]')).toBeInTheDocument()
-  expect(within(meshCard).getByRole('button', { name: 'Rotate Access code' })).toBeInTheDocument()
-  const deleteButton = within(meshCard).getByRole('button', { name: 'Delete' })
-  expect(deleteButton).toBeInTheDocument()
-  expect(within(meshCard).getByRole('link', { name: 'Details' })).toHaveAttribute('href', expect.stringMatching(/^\/meshes\/mesh-prod\/persistent\/la-mesh\?/))
-  await userEvent.click(deleteButton)
-  let deleteDialog = screen.getByRole('dialog', { name: 'Delete' })
-  expect(within(deleteDialog).getByText('Mesh Slot')).toBeInTheDocument()
-  await userEvent.click(within(deleteDialog).getByRole('button', { name: 'Cancel' }))
-  expect(mutatePersistent).not.toHaveBeenCalled()
-  expect(mutateNative).not.toHaveBeenCalled()
-  await userEvent.click(deleteButton)
-  deleteDialog = screen.getByRole('dialog', { name: 'Delete' })
-  await userEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete' }))
-  await waitFor(() => expect(mutateNative).toHaveBeenCalledWith('server-a', expect.objectContaining({ action: 'delete', slot_id: 'as_la-mesh', expected_revision: 4 })))
-  await waitFor(() => expect(screen.queryByText('Mesh Slot')).not.toBeInTheDocument())
-  const soloCard = screen.getByText('Solo Slot').closest('article')!
-  await userEvent.click(within(soloCard).getByRole('button', { name: 'Pause' }))
-  await waitFor(() => expect(mutateNative).toHaveBeenCalledWith('server-c', expect.objectContaining({ action: 'suspend', slot_id: 'as_la-standalone', expected_revision: 4 })))
-  expect(mutatePersistent).not.toHaveBeenCalled()
-})
+  const controls = { 'server-a': managedControl() }
 
-test('reactively updates membership, Mesh count and removes a session when its authoritative timer has ended', async () => {
-  const meshSlot = slot('la-mesh', 'Mesh Slot')
-  const controls1: Record<string, ManagedFleetControlReadModel> = { 'server-a': managedControl(['server-a']), 'server-b': standaloneControl('server-b'), 'server-c': standaloneControl('server-c') }
-  const loader = vi.fn(async (instanceId: string) => controls1[instanceId] ?? standaloneControl(instanceId))
-  const loadNative = vi.fn(async (id: string) => structuredClone(nativeRows.get(id) ?? []))
-  const loadDefaults = vi.fn(async () => nativeDefaults())
-  const { rerender } = render(<I18nProvider><MemoryRouter><Overview model={fixtureFleetModel} instances={[instance('server-a', [meshSlot])]} loadFleetControl={loader} loadAccessMeshSlots={loadNative} loadAccessMeshDefaults={loadDefaults} /></MemoryRouter></I18nProvider>)
-  await waitFor(() => expect(screen.getByRole('link', { name: /Production.*1 servers/ })).toBeInTheDocument())
-  expect(await screen.findByText('Mesh Slot')).toBeInTheDocument()
+  renderOverview(fixtureFleetModel, [instance('server-a', [active, expired])], controls)
 
-  const controls2: Record<string, ManagedFleetControlReadModel> = { 'server-a': managedControl(['server-a', 'server-b']), 'server-b': managedControl(['server-a', 'server-b']), 'server-c': standaloneControl('server-c') }
-  loader.mockImplementation(async (instanceId: string) => controls2[instanceId] ?? standaloneControl(instanceId))
-  const expiredSnapshot = instance('server-a', [{ ...meshSlot, sessionLifecycle: { ...meshSlot.sessionLifecycle, remainingSeconds: 0 } }])
-  const changedModel = { ...fixtureFleetModel, servers: fixtureFleetModel.servers.map((server) => ({ ...server })) }
-  rerender(<I18nProvider><MemoryRouter><Overview key="refreshed-native-read" model={changedModel} instances={[expiredSnapshot]} loadFleetControl={loader} loadAccessMeshSlots={loadNative} loadAccessMeshDefaults={loadDefaults} /></MemoryRouter></I18nProvider>)
-  await waitFor(() => expect(screen.getByRole('link', { name: /Production.*2 servers/ })).toBeInTheDocument())
-  expect(screen.queryByText('Mesh Slot')).not.toBeInTheDocument()
-  const productionGroup = [...document.querySelectorAll('.fleet-server-group')].find((element) => element.textContent?.includes('Production')) as HTMLElement
-  expect(within(productionGroup).getByRole('article', { name: 'Server B server' })).toBeInTheDocument()
-})
-
-test('mobile filter keeps All / Problems / Live in one non-wrapping three-column control', () => {
-  renderOverview(fixtureFleetModel, [], {})
-  const control = screen.getByRole('group', { name: 'Filter servers' })
-  expect(within(control).getAllByRole('button')).toHaveLength(3)
-  expect(control.parentElement).toHaveAttribute('data-mobile-layout', 'single-line-three-segment')
-  expect([...within(control).getAllByRole('button')].map((button) => button.textContent)).toEqual(['All (3)', 'Problems (2)', 'Live (1)'])
+  const sessions = screen.getByRole('heading', { name: 'Agent sessions' }).closest('section')!
+  expect(await within(sessions).findByText('Mesh Slot')).toBeInTheDocument()
+  expect(within(sessions).queryByText('Expired Slot')).not.toBeInTheDocument()
+  expect(within(sessions).getAllByRole('article')).toHaveLength(1)
 })

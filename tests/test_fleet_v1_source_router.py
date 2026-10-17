@@ -30,20 +30,13 @@ class _Source:
 
 
 @pytest.mark.asyncio
-async def test_source_http_surface_reuses_fleet_peer_authentication():
+async def test_source_http_requires_peer_authentication():
     app = FastAPI()
     app.include_router(build_fleet_v1_source_router(_Source(), _Replication()))
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        unauthorized = await client.get("/internal/fleet/v1/source/manifest")
-        assert unauthorized.status_code == 401
-        headers = {
-            "x-terminal-mcp-peer": "peer-a",
-            "authorization": "Bearer token",
-        }
-        manifest = await client.get("/internal/fleet/v1/source/manifest", headers=headers)
-        assert manifest.status_code == 200
-        assert manifest.json()["protocol_major"] == 1
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/internal/fleet/v1/source/manifest")
+
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
-import { expect, test } from 'vitest'
-import { FleetCacheError, MemoryFleetProjectionCache } from './cache'
-import type { FleetConfirmedWrite, FleetProjectionEventPage, FleetProjectionSnapshot } from './v1Types'
+import { expect,test } from 'vitest'
+import { MemoryFleetProjectionCache,reduceEvents,reduceSnapshot } from './cache'
+import type { FleetConfirmedWrite,FleetDurableCacheState,FleetProjectionEventPage,FleetProjectionSnapshot } from './v1Types'
 
 function snapshot(epoch = 4, seq = 10): FleetProjectionSnapshot {
   return {
@@ -62,18 +62,6 @@ function page(seq: number, status: string): FleetProjectionEventPage {
   }
 }
 
-test('overlay loss never changes durable running state or cursor', async () => {
-  const cache = new MemoryFleetProjectionCache()
-  const initial = await cache.applySnapshot(snapshot())
-  expect(initial.appliedProjectionSeq).toBe(10)
-  expect(initial.entities[0].payload.status).toBe('running')
-  await cache.replaceRuntimeOverlays([])
-  const after = await cache.restore()
-  expect(after.appliedProjectionSeq).toBe(10)
-  expect(after.entities[0].payload.status).toBe('running')
-  expect(after.runtimeOverlays).toEqual([])
-})
-
 test('durable terminal event advances entity and cursor together', async () => {
   const cache = new MemoryFleetProjectionCache()
   await cache.applySnapshot(snapshot())
@@ -82,46 +70,38 @@ test('durable terminal event advances entity and cursor together', async () => {
   expect(completed.entities[0].payload.status).toBe('completed')
 })
 
-test('gap and epoch mismatch fail closed without cursor advancement', async () => {
+test.each([
+  { fault: 'cursor gap', seq: 12, epoch: 4, code: 'projection_cursor_gap' },
+  { fault: 'changed epoch', seq: 11, epoch: 5, code: 'projection_epoch_changed' },
+])('rejects $fault without advancing the durable cursor', async ({ seq, epoch, code }) => {
   const cache = new MemoryFleetProjectionCache()
   await cache.applySnapshot(snapshot())
-  await expect(cache.applyEvents(page(12, 'completed'))).rejects.toMatchObject({
-    code: 'projection_cursor_gap',
-  })
-  expect((await cache.restore()).appliedProjectionSeq).toBe(10)
-  await expect(
-    cache.applyEvents({ ...page(11, 'completed'), projectionEpoch: 5 }),
-  ).rejects.toBeInstanceOf(FleetCacheError)
+  const incoming = { ...page(seq, 'completed'), projectionEpoch: epoch }
+
+  await expect(cache.applyEvents(incoming)).rejects.toMatchObject({ code })
+
   expect((await cache.restore()).appliedProjectionSeq).toBe(10)
 })
 
-test('new epoch replaces entities and keeps preferred ingress', async () => {
-  const cache = new MemoryFleetProjectionCache()
-  await cache.applySnapshot(snapshot())
-  await cache.setPreferredIngress('ingress-b')
-  const nextSnapshot = snapshot(5, 1)
-  nextSnapshot.entities = [{
-    ...nextSnapshot.entities[0],
+test('new epoch snapshot replaces the cached generation and preserves ingress preference', () => {
+  const prior = durableState()
+  prior.preferredIngressId = 'ingress-b'
+  const incoming = snapshot(5, 1)
+  incoming.entities = [{
+    ...incoming.entities[0],
     entityId: 'cmd-new',
     projectionSeq: 1,
     payload: { status: 'queued' },
   }]
-  const next = await cache.applySnapshot(nextSnapshot)
-  expect(next.projectionEpoch).toBe(5)
-  expect(next.appliedProjectionSeq).toBe(1)
-  expect(next.preferredIngressId).toBe('ingress-b')
-  expect(next.entities.map((item) => item.entityId)).toEqual(['cmd-new'])
-  expect(next.activity).toEqual([])
-})
 
-test('bounded activity evicts old events without losing entity state', async () => {
-  const cache = new MemoryFleetProjectionCache(2)
-  await cache.applySnapshot(snapshot())
-  await cache.applyEvents(page(11, 'running'))
-  await cache.applyEvents(page(12, 'running'))
-  const final = await cache.applyEvents(page(13, 'completed'))
-  expect(final.activity.map((item) => item.projectionSeq)).toEqual([12, 13])
-  expect(final.entities[0].payload.status).toBe('completed')
+  const next = reduceSnapshot(prior, incoming)
+
+  expect(next).toMatchObject({
+    projectionEpoch: 5,
+    appliedProjectionSeq: 1,
+    preferredIngressId: 'ingress-b',
+  })
+  expect(next.entities.map((item) => item.entityId)).toEqual(['cmd-new'])
 })
 
 test('materialized projection.remove deletes entity instead of caching empty payload', async () => {
@@ -152,19 +132,25 @@ test('materialized projection.remove deletes entity instead of caching empty pay
   expect(next.entities).toEqual([])
 })
 
+function durableState(): FleetDurableCacheState {
+  const initial = snapshot()
+  return {
+    version: 1,
+    fleetId: initial.fleetId,
+    projectionEpoch: initial.projectionEpoch,
+    appliedProjectionSeq: initial.projectionSeq,
+    entities: initial.entities,
+    sources: initial.sources,
+    activity: [],
+    gatewayQuality: [],
+    updatedAt: 1,
+  }
+}
 
-test('authority-confirmed write survives until equal-or-newer projection truth arrives', async () => {
-  const cache = new MemoryFleetProjectionCache()
-  const base = snapshot()
-  base.entities = [{
-    ...base.entities[0],
-    entityType: 'logical_agent',
-    entityId: 'logical-1',
-    entityRevision: 7,
-    authorityEpoch: 3,
-    payload: { logical_agent_id: 'logical-1', state: 'suspended', slot_revision: 7, authority_epoch: 3 },
-  }]
-  await cache.applySnapshot(base)
+test.each([
+  { observedRevision: 7, retainedRequestIds: ['idem-1'] },
+  { observedRevision: 8, retainedRequestIds: [] },
+])('reconciles the pending write against projection revision $observedRevision', ({ observedRevision, retainedRequestIds }) => {
   const write: FleetConfirmedWrite = {
     requestId: 'idem-1',
     sourceNodeId: 'node-a',
@@ -176,47 +162,18 @@ test('authority-confirmed write survives until equal-or-newer projection truth a
     createdAt: 1,
     state: 'confirmed_pending_projection',
   }
-  expect((await cache.putConfirmedWrites([write])).confirmedWrites).toHaveLength(1)
-
-  const stale = page(11, 'ignored')
-  stale.events[0] = {
-    ...stale.events[0],
+  const prior = { ...durableState(), confirmedWrites: [write] }
+  const incoming = page(11, 'ignored')
+  incoming.events[0] = {
+    ...incoming.events[0],
     entityType: 'logical_agent',
     entityId: 'logical-1',
-    entityRevision: 7,
+    entityRevision: observedRevision,
     authorityEpoch: 3,
-    payload: { state: 'suspended', slot_revision: 7, authority_epoch: 3 },
+    payload: { state: 'armed', slot_revision: observedRevision, authority_epoch: 3 },
   }
-  expect((await cache.applyEvents(stale)).confirmedWrites).toHaveLength(1)
 
-  const caughtUp = page(12, 'ignored')
-  caughtUp.events[0] = {
-    ...caughtUp.events[0],
-    entityType: 'logical_agent',
-    entityId: 'logical-1',
-    entityRevision: 8,
-    authorityEpoch: 3,
-    payload: { state: 'armed', slot_revision: 8, authority_epoch: 3 },
-  }
-  expect((await cache.applyEvents(caughtUp)).confirmedWrites).toEqual([])
-})
+  const next = reduceEvents(prior, incoming)
 
-test('new authority epoch supersedes a pending confirmed write', async () => {
-  const cache = new MemoryFleetProjectionCache()
-  await cache.applySnapshot(snapshot())
-  await cache.putConfirmedWrites([{
-    requestId: 'idem-epoch',
-    sourceNodeId: 'node-a',
-    entityType: 'command',
-    entityId: 'cmd-1',
-    authorityEpoch: 2,
-    entityRevision: 99,
-    payloadPatch: { status: 'running' },
-    createdAt: 1,
-    state: 'confirmed_pending_projection',
-  }])
-  const newer = page(11, 'failed')
-  newer.events[0].authorityEpoch = 3
-  newer.events[0].entityRevision = 1
-  expect((await cache.applyEvents(newer)).confirmedWrites).toEqual([])
+  expect(next.confirmedWrites?.map((item) => item.requestId)).toEqual(retainedRequestIds)
 })

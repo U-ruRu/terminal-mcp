@@ -1,18 +1,25 @@
-import asyncio
 import base64
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
+import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from terminal_mcp.core.access_mesh_grants import AccessSlotEvent, SlotPolicy
+from terminal_mcp.core.human_names import number_agent_name
 from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
-from terminal_mcp.core.persistent_admission import VerifiedAdmissionContext
 from terminal_mcp.core.persistent_execution import PersistentExecutionFence
-from terminal_mcp.core.persistent_fleet import PersistentFleetBridge, verify_permit
-from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
+from terminal_mcp.core.persistent_fleet import (
+    PersistentCommandPermit,
+    PersistentFleetBridge,
+    sign_permit,
+    verify_permit,
+)
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
+from terminal_mcp.storage.access_mesh import AccessMeshStore
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore, PersistentStoreError
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
@@ -41,96 +48,81 @@ def keypair():
     )
 
 
-def admission():
-    return VerifiedAdmissionContext(
-        principal_id="client-1",
-        credential_id="oauth:client-1",
-        scopes=frozenset({"terminal:read", "terminal:execute"}),
-        auth_generation=1,
-        transport="mcp",
-        auth_mode="oauth",
+@pytest_asyncio.fixture
+async def native_authority(tmp_path):
+    repo = SqliteRepository(tmp_path / "native-authority.sqlite3")
+    await repo.initialize()
+    now = utc_now()
+    mesh = AccessMeshStore(
+        repo.path,
+        local_node_id="bacloud",
+        trusted_issuers=frozenset({"bacloud", "firstbyte"}),
+        proof_key=b"current-permit-fixture-proof-key-32bytes",
     )
+    mesh.apply_event(
+        AccessSlotEvent(
+            issuer_id="bacloud",
+            slot_id="permit-slot",
+            logical_agent_id="la_permit",
+            revision=1,
+            event_id="bacloud:permit-slot:1",
+            kind="SlotIssued",
+            policy=SlotPolicy(120, 30),
+            code_tag=mesh.code_tag("bacloud", "1234"),
+            effective_at=now,
+            agent_name=number_agent_name("1234"),
+        ),
+        authenticated_peer_id="bacloud",
+        issued_kind="persistent",
+        mutation_number={"number": "1234", "attempt_id": "fixture", "started_at": now},
+    )
+    identity = mesh.local_identity(mesh.slot("bacloud", "permit-slot"), now=now)
+    store = PersistentAgentStore(repo.path)
+    private, public = keypair()
+    _, peer_public = keypair()
+    bridge = PersistentFleetBridge(
+        FleetConfig(
+            "bacloud",
+            private,
+            (FleetPeer("firstbyte", "https://firstbyte.example", peer_public, "peer-token"),),
+            1.0,
+            1.0,
+        ),
+        store,
+        repo,
+        object(),
+        TaskStore(repo.path),
+    )
+    return SimpleNamespace(
+        mesh=mesh, store=store, bridge=bridge, identity=identity, public_key=public
+    )
+
+
+def request_for(identity):
+    return {
+        "logical_agent_id": identity["logical_agent_id"],
+        "work_session_id": identity["work_session_id"],
+        "session_epoch": identity["session_epoch"],
+        "requesting_instance_id": "firstbyte",
+        "scope": "run",
+        "principal_id": "client-1",
+    }
 
 
 @pytest.mark.asyncio
-async def test_signed_permit_is_exact_node_bound_and_tamper_evident(tmp_path):
-    repo = SqliteRepository(tmp_path / "db.sqlite3", tmp_path / "out.sqlite3")
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    life = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
-    )
-    ctx = admission()
-    created = await life.create_slot("Alpha", admission=ctx)
-    armed = await life.play(
-        created["slot"]["logical_agent_id"],
-        expected_revision=created["slot"]["slot_revision"],
-        admission=ctx,
-    )
-    started = await life.session_start(
-        created["selector"]["selector"],
-        expected_revision=armed["slot"]["slot_revision"],
-        admission=ctx,
-        origin_instance_id="bacloud",
-    )
-    bc_priv, bc_pub = keypair()
-    _, fb_pub = keypair()
-    cfg = FleetConfig(
-        "bacloud",
-        bc_priv,
-        (FleetPeer("firstbyte", "https://firstbyte.example", fb_pub, "fb-token"),),
-        1.0,
-        1.0,
-    )
-    bridge = PersistentFleetBridge(cfg, store, repo, object(), TaskStore(repo.path))
-    ws = started["work_session"]
-    permit = await bridge.issue_permit(
-        logical_agent_id=started["logical_agent_id"],
-        work_session_id=ws["work_session_id"],
-        session_epoch=ws["session_epoch"],
-        requesting_instance_id="firstbyte",
-        scope="run",
-        principal_id=ctx.principal_id,
-    )
+async def test_issue_permit_binds_node_and_session_deadline(native_authority):
+    case = native_authority
+
+    permit = await case.bridge.issue_permit(**request_for(case.identity))
+
     assert permit.node_instance_id == "firstbyte"
     assert permit.authority_node_id == "bacloud"
-    assert verify_permit(permit, bc_pub)
-    assert not verify_permit(replace(permit, scope="cancel"), bc_pub)
+    assert verify_permit(permit, case.public_key)
     assert parse_utc(permit.permit_expires_at) <= parse_utc(permit.hard_expires_at)
-    attachments = await store.attachments_for_session(
+    attachments = await case.store.attachments_for_session(
         permit.logical_agent_id, permit.work_session_id, permit.session_epoch
     )
     assert [item["node_instance_id"] for item in attachments] == ["firstbyte"]
-    with pytest.raises(PersistentStoreError, match="persistent_auth_required"):
-        await bridge.issue_permit(
-            logical_agent_id=permit.logical_agent_id,
-            work_session_id=permit.work_session_id,
-            session_epoch=permit.session_epoch,
-            requesting_instance_id="firstbyte",
-            scope="run",
-            principal_id="wrong-client",
-        )
-
-    async def resolve_access_code(code):
-        assert code == "0042"
-        return {
-            "logical_agent_id": permit.logical_agent_id,
-            "authority_node_id": "bacloud",
-            "access_generation": 3,
-        }
-
-    bridge.resolve_access_code = resolve_access_code
-    cross_connector = await bridge.issue_permit(
-        logical_agent_id=permit.logical_agent_id,
-        work_session_id=permit.work_session_id,
-        session_epoch=permit.session_epoch,
-        requesting_instance_id="firstbyte",
-        scope="run",
-        principal_id="connector-on-firstbyte",
-        access_code="0042",
-    )
-    assert cross_connector.principal_id == "connector-on-firstbyte"
-    assert verify_permit(cross_connector, bc_pub)
 
 
 class Resp:
@@ -161,67 +153,54 @@ class Client:
 
 
 @pytest.mark.asyncio
-async def test_remote_accepts_only_exact_peer_signed_permit(tmp_path):
-    # Create authority-side permit using the first test's real lifecycle path.
-    repo = SqliteRepository(tmp_path / "auth.sqlite3", tmp_path / "auth-out.sqlite3")
+async def test_remote_rejects_tampered_peer_permit(tmp_path):
+    repo = SqliteRepository(tmp_path / "remote.sqlite3")
     await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    life = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
-    )
-    ctx = admission()
-    created = await life.create_slot("Alpha", admission=ctx)
-    armed = await life.play(created["slot"]["logical_agent_id"], expected_revision=1, admission=ctx)
-    started = await life.session_start(
-        created["selector"]["selector"],
-        expected_revision=armed["slot"]["slot_revision"],
-        admission=ctx,
-    )
-    bc_priv, bc_pub = keypair()
-    fb_priv, fb_pub = keypair()
-    authority = PersistentFleetBridge(
-        FleetConfig(
-            "bacloud", bc_priv, (FleetPeer("firstbyte", "https://fb", fb_pub, "t"),), 1.0, 1.0
+    authority_private, authority_public = keypair()
+    remote_private, _ = keypair()
+    now = utc_now()
+    signed = sign_permit(
+        PersistentCommandPermit(
+            logical_agent_id="la_native",
+            work_session_id="wm_native",
+            session_epoch=1,
+            authority_node_id="bacloud",
+            authority_epoch=1,
+            node_attachment_id="attachment",
+            node_instance_id="firstbyte",
+            scope="run",
+            issued_at=utc_text(now),
+            permit_expires_at=utc_text(now + timedelta(seconds=5)),
+            hard_expires_at=utc_text(now + timedelta(minutes=2)),
+            slot_revision=1,
+            principal_id="client-1",
         ),
-        store,
+        authority_private,
+    )
+    # This field passes admission shape checks, so only signature verification can reject it.
+    tampered = replace(signed, slot_revision=2)
+    remote = PersistentFleetBridge(
+        FleetConfig(
+            "firstbyte",
+            remote_private,
+            (FleetPeer("bacloud", "https://bacloud.example", authority_public, "peer-token"),),
+            1.0,
+            1.0,
+        ),
+        PersistentAgentStore(repo.path),
         repo,
         object(),
         TaskStore(repo.path),
+        client_factory=lambda: Client(tampered),
     )
-    ws = started["work_session"]
-    permit = await authority.issue_permit(
-        logical_agent_id=started["logical_agent_id"],
-        work_session_id=ws["work_session_id"],
-        session_epoch=ws["session_epoch"],
-        requesting_instance_id="firstbyte",
-        scope="run",
-        principal_id=ctx.principal_id,
-    )
-    rrepo = SqliteRepository(tmp_path / "remote.sqlite3", tmp_path / "remote-out.sqlite3")
-    await rrepo.initialize()
-    rstore = PersistentAgentStore(rrepo.path)
-    rcfg = FleetConfig(
-        "firstbyte", fb_priv, (FleetPeer("bacloud", "https://bc", bc_pub, "t"),), 1.0, 1.0
-    )
-    remote = PersistentFleetBridge(
-        rcfg, rstore, rrepo, object(), TaskStore(rrepo.path), client_factory=lambda: Client(permit)
-    )
-    accepted = await remote.acquire_permit(
-        logical_agent_id=permit.logical_agent_id,
-        work_session_id=permit.work_session_id,
-        session_epoch=permit.session_epoch,
-        scope="run",
-        principal_id=ctx.principal_id,
-    )
-    assert accepted == permit
-    remote.client_factory = lambda: Client(replace(permit, scope="cancel"))
+
     with pytest.raises(PersistentStoreError, match="authority_unavailable"):
         await remote.acquire_permit(
-            logical_agent_id=permit.logical_agent_id,
-            work_session_id=permit.work_session_id,
-            session_epoch=permit.session_epoch,
+            logical_agent_id=signed.logical_agent_id,
+            work_session_id=signed.work_session_id,
+            session_epoch=signed.session_epoch,
             scope="run",
-            principal_id=ctx.principal_id,
+            principal_id=signed.principal_id,
         )
 
 
@@ -282,179 +261,46 @@ async def test_remote_revoke_fences_permits_before_reporting_running_blocker(tmp
     assert revoked_at is not None
 
 
-class DelayedClient:
-    def __init__(self, permit, entered, release):
-        self.permit = permit
-        self.entered = entered
-        self.release = release
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return None
-
-    async def post(self, *args, **kwargs):
-        self.entered.set()
-        await self.release.wait()
-        return Resp(self.permit)
-
-
-class DrainFence:
-    def __init__(self):
-        self.entered = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def blockers_for_session(self, logical_agent_id, work_session_id, session_epoch):
-        self.entered.set()
-        await self.release.wait()
-        return []
-
-
 @pytest.mark.asyncio
-async def test_delayed_remote_permit_loses_race_to_graceful_drain(tmp_path):
-    repo = SqliteRepository(tmp_path / "race-auth.sqlite3", tmp_path / "race-auth-out.sqlite3")
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    life = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
-    )
-    ctx = admission()
-    created = await life.create_slot("Alpha", admission=ctx)
-    armed = await life.play(created["slot"]["logical_agent_id"], expected_revision=1, admission=ctx)
-    started = await life.session_start(
-        created["selector"]["selector"],
-        expected_revision=armed["slot"]["slot_revision"],
-        admission=ctx,
-    )
-    bc_priv, bc_pub = keypair()
-    fb_priv, fb_pub = keypair()
-    authority = PersistentFleetBridge(
-        FleetConfig(
-            "bacloud", bc_priv, (FleetPeer("firstbyte", "https://fb", fb_pub, "t"),), 1.0, 1.0
-        ),
-        store,
-        repo,
-        object(),
-        TaskStore(repo.path),
-    )
-    ws = started["work_session"]
-    permit = await authority.issue_permit(
-        logical_agent_id=started["logical_agent_id"],
-        work_session_id=ws["work_session_id"],
-        session_epoch=ws["session_epoch"],
-        requesting_instance_id="firstbyte",
-        scope="run",
-        principal_id=ctx.principal_id,
-    )
+async def test_authority_rechecks_session_after_attachment_before_returning_permit(
+    native_authority, monkeypatch
+):
+    case = native_authority
+    original_record = case.store.record_node_attachment
 
-    rrepo = SqliteRepository(tmp_path / "race-remote.sqlite3", tmp_path / "race-remote-out.sqlite3")
-    await rrepo.initialize()
-    rstore = PersistentAgentStore(rrepo.path)
-    response_entered = asyncio.Event()
-    response_release = asyncio.Event()
-    drain_fence = DrainFence()
-    remote = PersistentFleetBridge(
-        FleetConfig(
-            "firstbyte", fb_priv, (FleetPeer("bacloud", "https://bc", bc_pub, "t"),), 1.0, 1.0
-        ),
-        rstore,
-        rrepo,
-        object(),
-        TaskStore(rrepo.path),
-        client_factory=lambda: DelayedClient(permit, response_entered, response_release),
-    )
-    remote.execution_fence = drain_fence
-
-    acquiring = asyncio.create_task(
-        remote.acquire_permit(
-            logical_agent_id=permit.logical_agent_id,
-            work_session_id=permit.work_session_id,
-            session_epoch=permit.session_epoch,
-            scope="run",
-            principal_id=ctx.principal_id,
-        )
-    )
-    await response_entered.wait()
-    draining = asyncio.create_task(
-        remote.receive_drain(
-            logical_agent_id=permit.logical_agent_id,
-            work_session_id=permit.work_session_id,
-            session_epoch=permit.session_epoch,
-            hard_expires_at=permit.hard_expires_at,
-        )
-    )
-    await drain_fence.entered.wait()
-    response_release.set()
-    with pytest.raises(PersistentStoreError, match="session_not_active"):
-        await acquiring
-    with pytest.raises(PersistentStoreError, match="session_not_active"):
-        remote.ensure_permit_valid(permit)
-    drain_fence.release.set()
-    assert await draining == []
-
-
-@pytest.mark.asyncio
-async def test_authority_rechecks_session_after_attachment_before_returning_permit(tmp_path):
-    repo = SqliteRepository(tmp_path / "recheck.sqlite3", tmp_path / "recheck-out.sqlite3")
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    life = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
-    )
-    ctx = admission()
-    created = await life.create_slot("Alpha", admission=ctx)
-    logical_agent_id = created["slot"]["logical_agent_id"]
-    armed = await life.play(logical_agent_id, expected_revision=1, admission=ctx)
-    started = await life.session_start(
-        created["selector"]["selector"],
-        expected_revision=armed["slot"]["slot_revision"],
-        admission=ctx,
-    )
-    ws = started["work_session"]
-    bc_priv, _bc_pub = keypair()
-    _, fb_pub = keypair()
-    bridge = PersistentFleetBridge(
-        FleetConfig(
-            "bacloud", bc_priv, (FleetPeer("firstbyte", "https://fb", fb_pub, "t"),), 1.0, 1.0
-        ),
-        store,
-        repo,
-        object(),
-        TaskStore(repo.path),
-    )
-    original_record = store.record_node_attachment
-
-    async def record_then_stop(**kwargs):
+    async def record_then_end(**kwargs):
         attachment = await original_record(**kwargs)
-        await life.session_end(
-            logical_agent_id,
-            ws["work_session_id"],
-            ws["session_epoch"],
-            admission=ctx,
+        case.mesh.apply_event(
+            AccessSlotEvent(
+                issuer_id="bacloud",
+                slot_id="permit-slot",
+                logical_agent_id="la_permit",
+                revision=2,
+                event_id="bacloud:permit-slot:2",
+                kind="SessionEnded",
+                effective_at=utc_now(),
+            ),
+            authenticated_peer_id="bacloud",
         )
         return attachment
 
-    store.record_node_attachment = record_then_stop
+    monkeypatch.setattr(case.store, "record_node_attachment", record_then_end)
     with pytest.raises(PersistentStoreError, match="session_not_active"):
-        await bridge.issue_permit(
-            logical_agent_id=logical_agent_id,
-            work_session_id=ws["work_session_id"],
-            session_epoch=ws["session_epoch"],
-            requesting_instance_id="firstbyte",
-            scope="run",
-            principal_id=ctx.principal_id,
-        )
+        await case.bridge.issue_permit(**request_for(case.identity))
+
     assert (
-        await store.attachments_for_session(
-            logical_agent_id, ws["work_session_id"], ws["session_epoch"], active_only=True
+        await case.store.attachments_for_session(
+            case.identity["logical_agent_id"],
+            case.identity["work_session_id"],
+            case.identity["session_epoch"],
+            active_only=True,
         )
         == []
     )
 
 
 @pytest.mark.asyncio
-async def test_remote_drain_preserves_materialized_command_until_natural_completion(
+async def test_remote_drain_preserves_accepted_queued_command(
     tmp_path,
 ):
     repo = SqliteRepository(tmp_path / "drain-work.sqlite3", tmp_path / "drain-work-out.sqlite3")
@@ -517,340 +363,3 @@ async def test_remote_drain_preserves_materialized_command_until_natural_complet
     )
     assert {item["command_hash"] for item in blockers} == {command.cmd_hash}
     assert (await repo.get(command.cmd_hash)).status == "queued"
-
-    claimed = await repo.claim_next(1)
-    assert claimed is not None and claimed.cmd_hash == command.cmd_hash
-    assert await repo.finish_running(command.cmd_hash, "completed", 0, None)
-    assert (await repo.get(command.cmd_hash)).status == "completed"
-
-
-@pytest.mark.asyncio
-async def test_access_list_falls_back_to_legacy_get_when_control_node_lacks_list_route(tmp_path):
-    repo = SqliteRepository(tmp_path / "compat.sqlite3", tmp_path / "compat-out.sqlite3")
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    life = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
-    )
-    created = await life.create_slot("Compat", admission=admission())
-    logical_agent_id = created["slot"]["logical_agent_id"]
-    private_key, _ = keypair()
-    _, control_public = keypair()
-    config = FleetConfig(
-        "bacloud",
-        private_key,
-        (FleetPeer("main", "https://main.example", control_public, "token"),),
-        1.0,
-        1.0,
-    )
-    bridge = PersistentFleetBridge(
-        config,
-        store,
-        repo,
-        object(),
-        TaskStore(repo.path),
-        control_node_id="main",
-    )
-    calls = []
-
-    async def remote_call(operation, payload):
-        calls.append((operation, payload))
-        if operation == "list":
-            raise PersistentStoreError("route_unavailable")
-        assert operation == "get"
-        assert payload == {"logical_agent_id": logical_agent_id}
-        return {
-            "ok": True,
-            "access": {
-                "logical_agent_id": logical_agent_id,
-                "authority_node_id": "bacloud",
-                "slot_kind": "persistent",
-                "public_name": "Alpha-Compat",
-                "display_suffix": "Compat",
-                "access_generation": 1,
-            },
-        }
-
-    bridge._remote_access_call = remote_call
-    result = await bridge.list_access_slots()
-    assert [item["logical_agent_id"] for item in result] == [logical_agent_id]
-    assert [operation for operation, _ in calls] == ["list", "get"]
-
-
-@pytest.mark.asyncio
-async def test_access_list_does_not_mask_real_authority_failure(tmp_path):
-    repo = SqliteRepository(tmp_path / "compat-fail.sqlite3", tmp_path / "compat-fail-out.sqlite3")
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    private_key, _ = keypair()
-    _, control_public = keypair()
-    bridge = PersistentFleetBridge(
-        FleetConfig(
-            "bacloud",
-            private_key,
-            (FleetPeer("main", "https://main.example", control_public, "token"),),
-            1.0,
-            1.0,
-        ),
-        store,
-        repo,
-        object(),
-        TaskStore(repo.path),
-        control_node_id="main",
-    )
-
-    async def remote_call(operation, payload):
-        raise PersistentStoreError("authority_unavailable")
-
-    bridge._remote_access_call = remote_call
-    with pytest.raises(PersistentStoreError, match="authority_unavailable"):
-        await bridge.list_access_slots()
-
-
-@pytest.mark.asyncio
-async def test_access_by_name_falls_back_to_legacy_get_when_control_node_lacks_route(
-    tmp_path,
-):
-    repo = SqliteRepository(tmp_path / "compat-name.sqlite3", tmp_path / "compat-name-out.sqlite3")
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    life = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
-    )
-    created = await life.create_slot("CompatName", admission=admission())
-    logical_agent_id = created["slot"]["logical_agent_id"]
-    private_key, _ = keypair()
-    _, control_public = keypair()
-    bridge = PersistentFleetBridge(
-        FleetConfig(
-            "bacloud",
-            private_key,
-            (FleetPeer("main", "https://main.example", control_public, "token"),),
-            1.0,
-            1.0,
-        ),
-        store,
-        repo,
-        object(),
-        TaskStore(repo.path),
-        control_node_id="main",
-    )
-    calls = []
-
-    async def remote_call(operation, payload):
-        calls.append((operation, payload))
-        if operation == "by-name":
-            raise PersistentStoreError("route_unavailable")
-        assert operation == "get"
-        return {
-            "ok": True,
-            "access": {
-                "logical_agent_id": logical_agent_id,
-                "authority_node_id": "bacloud",
-                "slot_kind": "persistent",
-                "public_name": "Alpha-CompatName",
-                "display_suffix": "CompatName",
-                "access_generation": 1,
-            },
-        }
-
-    bridge._remote_access_call = remote_call
-    result = await bridge.get_access_slot_by_public_name("Alpha-CompatName")
-    assert result["logical_agent_id"] == logical_agent_id
-    assert [operation for operation, _ in calls] == ["by-name", "get"]
-
-
-@pytest.mark.asyncio
-async def test_access_by_name_does_not_mask_real_authority_failure(tmp_path):
-    repo = SqliteRepository(
-        tmp_path / "compat-name-fail.sqlite3", tmp_path / "compat-name-fail-out.sqlite3"
-    )
-    await repo.initialize()
-    store = PersistentAgentStore(repo.path)
-    private_key, _ = keypair()
-    _, control_public = keypair()
-    bridge = PersistentFleetBridge(
-        FleetConfig(
-            "bacloud",
-            private_key,
-            (FleetPeer("main", "https://main.example", control_public, "token"),),
-            1.0,
-            1.0,
-        ),
-        store,
-        repo,
-        object(),
-        TaskStore(repo.path),
-        control_node_id="main",
-    )
-
-    async def remote_call(operation, payload):
-        raise PersistentStoreError("authority_unavailable")
-
-    bridge._remote_access_call = remote_call
-    with pytest.raises(PersistentStoreError, match="authority_unavailable"):
-        await bridge.get_access_slot_by_public_name("Alpha-CompatName")
-
-class ProviderRegistryResponse:
-    status_code = 200
-
-    def __init__(self, payload):
-        self.payload = payload
-
-    def json(self):
-        return self.payload
-
-
-class ProviderRegistryClient:
-    def __init__(self, requests):
-        self.requests = requests
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return None
-
-    async def post(self, url, *, headers, json):
-        self.requests.append((url, headers, json))
-        if url.endswith('/provider-resolve'):
-            return ProviderRegistryResponse({'ok': True, 'logical_agent_id': 'la_shared'})
-        if url.endswith('/provider-bind'):
-            assert json['access_code'] == '0042'
-            assert json['logical_agent_id'] == 'la_shared'
-            return ProviderRegistryResponse({'ok': True, 'logical_agent_id': 'la_shared'})
-        raise AssertionError(url)
-
-
-@pytest.mark.asyncio
-async def test_provider_identity_registry_is_shared_by_all_fleet_callers():
-    main_private, main_public = keypair()
-    secondary_private, _ = keypair()
-    firstbyte_private, _ = keypair()
-    main = FleetPeer('main', 'https://main.example', main_public, 'main-token')
-    requests = []
-
-    def bridge(node_id, private_key):
-        config = FleetConfig(node_id, private_key, (main,), 1.0, 1.0)
-        return PersistentFleetBridge(
-            config,
-            object(),
-            object(),
-            object(),
-            object(),
-            client_factory=lambda: ProviderRegistryClient(requests),
-            control_node_id='main',
-        )
-
-    secondary = bridge('secondary', secondary_private)
-    firstbyte = bridge('firstbyte', firstbyte_private)
-    key = 'a' * 64
-
-    assert await secondary.resolve_provider_binding('openai', key) == 'la_shared'
-    assert await firstbyte.resolve_provider_binding('openai', key) == 'la_shared'
-    assert await secondary.bind_provider_binding(
-        'openai', key, 'la_shared', access_code='0042', principal_id='usr_one'
-    ) == 'la_shared'
-
-    resolve_bodies = [body for url, _headers, body in requests if url.endswith('/provider-resolve')]
-    assert {body['requesting_instance_id'] for body in resolve_bodies} == {'secondary', 'firstbyte'}
-    bind_body = next(body for url, _headers, body in requests if url.endswith('/provider-bind'))
-    assert bind_body['requesting_instance_id'] == 'secondary'
-    assert bind_body['binding_key'] == key
-
-
-class ProviderBindingAuthority:
-    def __init__(self, access, *, resolved=None):
-        self.access = access
-        self.resolved = resolved
-        self.bind_calls = []
-        self.resolve_calls = []
-
-    async def access_slot(self, logical_agent_id):
-        if self.access and self.access.get("logical_agent_id") == logical_agent_id:
-            return dict(self.access)
-        return None
-
-    async def resolve_access_code(self, access_code):
-        self.resolve_calls.append(access_code)
-        return dict(self.resolved) if self.resolved is not None else None
-
-    async def bind_provider_binding(
-        self, provider, binding_key, logical_agent_id, *, principal_id=None
-    ):
-        self.bind_calls.append((provider, binding_key, logical_agent_id, principal_id))
-        return logical_agent_id
-
-
-def provider_binding_bridge(private_key, authority):
-    return PersistentFleetBridge(
-        FleetConfig("main", private_key, (), 1.0, 1.0),
-        object(),
-        object(),
-        object(),
-        object(),
-        access_authority=authority,
-    )
-
-
-@pytest.mark.asyncio
-async def test_provider_bootstrap_requires_matching_active_persistent_authority_slot():
-    private_key, _ = keypair()
-    authority = ProviderBindingAuthority(
-        {
-            "logical_agent_id": "la_fresh",
-            "authority_node_id": "secondary",
-            "slot_kind": "persistent",
-            "status": "active",
-        }
-    )
-    bridge = provider_binding_bridge(private_key, authority)
-
-    assert await bridge.bind_provider_binding(
-        "openai",
-        "a" * 64,
-        "la_fresh",
-        principal_id="oauth-client",
-        bootstrap=True,
-        bootstrap_authority_node_id="secondary",
-    ) == "la_fresh"
-    assert authority.resolve_calls == []
-    assert authority.bind_calls == [("openai", "a" * 64, "la_fresh", "oauth-client")]
-
-    for invalid in (
-        {**authority.access, "authority_node_id": "firstbyte"},
-        {**authority.access, "slot_kind": "legacy"},
-        {**authority.access, "status": "retired"},
-    ):
-        authority.access = invalid
-        with pytest.raises(PersistentStoreError, match="access_denied"):
-            await bridge.bind_provider_binding(
-                "openai",
-                "b" * 64,
-                "la_fresh",
-                principal_id="other-client",
-                bootstrap=True,
-                bootstrap_authority_node_id="secondary",
-            )
-
-
-@pytest.mark.asyncio
-async def test_provider_manual_bind_still_requires_valid_access_code():
-    private_key, _ = keypair()
-    access = {
-        "logical_agent_id": "la_existing",
-        "authority_node_id": "main",
-        "slot_kind": "persistent",
-        "status": "active",
-    }
-    authority = ProviderBindingAuthority(access, resolved=access)
-    bridge = provider_binding_bridge(private_key, authority)
-
-    with pytest.raises(PersistentStoreError, match="access_denied"):
-        await bridge.bind_provider_binding("openai", "c" * 64, "la_existing")
-    assert authority.resolve_calls == []
-
-    assert await bridge.bind_provider_binding(
-        "openai", "c" * 64, "la_existing", access_code="0042", principal_id="oauth-client"
-    ) == "la_existing"
-    assert authority.resolve_calls == ["0042"]

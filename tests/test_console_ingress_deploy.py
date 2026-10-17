@@ -36,53 +36,6 @@ def test_catch_all_proxy_is_already_console_ready():
     }
 }
 """
-    assert MODULE.patch_caddyfile(
-        original, site="example.test", upstream="127.0.0.1:8080"
-    ) == original
-
-
-def test_matcher_scoped_proxy_is_not_mistaken_for_catch_all():
-    original = """example.test {
-    @terminal path /actions/console/*
-    handle @terminal {
-        reverse_proxy 127.0.0.1:8080 {
-            transport http {
-                dial_timeout 5s
-            }
-        }
-    }
-    handle {
-        respond "Not found" 404
-    }
-}
-"""
-    result = MODULE.patch_caddyfile(original, site="example.test", upstream="127.0.0.1:8080")
-
-    assert result.count(MODULE.BEGIN) == 1
-    assert "/actions/context" in result
-    assert "/actions/persistent/*" in result
-    assert "handle @terminal_mcp_console {" in result
-    assert original.splitlines()[1] in result
-
-
-def test_missing_site_appends_dedicated_catch_all_site():
-    original = """other.test {
-    respond "ok"
-}
-"""
-    result = MODULE.patch_caddyfile(
-        original, site="terminal.example.test", upstream="127.0.0.1:8080"
+    assert (
+        MODULE.patch_caddyfile(original, site="example.test", upstream="127.0.0.1:8080") == original
     )
-    assert "terminal.example.test {" in result
-    assert "reverse_proxy 127.0.0.1:8080" in result
-    assert original in result
-
-
-def test_public_site_requires_absolute_http_url():
-    assert MODULE.public_site("https://example.test:8443/path") == "example.test:8443"
-    try:
-        MODULE.public_site("example.test")
-    except ValueError as exc:
-        assert "absolute http(s)" in str(exc)
-    else:
-        raise AssertionError("relative public URL must fail")

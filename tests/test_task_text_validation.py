@@ -1,5 +1,6 @@
 import pytest
 
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.public_errors import normalize_public_error
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -26,7 +27,9 @@ async def test_stateful_text_prerequisites_are_validation_failures(
     if action != "create":
         await store.create_task("test", "one", "fixture")
     if action == "release":
-        await store.claim("test", "one", "agent", claim_intent="fixture")
+        await store.claim_owner(
+            "test", "one", ClaimOwner.logical_agent("agent"), claim_intent="fixture"
+        )
 
     async def claims(*args):
         return await store.claims("test", "one", active_only=True)
@@ -36,7 +39,12 @@ async def test_stateful_text_prerequisites_are_validation_failures(
     events = await store.list_events("test", "one")
     kwargs = {} if value is None else {field: value}
     result = await coordinator.mutate(
-        "agent", action=action, namespace="test", task_id="one", **kwargs
+        "agent",
+        action=action,
+        namespace="test",
+        task_id="one",
+        **kwargs,
+        _claim_owner=ClaimOwner.logical_agent("agent"),
     )
     assert result["ok"] is False
     public = normalize_public_error(result).as_dict()

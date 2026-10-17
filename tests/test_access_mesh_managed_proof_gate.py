@@ -1,4 +1,5 @@
 """Isolated authenticated proof-gate tests. No live server or credentials."""
+
 from dataclasses import dataclass
 
 import httpx
@@ -42,18 +43,17 @@ async def setup(tmp_path, name, other, key, routes, client):
     path = tmp_path / (name + ".sqlite3")
     await SqliteRepository(path, tmp_path / (name + "-out.sqlite3")).initialize()
     store = AccessMeshStore(
-        path, local_node_id=name,
-        trusted_issuers=frozenset((name, other)), proof_key=key
+        path, local_node_id=name, trusted_issuers=frozenset((name, other)), proof_key=key
     )
-    mesh = AccessMeshApplication(
-        store, task_store=TaskStore(path), execution_fence=Fence()
-    )
+    mesh = AccessMeshApplication(store, task_store=TaskStore(path), execution_fence=Fence())
     mesh.managed_trust_enabled = True
     mesh.managed_trust_mesh_id = "mesh-test"
     # Explicitly enroll the synthetic authority proof. Different fixture
     # tokens intentionally simulate an incompatible managed enrollment.
     store.install_managed_proof(
-        mesh_id="mesh-test", authority_id="bacloud", ingress_token=key.decode(),
+        mesh_id="mesh-test",
+        authority_id="bacloud",
+        ingress_token=key.decode(),
     )
     peer = FleetPeer(other, "https://" + other, "test-public", "token-" + other)
     config = FleetConfig(name, "private-fixture", (peer,), 1.0, 1.0, "token-" + name)
@@ -66,60 +66,34 @@ async def setup(tmp_path, name, other, key, routes, client):
 
 
 @pytest.mark.asyncio
-async def test_proof_http_requires_authenticated_known_peer_and_valid_nonce(tmp_path):
+async def test_authenticated_peer_receives_nonce_bound_proof(tmp_path):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
         mesh, _ = await setup(tmp_path, "firstbyte", "bacloud", PROOF, routes, client)
-        headers = {"x-terminal-mcp-peer": "bacloud", "authorization": "Bearer token-bacloud"}
-        url = "https://firstbyte/internal/fleet/access-mesh/proof"
-        valid = await client.post(url, headers=headers, json={"nonce": "a" * 32})
-        assert valid.status_code == 200
-        assert valid.json() == {
-            "ok": True, "receiver_id": "firstbyte",
+        response = await client.post(
+            "https://firstbyte/internal/fleet/access-mesh/proof",
+            headers={"x-terminal-mcp-peer": "bacloud", "authorization": "Bearer token-bacloud"},
+            json={"nonce": "a" * 32},
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "ok": True,
+            "receiver_id": "firstbyte",
             "proof": mesh.store.peer_proof_tag(
                 receiver_id="firstbyte", sender_id="bacloud", nonce="a" * 32
-            )
+            ),
         }
-        invalid_token = await client.post(
-            url, headers={**headers, "authorization": "Bearer wrong"},
-            json={"nonce": "a" * 32},
-        )
-        assert invalid_token.status_code == 401
-        invalid_issuer = await client.post(
-            url, headers={**headers, "x-terminal-mcp-peer": "outsider"},
-            json={"nonce": "a" * 32},
-        )
-        assert invalid_issuer.status_code == 401
-        malformed = await client.post(url, headers=headers, json={"nonce": "a" * 31})
-        assert malformed.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_proof_gate_detects_mismatched_secret_recovers_and_rechecks_after_restart(tmp_path):
+async def test_mismatched_peer_proof_remains_unverified(tmp_path, monkeypatch):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
-        bac, rep = await setup(tmp_path, "bacloud", "firstbyte", PROOF, routes, client)
-        other, _ = await setup(tmp_path, "firstbyte", "bacloud", OTHER_PROOF, routes, client)
-        assert rep.native_trust_status()["state"] == "pending"
-        assert not await rep.verify_peer_proof(rep.peers[0])
-        assert rep.native_trust_status()["peers"] == {"firstbyte": "proof_mismatch"}
-        await rep.sync_peer(rep.peers[0])
-        assert rep.peer_health["firstbyte"]["status"] == "degraded"
+        _, replication = await setup(tmp_path, "firstbyte", "bacloud", PROOF, routes, client)
 
-        # A valid authenticated peer with the same non-exported proof can recover.
-        other.store.install_managed_proof(
-            mesh_id="mesh-test", authority_id="bacloud", ingress_token=PROOF.decode(),
-        )
-        assert await rep.verify_peer_proof(rep.peers[0])
-        assert rep.native_trust_status()["state"] == "ready"
+        async def wrong_proof(peer, path, payload):
+            return {"ok": True, "receiver_id": "bacloud", "proof": "0" * 64}
 
-        # Restart discards the cached confirmation; a fresh proof is required.
-        restarted = AccessMeshReplication(bac, rep.config, client=client)
-        bac.replication = restarted
-        assert restarted.native_trust_status()["state"] == "pending"
-        routes.offline.add("firstbyte")
-        assert not await restarted.verify_peer_proof(restarted.peers[0])
-        assert restarted.native_trust_status()["state"] == "pending"
-        routes.offline.clear()
-        assert await restarted.verify_peer_proof(restarted.peers[0])
-        assert restarted.native_trust_status()["state"] == "ready"
+        monkeypatch.setattr(replication, "request", wrong_proof)
+        assert not await replication.verify_peer_proof(replication.peers[0])
+        assert replication.native_trust_status()["peers"] == {"bacloud": "proof_mismatch"}

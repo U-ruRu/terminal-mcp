@@ -1,46 +1,20 @@
-"""Failure injection across Mesh session issuance transaction boundaries."""
+"""Issuance failure rolls back its current slot and number claim together."""
 
-import sqlite3
-
-from fastapi.testclient import TestClient
-from test_access_mesh_mcp_runtime import call, settings
-
-from terminal_mcp.app import create_app
-from terminal_mcp.storage.access_mesh import AccessMeshStore
+import pytest
+from test_access_mesh_native_lifecycle import actor
+from test_access_mesh_native_lifecycle import fixture as fixture
 
 
-def test_unknown_number_reports_business_error(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        result = call(client, "executor", "session", {"session_number": "9876"})
-        assert result["ok"] is False
-        assert result["error"]["code"] == "invalid_session_number"
+@pytest.mark.asyncio
+async def test_failed_number_commit_rolls_back_slot_and_claim(fixture, monkeypatch):
+    original = fixture.store._after_apply
 
+    def fail(db, event, **kwargs):
+        original(db, event, **kwargs)
+        raise RuntimeError("failure before issuance commit")
 
-def test_failed_number_commit_rolls_back_slot_and_retries(tmp_path, monkeypatch):
-    """A crash after both inserts, before commit, cannot strand an active AccessSlot."""
-    original = AccessMeshStore._after_apply
-    injected = {"count": 0}
-
-    def fail_once(self, db, event, **kwargs):
-        result = original(self, db, event, **kwargs)
-        if event.kind == "SlotIssued" and injected["count"] == 0:
-            injected["count"] += 1
-            raise RuntimeError("qa_failure_before_atomic_commit")
-        return result
-
-    monkeypatch.setattr(AccessMeshStore, "_after_apply", fail_once)
-    config = settings(tmp_path)
-    app = create_app(config)
-    with TestClient(app, base_url="https://terminal.example") as client:
-        first = call(client, "access", "session", {"action": "start"}, request_id=8181)
-        assert first["ok"] is False, first
-        assert injected["count"] == 1
-        with sqlite3.connect(config.database_path) as db:
-            assert db.execute("SELECT COUNT(*) FROM access_mesh_slot_replicas").fetchone()[0] == 0
-            assert db.execute("SELECT COUNT(*) FROM access_mesh_number_claims").fetchone()[0] == 0
-        second = call(client, "access", "session", {"action": "start"}, request_id=8181)
-        assert second["ok"] is True, second
-        assert len(second["session_number"]) == 4
-        attached = call(client, "executor", "session", {"session_number": second["session_number"]})
-        assert attached == {"ok": True}
+    monkeypatch.setattr(fixture.store, "_after_apply", fail)
+    with pytest.raises(RuntimeError, match="before issuance commit"):
+        await fixture.app.issue(actor("access"), kind="persistent", code="1234")
+    assert fixture.store.snapshot_page(issuer_id="firstbyte") == []
+    assert fixture.store.numbers.snapshot() == []

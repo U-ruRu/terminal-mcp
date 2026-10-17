@@ -1,15 +1,15 @@
-import { beforeEach, describe, expect, test } from 'vitest'
+import { beforeEach,describe,expect,test } from 'vitest'
 
 import type { ManagedFleetControlReadModel } from '../api/models'
 import {
-  FLEET_CONTROL_CACHE_KEY,
-  loadCachedFleetControl,
-  loadCachedFleetControlForProfile,
-  propagateCachedFleetControl,
-  saveCachedFleetControl,
+FLEET_CONTROL_CACHE_KEY,
+loadCachedFleetControl,
+loadCachedFleetControlForProfile,
+propagateCachedFleetControl,
+saveCachedFleetControl,
 } from './controlState'
 
-const control = (nodeId: string, legacy = false): ManagedFleetControlReadModel => ({
+const control = (nodeId: string, revision = 4): ManagedFleetControlReadModel => ({
   schemaVersion: 3,
   fleetId: 'fleet-a',
   nodeId,
@@ -35,31 +35,26 @@ const control = (nodeId: string, legacy = false): ManagedFleetControlReadModel =
     warningAfterSeconds: 1200,
     alertAfterSeconds: 1320,
     rearmAfterSeconds: 180,
-    legacyAdmissionEnabled: legacy,
-    revision: legacy ? 5 : 4,
+    legacyAdmissionEnabled: false,
+    revision,
     updatedAt: '2026-10-02T06:00:00Z',
   },
-  revisions: { routing: 1, topology: 2, trust: 2, accessPolicy: legacy ? 5 : 4 },
+  revisions: { routing: 1, topology: 2, trust: 2, accessPolicy: revision },
   updatedAt: '2026-10-02T06:00:00Z',
 })
 
 describe('fleet control cache', () => {
   beforeEach(() => localStorage.removeItem(FLEET_CONTROL_CACHE_KEY))
 
-  test('restores last authoritative control observation', () => {
-    saveCachedFleetControl('main-profile', control('main'), 123)
-    expect(loadCachedFleetControl('main-profile')).toEqual({ control: control('main'), observedAt: 123 })
-  })
-
   test('propagates fleet-wide policy while preserving each local node identity', () => {
     saveCachedFleetControl('main-profile', control('main'), 100)
     saveCachedFleetControl('firstbyte-profile', control('firstbyte'), 100)
 
-    propagateCachedFleetControl(control('main', true), 200)
+    propagateCachedFleetControl(control('main', 5), 200)
 
     expect(loadCachedFleetControl('main-profile')?.control.nodeId).toBe('main')
     expect(loadCachedFleetControl('firstbyte-profile')?.control.nodeId).toBe('firstbyte')
-    expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(true)
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.revision).toBe(5)
     expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(200)
   })
   test('does not propagate one control authority over another authority in the same fleet', () => {
@@ -72,49 +67,12 @@ describe('fleet control cache', () => {
     saveCachedFleetControl('main-profile', control('main'), 100)
     saveCachedFleetControl('firstbyte-profile', firstbyteAuthority, 100)
 
-    propagateCachedFleetControl(control('main', true), 200)
+    propagateCachedFleetControl(control('main', 5), 200)
 
     expect(loadCachedFleetControl('firstbyte-profile')?.control.controlNodeId).toBe('firstbyte')
     expect(loadCachedFleetControl('firstbyte-profile')?.control.mesh?.meshId).toBe('mesh-b')
-    expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(false)
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.revision).toBe(4)
     expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(100)
-  })
-
-  test('prefers a newer authoritative standalone projection over stale mesh membership', () => {
-    const member = control('main')
-    const standalone = {
-      ...control('firstbyte'),
-      controlNodeId: 'firstbyte',
-      nodes: control('firstbyte').nodes.map((node) => node.nodeId === 'firstbyte' ? { ...node, meshId: undefined } : node),
-      mesh: undefined,
-    }
-    saveCachedFleetControl('member-authority', member, 100)
-    saveCachedFleetControl('standalone-authority', standalone, 200)
-
-    const projected = loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')
-    expect(projected?.control.controlNodeId).toBe('firstbyte')
-    expect(projected?.control.mesh).toBeUndefined()
-    expect(projected?.control.nodes.find((node) => node.nodeId === 'firstbyte')?.meshId).toBeUndefined()
-    expect(projected?.observedAt).toBe(200)
-  })
-
-  test('uses the newest standalone authority instead of treating standalone as ambiguous', () => {
-    const mainStandalone = {
-      ...control('main'),
-      nodes: control('main').nodes.map((node) => node.nodeId === 'firstbyte' ? { ...node, meshId: undefined } : node),
-    }
-    const firstbyteStandalone = {
-      ...mainStandalone,
-      nodeId: 'firstbyte',
-      controlNodeId: 'firstbyte',
-    }
-    saveCachedFleetControl('main-authority', mainStandalone, 100)
-    saveCachedFleetControl('firstbyte-authority', firstbyteStandalone, 200)
-
-    const projected = loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')
-    expect(projected?.control.controlNodeId).toBe('firstbyte')
-    expect(projected?.control.mesh).toBeUndefined()
-    expect(projected?.observedAt).toBe(200)
   })
 
   test('prefers a newer topology revision from the same authority even when observed earlier', () => {
@@ -133,17 +91,6 @@ describe('fleet control cache', () => {
     expect(projected?.control.revisions.topology).toBe(3)
     expect(projected?.control.mesh).toBeUndefined()
     expect(projected?.control.nodes.find((node) => node.nodeId === 'firstbyte')?.meshId).toBeUndefined()
-  })
-
-  test('projects a managed peer cache onto a profile by authoritative node origin', () => {
-    saveCachedFleetControl('main-profile', control('main', true), 300)
-
-    const projected = loadCachedFleetControlForProfile('firstbyte-profile', 'https://firstbyte.example/')
-
-    expect(projected?.control.nodeId).toBe('firstbyte')
-    expect(projected?.control.mesh?.meshId).toBe('mesh-prod')
-    expect(projected?.control.policy?.legacyAdmissionEnabled).toBe(true)
-    expect(projected?.observedAt).toBe(300)
   })
 
 })

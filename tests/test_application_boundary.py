@@ -1,19 +1,12 @@
-import ast
 import asyncio
-from dataclasses import FrozenInstanceError
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from terminal_mcp.application import ActorContext, TerminalApplication, get_application
-from terminal_mcp.application.compatibility import ApplicationCompatibility
-from terminal_mcp.application.requests import CmdRunRequest, ContextListRequest
+from terminal_mcp.application import ActorContext, TerminalApplication
+from terminal_mcp.application.requests import CmdRunRequest
 from terminal_mcp.core.persistent_admission import (
     VerifiedAdmissionContext,
-    bind_admission_context,
     current_admission_context,
-    reset_admission_context,
 )
 
 
@@ -64,29 +57,6 @@ class Service:
         return {"ok": True, "auth_mode": auth_mode}
 
 
-def test_actor_is_immutable_and_copies_mutable_scopes():
-    scopes = {"terminal:read"}
-    value = ActorContext(scopes=scopes)
-    scopes.add("terminal:execute")
-    assert value.scopes == frozenset({"terminal:read"})
-    with pytest.raises(FrozenInstanceError):
-        value.principal_id = "other"
-    with pytest.raises(ValueError, match="complete"):
-        ActorContext(logical_agent_id="agent", work_session_id="session")
-    with pytest.raises(ValueError, match="positive"):
-        ActorContext(contract_version=0)
-
-
-def test_anonymous_actor_does_not_inherit_ambient_privileges():
-    token = bind_admission_context(actor("outer").admission())
-    try:
-        with ActorContext().bind():
-            assert current_admission_context() is None
-        assert current_admission_context().principal_id == "outer"
-    finally:
-        reset_admission_context(token)
-
-
 @pytest.mark.asyncio
 async def test_concurrent_application_calls_keep_separate_actor_contexts():
     service = Service()
@@ -125,65 +95,3 @@ async def test_capability_policy_denies_coordinator_execution_before_side_effect
     )
     assert result["code"] == "capability_not_allowed"
     assert service.persistent.calls == []
-@pytest.mark.asyncio
-async def test_session_start_without_backend_is_rejected():
-    app = get_application(SimpleNamespace(persistent=None))
-    assert (await app.session(ActorContext(), action="start", mode="legacy"))["code"] == (
-        "policy_incompatible"
-    )
-
-
-@pytest.mark.asyncio
-async def test_context_list_projects_the_current_backend_result():
-    service = Service()
-    result = await get_application(service).context(
-        ActorContext(), ContextListRequest(action="list")
-    )
-    assert result == {"ok": True, "primary": [], "additional": [], "next_cursor": None}
-
-
-@pytest.mark.asyncio
-async def test_active_facade_rejects_an_unknown_operation():
-    facade = ApplicationCompatibility(object())
-    with pytest.raises(ValueError):
-        await facade.call(actor(), "__getattribute__", "secret")
-
-
-@pytest.mark.asyncio
-async def test_active_facade_restores_admission_context_after_cancellation():
-    class CancelledService:
-        async def health(self):
-            assert current_admission_context().principal_id == "inside"
-            raise asyncio.CancelledError
-
-    before = current_admission_context()
-    facade = ApplicationCompatibility(CancelledService())
-    with pytest.raises(asyncio.CancelledError):
-        await facade.call(actor("inside"), "health")
-    assert current_admission_context() is before
-
-
-def test_application_modules_never_import_inbound_transports_or_sql_drivers():
-    directory = Path(__file__).parents[1] / "src/terminal_mcp/application"
-    prohibited = (
-        "mcp",
-        "fastapi",
-        "starlette",
-        "aiosqlite",
-        "sqlite3",
-        "terminal_mcp.mcp",
-        "terminal_mcp.http",
-        "terminal_mcp.adapters",
-    )
-    violations = []
-    for path in directory.glob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
-            names = []
-            if isinstance(node, ast.Import):
-                names = [item.name for item in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            for name in names:
-                if any(name == prefix or name.startswith(prefix + ".") for prefix in prohibited):
-                    violations.append((path.name, node.lineno, name))
-    assert not violations

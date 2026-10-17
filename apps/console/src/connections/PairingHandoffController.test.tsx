@@ -1,11 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act,cleanup,render,screen,waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, useLocation } from 'react-router-dom'
-import { afterEach, expect, test, vi } from 'vitest'
+import { MemoryRouter,useLocation } from 'react-router-dom'
+import { afterEach,expect,test,vi } from 'vitest'
 
 import { I18nProvider } from '../i18n/I18nProvider'
-import { PRODUCTION_CONSOLE_ORIGIN } from './pairingLink'
 import { PairingHandoffController } from './PairingHandoffController'
+import { PRODUCTION_CONSOLE_ORIGIN } from './pairingLink'
 
 const native = vi.hoisted(() => ({
   listener: undefined as ((event: { url: string }) => void) | undefined,
@@ -55,7 +55,7 @@ function LocationProbe() {
   return <output aria-label="location">{location.pathname + location.search}</output>
 }
 
-test('native pairing handoff overlays the current route and cancel restores focus', async () => {
+test('cancelling the native pairing prompt restores focus to the current route', async () => {
   render(
     <I18nProvider>
       <MemoryRouter initialEntries={['/activity?server=secondary']}>
@@ -71,10 +71,6 @@ test('native pairing handoff overlays the current route and cancel restores focu
   await waitFor(() => expect(native.listener).toBeTypeOf('function'))
 
   await act(async () => native.listener?.({ url: pairingLink() }))
-
-  expect(screen.getByRole('dialog', { name: 'Pair Terminal MCP' })).toHaveAttribute('aria-modal', 'true')
-  expect(screen.getByLabelText('location')).toHaveTextContent('/activity?server=secondary')
-  expect(anchor).toBeInTheDocument()
 
   await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

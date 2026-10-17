@@ -4,47 +4,22 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from jsonschema import Draft202012Validator
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from terminal_mcp.mcp.roles import build_role_mcp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "role,cases",
-    [
-        (
-            "executor",
-            [
-                ("command_run", {}, "command"),
-                ("command_run", {"command": 42}, "command"),
-                ("message", {"action": "reply", "text": "test"}, "message_hash"),
-            ],
-        ),
-        (
-            "coordinator",
-            [
-                ("task_manage", {"action": "invented", "namespace": "wire-test"}, "action"),
-            ],
-        ),
-    ],
-)
-async def test_invalid_role_arguments_reach_runtime_over_mcp(role, cases):
-    server = build_role_mcp(SimpleNamespace(persistent=None), role)
+async def test_missing_command_returns_a_structured_repair_over_mcp():
+    server = build_role_mcp(SimpleNamespace(persistent=None), "executor")
     async with create_connected_server_and_client_session(server) as client:
-        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        for name, arguments, path in cases:
-            Draft202012Validator(tools[name].inputSchema).validate(arguments)
-            result = await client.call_tool(name, arguments)
-            assert result.isError is False
-            data = result.structuredContent
-            assert data["ok"] is False
-            assert data["error"]["code"] == "input_validation_failed"
-            assert data["error"]["path"] == path
-            assert data["error"]["details"]["validation_errors"]
-            assert json.loads(result.content[0].text) == data
-            Draft202012Validator(tools[name].outputSchema).validate(data)
+        result = await client.call_tool("command_run", {})
+
+    assert result.isError is False
+    data = result.structuredContent
+    assert data["error"]["code"] == "input_validation_failed"
+    assert data["error"]["path"] == "command"
+    assert json.loads(result.content[0].text) == data
 
 
 @pytest.mark.asyncio

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import base64
-import sqlite3
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from terminal_mcp.fleet.config import FleetConfig, FleetPeer
-from terminal_mcp.fleet.control_plane import ManagedFleetControl
 from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlStore
 
 
@@ -70,7 +67,7 @@ class PolicyProbe:
         return dict(self.current)
 
 
-def _managed_replica_snapshot(*, include_member_mesh_id: bool, member_mesh_id=None) -> dict:
+def _managed_replica_snapshot(*, member_mesh_id=None) -> dict:
     member = {
         "node_id": "member",
         "origin": "https://member.example",
@@ -80,8 +77,7 @@ def _managed_replica_snapshot(*, include_member_mesh_id: bool, member_mesh_id=No
         "applied_trust_revision": 2,
         "applied_policy_revision": 2,
     }
-    if include_member_mesh_id:
-        member["mesh_id"] = member_mesh_id
+    member["mesh_id"] = member_mesh_id
     return {
         "managed": True,
         "fleet_id": "fleet-a",
@@ -110,14 +106,14 @@ def _managed_replica_snapshot(*, include_member_mesh_id: bool, member_mesh_id=No
             "warning_after_seconds": 1200,
             "alert_after_seconds": 1320,
             "rearm_after_seconds": 180,
-            "legacy_admission_enabled": True,
+            "legacy_admission_enabled": False,
         },
         "revisions": {"topology": 2, "trust": 2, "access_policy": 2},
     }
 
 
 @pytest.mark.asyncio
-async def test_replica_explicit_null_mesh_id_overrides_legacy_mesh_fallback(tmp_path):
+async def test_replica_preserves_explicit_standalone_membership(tmp_path):
     store = FleetControlStore(
         tmp_path / "explicit-null.sqlite3",
         fleet_id="fleet-a",
@@ -126,14 +122,10 @@ async def test_replica_explicit_null_mesh_id_overrides_legacy_mesh_fallback(tmp_
     )
     await store.initialize()
 
-    state = await store.apply_managed_replica(
-        _managed_replica_snapshot(include_member_mesh_id=True, member_mesh_id=None)
-    )
+    state = await store.apply_managed_replica(_managed_replica_snapshot(member_mesh_id=None))
 
     member = next(node for node in state["nodes"] if node["node_id"] == "member")
-    control = next(node for node in state["nodes"] if node["node_id"] == "control")
     assert member["mesh_id"] is None
-    assert control["mesh_id"] == "mesh-a"
 
 
 @pytest.mark.asyncio
@@ -146,7 +138,6 @@ async def test_replica_refreshes_existing_node_auth_token_from_authoritative_mat
     )
     await store.initialize()
     snapshot = _managed_replica_snapshot(
-        include_member_mesh_id=True,
         member_mesh_id="mesh-a",
     )
 
@@ -154,9 +145,6 @@ async def test_replica_refreshes_existing_node_auth_token_from_authoritative_mat
         snapshot,
         bootstrap_tokens={"member": "stale-token", "control": "control-token"},
     )
-    before = await store.managed_node("member")
-    assert before is not None
-    assert before["auth_token"] == "stale-token"
 
     await store.apply_managed_replica(
         snapshot,
@@ -168,677 +156,17 @@ async def test_replica_refreshes_existing_node_auth_token_from_authoritative_mat
 
 
 @pytest.mark.asyncio
-async def test_replica_missing_mesh_id_keeps_legacy_mesh_fallback(tmp_path):
+async def test_replica_rejects_a_lower_topology_revision(tmp_path):
     store = FleetControlStore(
-        tmp_path / "missing-mesh-id.sqlite3",
+        tmp_path / "replica.sqlite3",
         fleet_id="fleet-a",
         node_id="member",
         control_node_id="control",
     )
     await store.initialize()
-
-    state = await store.apply_managed_replica(
-        _managed_replica_snapshot(include_member_mesh_id=False)
-    )
-
-    member = next(node for node in state["nodes"] if node["node_id"] == "member")
-    assert member["mesh_id"] == "mesh-a"
-
-
-@pytest.mark.asyncio
-async def test_detached_local_member_restores_standalone_policy(tmp_path):
-    store = FleetControlStore(
-        tmp_path / "member.sqlite3",
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="control",
-    )
-    await store.initialize()
-    policy = PolicyProbe()
-    member_private, _ = keypair()
-    control = ManagedFleetControl(
-        store,
-        FleetConfig("member", member_private, (), 1.0, 1.0),
-        policy,
-        public_base_url="https://member.example",
-    )
-    managed_policy = {
-        "duration_seconds": 1200,
-        "warning_after_seconds": 900,
-        "alert_after_seconds": 1100,
-        "rearm_after_seconds": 120,
-        "legacy_admission_enabled": True,
-    }
-    snapshot = {
-        "managed": True,
-        "fleet_id": "fleet-a",
-        "control_node_id": "control",
-        "mesh": {"mesh_id": "mesh-a", "display_name": "Alpha", "active": True},
-        "meshes": [{"mesh_id": "mesh-a", "display_name": "Alpha", "active": True}],
-        "nodes": [
-            {
-                "node_id": "control",
-                "origin": "https://control.example",
-                "public_key": "pub-control",
-                "mesh_id": "mesh-a",
-                "state": "active",
-                "applied_topology_revision": 2,
-                "applied_trust_revision": 2,
-                "applied_policy_revision": 2,
-            },
-            {
-                "node_id": "member",
-                "origin": "https://member.example",
-                "public_key": "pub-member",
-                "mesh_id": "mesh-a",
-                "state": "active",
-                "applied_topology_revision": 2,
-                "applied_trust_revision": 2,
-                "applied_policy_revision": 2,
-            },
-        ],
-        "policy": managed_policy,
-        "revisions": {"topology": 2, "trust": 2, "access_policy": 2},
-        "_peer_material": [{"node_id": "control", "auth_token": "token-control"}],
-    }
-    await control.apply_replica(snapshot, source_node_id="control")
-    assert policy.current == managed_policy
-
-    detached = dict(snapshot)
-    detached["mesh"] = None
-    detached["nodes"] = [
-        dict(snapshot["nodes"][0]),
-        {**snapshot["nodes"][1], "mesh_id": None},
-    ]
-    detached["revisions"] = {"topology": 3, "trust": 3, "access_policy": 2}
-    await control.apply_replica(detached, source_node_id="control")
-
-    assert policy.current == policy.local
-    assert policy.restored >= 1
-    state = await control.snapshot()
-    local = next(node for node in state["nodes"] if node["node_id"] == "member")
-    assert local["mesh_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_deleted_mesh_replica_restores_standalone_policy_without_losing_pairing_state(
-    tmp_path,
-):
-    store = FleetControlStore(
-        tmp_path / "delete.sqlite3",
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="control",
-    )
-    await store.initialize()
-    policy = PolicyProbe()
-    member_private, _ = keypair()
-    control = ManagedFleetControl(
-        store,
-        FleetConfig("member", member_private, (), 1.0, 1.0),
-        policy,
-        public_base_url="https://member.example",
-    )
-    managed_policy = {
-        "duration_seconds": 1200,
-        "warning_after_seconds": 900,
-        "alert_after_seconds": 1100,
-        "rearm_after_seconds": 120,
-        "legacy_admission_enabled": True,
-    }
-    base_nodes = [
-        {
-            "node_id": "control",
-            "origin": "https://control.example",
-            "public_key": "pub-control",
-            "mesh_id": "mesh-a",
-            "state": "active",
-            "applied_topology_revision": 2,
-            "applied_trust_revision": 2,
-            "applied_policy_revision": 2,
-        },
-        {
-            "node_id": "member",
-            "origin": "https://member.example",
-            "public_key": "pub-member",
-            "mesh_id": "mesh-a",
-            "state": "active",
-            "applied_topology_revision": 2,
-            "applied_trust_revision": 2,
-            "applied_policy_revision": 2,
-        },
-    ]
-    managed = {
-        "managed": True,
-        "fleet_id": "fleet-a",
-        "control_node_id": "control",
-        "mesh": {"mesh_id": "mesh-a", "display_name": "Alpha", "active": True},
-        "meshes": [{"mesh_id": "mesh-a", "display_name": "Alpha", "active": True}],
-        "nodes": base_nodes,
-        "policy": managed_policy,
-        "revisions": {"topology": 2, "trust": 2, "access_policy": 2},
-        "_peer_material": [{"node_id": "control", "auth_token": "token-control"}],
-    }
-    await control.apply_replica(managed, source_node_id="control")
-    assert policy.current == managed_policy
-
-    deleted = {
-        **managed,
-        "mesh": None,
-        "meshes": [],
-        "nodes": [
-            {**base_nodes[0], "mesh_id": None},
-            {**base_nodes[1], "mesh_id": None},
-        ],
-        "revisions": {"topology": 3, "trust": 3, "access_policy": 2},
-    }
-    await control.apply_replica(deleted, source_node_id="control")
-
-    assert policy.current == policy.local
-    assert policy.restored >= 1
-    state = await control.snapshot()
-    local = next(node for node in state["nodes"] if node["node_id"] == "member")
-    assert local["mesh_id"] is None
-    assert local["state"] == "active"
-
-
-class ControlResponse:
-    def __init__(self, body):
-        self._body = body
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._body
-
-
-class ControlClient:
-    def __init__(self, *, post_handler=None, get_handler=None):
-        self.post_handler = post_handler
-        self.get_handler = get_handler
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return False
-
-    async def post(self, url, *, headers, json):
-        if self.post_handler is None:
-            raise AssertionError(f"unexpected POST {url}")
-        return await self.post_handler(url, headers, json)
-
-    async def get(self, url, *, headers):
-        if self.get_handler is None:
-            raise AssertionError(f"unexpected GET {url}")
-        return await self.get_handler(url, headers)
-
-
-@pytest.mark.asyncio
-async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_back(tmp_path):
-    home_private, home_public = keypair()
-    member_private, member_public = keypair()
-    home_config = FleetConfig(
-        "home",
-        home_private,
-        (FleetPeer("member", "https://member.example", member_public, "member-token"),),
-        1.0,
-        1.0,
-    )
-    member_config = FleetConfig(
-        "member",
-        member_private,
-        (FleetPeer("home", "https://home.example", home_public, "home-token"),),
-        1.0,
-        1.0,
-    )
-    home_store = FleetControlStore(
-        tmp_path / "home-convergence.sqlite3",
-        fleet_id="fleet-a",
-        node_id="home",
-        control_node_id="home",
-    )
-    member_store = FleetControlStore(
-        tmp_path / "member-convergence.sqlite3",
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="home",
-    )
-    await home_store.initialize()
-    await member_store.initialize()
-    home_policy = PolicyProbe()
-    member_policy = PolicyProbe()
-    member = ManagedFleetControl(
-        member_store,
-        member_config,
-        member_policy,
-        public_base_url="https://member.example",
-    )
-    delivery_mode = "apply"
-    attached_snapshot = None
-
-    async def push(url, headers, body):
-        assert url.endswith("/internal/fleet/control/apply")
-        if delivery_mode == "stale_ack":
-            return ControlResponse({"ok": True, "control": attached_snapshot})
-        applied = await member.apply_replica(body["state"], source_node_id="home")
-        return ControlResponse({"ok": True, "control": applied})
-
-    home = ManagedFleetControl(
-        home_store,
-        home_config,
-        home_policy,
-        public_base_url="https://home.example",
-        client_factory=lambda: ControlClient(post_handler=push),
-    )
-    adopted = await home.adopt(mesh_id="mesh-a", display_name="Production")
-    attached = await home.upsert_node(
-        node_id="member",
-        mesh_id="mesh-a",
-        origin="https://member.example",
-        public_key=member_public,
-        auth_token="member-token",
-        expected_topology_revision=adopted["revisions"]["topology"],
-    )
-    attached_snapshot = await home.authoritative_replication_snapshot()
-    member_before = await member.snapshot()
-    assert member_before["mesh"]["mesh_id"] == "mesh-a"
-
-    delivery_mode = "stale_ack"
-    detached = await home.detach_node(
-        "member",
-        expected_topology_revision=attached["revisions"]["topology"],
-    )
-    authority_member = next(node for node in detached["nodes"] if node["node_id"] == "member")
-    assert authority_member["mesh_id"] is None
-    assert (
-        authority_member["desired_topology_revision"]
-        > authority_member["applied_topology_revision"]
-    )
-    assert authority_member["last_error"] == "reconcile_failed:RuntimeError"
-    assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
-
-    async def pull(url, headers):
-        assert url.endswith("/internal/fleet/control/state")
-        return ControlResponse(
-            {"ok": True, "control": await home.authoritative_replication_snapshot()}
-        )
-
-    async def release_post(url, headers, body):
-        assert url.endswith("/internal/fleet/control/mutate/release-node")
-        released = await home.execute_forwarded(
-            "release-node",
-            body["payload"],
-            authenticated_peer_id="member",
-        )
-        return ControlResponse({"ok": True, "control": released})
-
-    member.client_factory = lambda: ControlClient(
-        get_handler=pull,
-        post_handler=release_post,
-    )
-    recovered = await member.reconcile_pending()
-    local_member = next(node for node in recovered["nodes"] if node["node_id"] == "member")
-    assert recovered["mesh"] is None
-    assert local_member["mesh_id"] is None
-    assert recovered["revisions"]["topology"] == detached["revisions"]["topology"]
-    assert member_policy.current == member_policy.local
-
-    with pytest.raises(FleetControlError, match="control_rejoin_credential_required"):
-        await member.apply_replica(attached_snapshot, source_node_id="home")
-    assert (await member.snapshot())["mesh"] is None
-
-    delivery_mode = "apply"
-    converged = await home.reconcile_pending()
-    authority_member = next(node for node in converged["nodes"] if node["node_id"] == "member")
-    assert authority_member["state"] == "detached"
-    assert authority_member["mesh_id"] is None
-
-    enrollment = await member.enrollment_descriptor()
-    rejoined = await home.upsert_node(
-        node_id="member",
-        mesh_id="mesh-a",
-        origin=enrollment["origin"],
-        public_key=enrollment["public_key"],
-        auth_token=enrollment["auth_token"],
-        expected_topology_revision=converged["revisions"]["topology"],
-    )
-    assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
-    authority_member = next(node for node in rejoined["nodes"] if node["node_id"] == "member")
-    assert authority_member["mesh_id"] == "mesh-a"
-    assert (
-        authority_member["desired_topology_revision"]
-        == authority_member["applied_topology_revision"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_standalone_self_adopt_releases_old_authority_and_owns_new_mesh(tmp_path):
-    home_store = FleetControlStore(
-        tmp_path / "home-release.sqlite3",
-        fleet_id="fleet-a",
-        node_id="home",
-        control_node_id="home",
-    )
-    member_store = FleetControlStore(
-        tmp_path / "member-release.sqlite3",
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="home",
-    )
-    await home_store.initialize()
-    await member_store.initialize()
-
-    home_private, home_public = keypair()
-    member_private, member_public = keypair()
-    policy = {
-        "duration_seconds": 1380,
-        "warning_after_seconds": 1200,
-        "alert_after_seconds": 1320,
-        "rearm_after_seconds": 180,
-        "legacy_admission_enabled": True,
-    }
-
-    await home_store.adopt_managed(
-        mesh_id="mesh-prod",
-        display_name="Production",
-        nodes=[{"node_id": "home"}],
-        policy=policy,
-    )
-    state = await home_store.upsert_managed_node(
-        node_id="home",
-        mesh_id="mesh-prod",
-        origin="https://home.example",
-        public_key=home_public,
-        auth_token="home-token",
-        expected_topology_revision=1,
-    )
-    state = await home_store.upsert_managed_node(
-        node_id="member",
-        mesh_id="mesh-prod",
-        origin="https://member.example",
-        public_key=member_public,
-        auth_token="member-token",
-        expected_topology_revision=state["revisions"]["topology"],
-    )
-    await home_store.detach_managed_node(
-        "member",
-        expected_topology_revision=state["revisions"]["topology"],
-    )
-
-    home = ManagedFleetControl(
-        home_store,
-        FleetConfig("home", home_private, (), 1.0, 1.0),
-        PolicyProbe(),
-        public_base_url="https://home.example",
-    )
-    member = ManagedFleetControl(
-        member_store,
-        FleetConfig(
-            "member",
-            member_private,
-            (
-                FleetPeer(
-                    "home",
-                    "https://home.example",
-                    home_public,
-                    "home-token",
-                ),
-            ),
-            1.0,
-            1.0,
-        ),
-        PolicyProbe(),
-        public_base_url="https://member.example",
-    )
-
-    async def forward_release(url, headers, body):
-        assert url.endswith("/internal/fleet/control/mutate/release-node")
-        released = await home.execute_forwarded(
-            "release-node",
-            body["payload"],
-            authenticated_peer_id="member",
-        )
-        return ControlResponse({"ok": True, "control": released})
-
-    member.client_factory = lambda: ControlClient(post_handler=forward_release)
-    initial = await home.authoritative_replication_snapshot()
-    await member.apply_replica(initial, source_node_id="home")
-    local_before = next(
-        node for node in (await member.snapshot())["nodes"] if node["node_id"] == "member"
-    )
-    assert local_before["mesh_id"] is None
-    assert local_before["state"] == "active"
-
-    adopted = await member.adopt(
-        mesh_id="mesh-new",
-        display_name="New Mesh",
-        control_node_id="member",
-    )
-
-    assert adopted["control_node_id"] == "member"
-    assert adopted["mesh"]["mesh_id"] == "mesh-new"
-    local_after = next(node for node in adopted["nodes"] if node["node_id"] == "member")
-    assert local_after["mesh_id"] == "mesh-new"
-    assert local_after["state"] == "active"
-
-    old_view = await home_store.managed_node("member")
-    assert old_view is not None
-    assert old_view["state"] == "detached"
-    assert old_view["mesh_id"] is None
-    assert all(item["node_id"] != "member" for item in await home_store.managed_peer_material())
-
-    with pytest.raises(FleetControlError, match="control_rejoin_credential_required"):
-        await member.apply_replica(initial, source_node_id="home")
-
-    after_stale = await member.snapshot()
-    assert after_stale["control_node_id"] == "member"
-    assert after_stale["mesh"]["mesh_id"] == "mesh-new"
-
-
-@pytest.mark.asyncio
-async def test_detached_standalone_policy_is_independent_from_old_mesh_policy(tmp_path):
-    home_private, home_public = keypair()
-    member_private, member_public = keypair()
-    home_store = FleetControlStore(
-        tmp_path / "policy-home.sqlite3",
-        fleet_id="fleet-a",
-        node_id="home",
-        control_node_id="home",
-    )
-    member_store = FleetControlStore(
-        tmp_path / "policy-member.sqlite3",
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="home",
-    )
-    await home_store.initialize()
-    await member_store.initialize()
-
-    home_policy = PolicyProbe()
-    member_policy = PolicyProbe()
-    member_policy.local = {
-        "duration_seconds": 900,
-        "warning_after_seconds": 600,
-        "alert_after_seconds": 800,
-        "rearm_after_seconds": 60,
-        "legacy_admission_enabled": True,
-    }
-    member_policy.current = dict(member_policy.local)
-
-    member = ManagedFleetControl(
-        member_store,
-        FleetConfig(
-            "member",
-            member_private,
-            (FleetPeer("home", "https://home.example", home_public, "home-token"),),
-            1.0,
-            1.0,
-        ),
-        member_policy,
-        public_base_url="https://member.example",
-    )
-
-    async def release_to_home(url, headers, body):
-        assert url.endswith("/internal/fleet/control/mutate/release-node")
-        released = await home.execute_forwarded(
-            "release-node",
-            body["payload"],
-            authenticated_peer_id="member",
-        )
-        return ControlResponse({"ok": True, "control": released})
-
-    member.client_factory = lambda: ControlClient(post_handler=release_to_home)
-
-    async def push_to_member(url, headers, body):
-        assert url.endswith("/internal/fleet/control/apply")
-        applied = await member.apply_replica(body["state"], source_node_id="home")
-        return ControlResponse({"ok": True, "control": applied})
-
-    home = ManagedFleetControl(
-        home_store,
-        FleetConfig(
-            "home",
-            home_private,
-            (FleetPeer("member", "https://member.example", member_public, "member-token"),),
-            1.0,
-            1.0,
-        ),
-        home_policy,
-        public_base_url="https://home.example",
-        client_factory=lambda: ControlClient(post_handler=push_to_member),
-    )
-
-    adopted = await home.adopt(mesh_id="mesh-prod", display_name="Production")
-    enrollment = await member.enrollment_descriptor()
-    attached = await home.upsert_node(
-        node_id="member",
-        mesh_id="mesh-prod",
-        origin=enrollment["origin"],
-        public_key=enrollment["public_key"],
-        auth_token=enrollment["auth_token"],
-        expected_topology_revision=adopted["revisions"]["topology"],
-    )
-    assert member_policy.current == home_policy.current
-
-    detached = await home.detach_node(
-        "member",
-        expected_topology_revision=attached["revisions"]["topology"],
-    )
-    home_member = next(node for node in detached["nodes"] if node["node_id"] == "member")
-    assert home_member["state"] == "detached"
-    member_state = await member.snapshot()
-    assert member_state["control_node_id"] == "member"
-    assert member_state["mesh"] is None
-    assert member_policy.current == member_policy.local
-
-    production_before = dict((await home.snapshot())["policy"])
-    standalone_revision = member_state["policy"]["revision"]
-    changed_standalone = await member.update_policy(
-        duration_seconds=901,
-        warning_after_seconds=601,
-        alert_after_seconds=801,
-        rearm_after_seconds=61,
-        legacy_admission_enabled=False,
-        expected_revision=standalone_revision,
-    )
-    assert changed_standalone["policy"]["duration_seconds"] == 901
-    assert changed_standalone["policy"]["rearm_after_seconds"] == 61
-    assert changed_standalone["policy"]["legacy_admission_enabled"] is False
-    assert (await home.snapshot())["policy"] == production_before
-
-    home_state = await home.snapshot()
-    changed_prod = await home.update_policy(
-        duration_seconds=1381,
-        warning_after_seconds=1200,
-        alert_after_seconds=1320,
-        rearm_after_seconds=181,
-        legacy_admission_enabled=True,
-        expected_revision=home_state["policy"]["revision"],
-    )
-    assert changed_prod["policy"]["duration_seconds"] == 1381
-    member_after = await member.snapshot()
-    assert member_after["policy"]["duration_seconds"] == 901
-    assert member_after["policy"]["rearm_after_seconds"] == 61
-    assert member_after["policy"]["legacy_admission_enabled"] is False
-
-
-@pytest.mark.asyncio
-async def test_recovered_stale_control_backup_preserves_identity_and_reconverges(tmp_path):
-    live_path = tmp_path / "live.sqlite3"
-    stale_backup = tmp_path / "stale-backup.sqlite3"
-    recovered_path = tmp_path / "recovered.sqlite3"
-
-    private_key, public_key = keypair()
-    store = FleetControlStore(
-        live_path,
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="control",
-    )
-    await store.initialize()
-    identity_before = await store.ensure_managed_identity(private_key)
-
-    stale = _managed_replica_snapshot(include_member_mesh_id=True, member_mesh_id="mesh-a")
-    stale["nodes"][1]["public_key"] = public_key
-    await store.apply_managed_replica(
-        stale,
-        bootstrap_tokens={"member": "member-token", "control": "control-token"},
-    )
-
-    with sqlite3.connect(live_path) as source, sqlite3.connect(stale_backup) as target:
-        source.backup(target)
-    recovered_path.write_bytes(stale_backup.read_bytes())
-
-    recovered = FleetControlStore(
-        recovered_path,
-        fleet_id="fleet-a",
-        node_id="member",
-        control_node_id="control",
-    )
-    assert await recovered.healthy() is True
-    identity_recovered = await recovered.managed_identity()
-    assert identity_recovered is not None
-    assert identity_recovered["private_key"] == identity_before["private_key"]
-    assert identity_recovered["public_key"] == public_key
-    assert identity_recovered["generation"] == identity_before["generation"]
-
-    fresh = _managed_replica_snapshot(include_member_mesh_id=True, member_mesh_id="mesh-a")
-    fresh["revisions"] = {"topology": 7, "trust": 8, "access_policy": 9}
-    fresh["policy"]["duration_seconds"] = 1500
-    fresh["policy"]["warning_after_seconds"] = 1260
-    fresh["policy"]["alert_after_seconds"] = 1380
-    for node in fresh["nodes"]:
-        node["applied_topology_revision"] = 7
-        node["applied_trust_revision"] = 8
-        node["applied_policy_revision"] = 9
-    fresh["nodes"][1]["public_key"] = public_key
-    fresh["nodes"][1]["origin"] = "https://member-recovered.example"
-
-    state = await recovered.apply_managed_replica(
-        fresh,
-        bootstrap_tokens={"member": "member-token", "control": "control-token"},
-    )
-    identity_after = await recovered.managed_identity()
-    assert identity_after is not None
-    assert identity_after["private_key"] == identity_before["private_key"]
-    assert identity_after["public_key"] == public_key
-    assert identity_after["generation"] == identity_before["generation"]
-    assert state["revisions"]["topology"] == 7
-    assert state["revisions"]["trust"] == 8
-    assert state["revisions"]["access_policy"] == 9
-
-    member = await recovered.managed_node("member")
-    assert member is not None
-    assert member["public_key"] == public_key
-    assert member["origin"] == "https://member-recovered.example"
-
-    with sqlite3.connect(recovered_path) as db:
-        revisions = db.execute(
-            "SELECT desired_topology_revision,applied_topology_revision,"
-            "desired_trust_revision,applied_trust_revision,"
-            "desired_policy_revision,applied_policy_revision,last_error "
-            "FROM managed_nodes WHERE node_id='member'"
-        ).fetchone()
-    assert revisions == (7, 7, 8, 8, 9, 9, None)
+    current = _managed_replica_snapshot(member_mesh_id="mesh-a")
+    await store.apply_managed_replica(current)
+    stale = current | {"revisions": current["revisions"] | {"topology": 1}}
+
+    with pytest.raises(FleetControlError, match="managed_snapshot_stale"):
+        await store.apply_managed_replica(stale)

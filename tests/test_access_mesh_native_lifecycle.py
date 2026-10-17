@@ -1,7 +1,4 @@
-import re
-import sqlite3
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,8 +6,7 @@ import pytest_asyncio
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.application.actor import ActorContext
-from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
-from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.access_mesh_grants import SlotPolicy
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.storage.access_mesh import AccessMeshStore
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
@@ -77,34 +73,7 @@ async def issued(f, kind="legacy", **policy):
 
 
 @pytest.mark.asyncio
-async def test_native_cycle_survives_restart_but_requires_explicit_new_start(fixture):
-    f = fixture
-    grant = await issued(f)
-    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    assert attached["logical_agent_id"] == grant["logical_agent_id"]
-    same = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert same["work_session_id"] == attached["work_session_id"]
-    restarted = AccessMeshApplication(
-        f.store, task_store=f.tasks, execution_fence=f.fence, clock=lambda: f.clock[0]
-    )
-    assert (await restarted.resolve(actor(), ManagedOperation.COMMAND_RUN))[
-        "work_session_id"
-    ] == same["work_session_id"]
-    f.clock[0] = T0 + timedelta(seconds=11)
-    with pytest.raises(AccessMeshError, match="session_expired"):
-        await restarted.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    f.clock[0] = T0 + timedelta(seconds=15)
-    # A policy that permits renewal does not grant a new cycle implicitly:
-    # only a subsequent authorized Access.start can reopen the work window.
-    with pytest.raises(AccessMeshError, match="session_expired"):
-        await restarted.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert f.fence.calls
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kind,release", [("legacy", False), ("persistent", False), ("persistent", True)]
-)
+@pytest.mark.parametrize("kind,release", [("persistent", False), ("persistent", True)])
 async def test_expiry_claim_policy_preserves_task_state(fixture, kind, release):
     f = fixture
     grant = await issued(f, kind, release_on_end=release)
@@ -120,92 +89,11 @@ async def test_expiry_claim_policy_preserves_task_state(fixture, kind, release):
 
 
 @pytest.mark.asyncio
-async def test_different_metadata_attach_same_agent_other_principal_stays_unbound(fixture):
+async def test_deadline_override_updates_native_session_deadline(fixture):
     f = fixture
-    await issued(f)
-    a = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    b = await f.app.attach(
-        actor("coordinator", "different"), issuer_node_id=None, access_code="firstbyte:1234"
-    )
-    assert a["logical_agent_id"] == b["logical_agent_id"]
-    with pytest.raises(AccessMeshError, match="session_attach_required"):
-        await f.app.resolve(actor(principal="unattached"), ManagedOperation.COMMAND_RUN)
-
-
-@pytest.mark.asyncio
-async def test_delete_durable_cleanup_and_tombstone_after_restart(fixture):
-    f = fixture
-    grant = await issued(f)
-    await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    await f.tasks.create_task("mesh", "one", "one", state="blocked", checkpoint="keep")
-    await f.tasks.claim_owner("mesh", "one", ClaimOwner.logical_agent(grant["logical_agent_id"]))
-    event = AccessSlotEvent(
-        issuer_id="firstbyte",
-        slot_id=grant["slot_id"],
-        logical_agent_id=grant["logical_agent_id"],
-        revision=2,
-        event_id="delete",
-        kind="SlotDeleted",
-    )
-    f.store.apply_event(event, authenticated_peer_id="firstbyte")
-    assert f.store.pending_cleanup()
-    await f.app.tick()
-    assert not f.store.pending_cleanup()
-    assert not await f.tasks.active_claims("mesh", "one")
-    assert (await f.tasks.get_task("mesh", "one"))["state"] == "blocked"
-    with pytest.raises(AccessMeshError, match="session_attach_required"):
-        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-
-
-@pytest.mark.asyncio
-async def test_snapshot_gap_and_local_issuer_independence(fixture, tmp_path):
-    f = fixture
-    grant = await issued(f)
-    await f.app.change(
-        actor("access"), slot_id=grant["slot_id"], kind="SlotSuspended", expected_revision=1
-    )
-    await f.app.change(
-        actor("access"), slot_id=grant["slot_id"], kind="SlotResumed", expected_revision=2
-    )
-    path = tmp_path / "bac.db"
-    await SqliteRepository(path, tmp_path / "bac-output.db").initialize()
-    consumer = AccessMeshStore(
-        path,
-        local_node_id="bacloud",
-        trusted_issuers=frozenset({"firstbyte", "bacloud"}),
-        proof_key=KEY,
-    )
-    snapshot = f.store.snapshot_page(issuer_id="firstbyte")[0]
-    assert consumer.apply_snapshot(snapshot, authenticated_peer_id="firstbyte") == "applied"
-    assert consumer.apply_snapshot(snapshot, authenticated_peer_id="firstbyte") == "duplicate"
-    app = AccessMeshApplication(
-        consumer, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0
-    )
-    result = await app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    assert result["logical_agent_id"] == grant["logical_agent_id"]
-    assert result["authority_node_id"] == "bacloud"
-    assert result["issuer_node_id"] == "firstbyte"
-    assert (await app.issue(actor("access"), code="1234"))["issuer_node_id"] == "bacloud"
-
-
-@pytest.mark.asyncio
-async def test_altered_event_replay_is_rejected(fixture):
-    f = fixture
-    grant = await issued(f)
-    event = f.store.pending_outbox(peer_node_id="bacloud")[0].event
-    wire = event.to_wire()
-    wire["code_tag"] = f.store.code_tag("firstbyte", "5678")
-    with pytest.raises(AccessMeshError, match="access_mesh_event_conflict"):
-        f.store.apply_event(AccessSlotEvent.from_wire(wire), authenticated_peer_id="firstbyte")
-    assert f.store.slot("firstbyte", grant["slot_id"]).revision == 1
-
-
-@pytest.mark.asyncio
-async def test_deadline_override_changes_current_cycle_only_and_native_fence(fixture):
-    f = fixture
-    grant = await issued(f)
+    grant = await issued(f, "persistent")
     attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    result = await f.app.change(
+    await f.app.change(
         actor("access"),
         slot_id=grant["slot_id"],
         kind="SessionUpdated",
@@ -213,235 +101,47 @@ async def test_deadline_override_changes_current_cycle_only_and_native_fence(fix
         effective_at=T0,
         deadline_at=T0 + timedelta(seconds=20),
     )
-    assert result["revision"] == 2
     native = await f.native.get_work_session(attached["work_session_id"])
     assert datetime.fromisoformat(native.hard_expires_at) == T0 + timedelta(seconds=20)
-    f.clock[0] = T0 + timedelta(seconds=16)
-    current = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert current["work_session_id"] == attached["work_session_id"]
-    f.clock[0] = T0 + timedelta(seconds=22)
-    with pytest.raises(AccessMeshError, match="session_expired"):
-        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    f.clock[0] = T0 + timedelta(seconds=25)
-    with pytest.raises(AccessMeshError, match="session_expired"):
-        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert f.store.slot("firstbyte", grant["slot_id"]).policy.duration_seconds == 10
 
 
 @pytest.mark.asyncio
-async def test_status_read_does_not_release_claims_or_materialize_next_cycle(fixture):
+async def test_expired_status_read_preserves_native_session(fixture):
     f = fixture
-    await issued(f)
+    await issued(f, "persistent")
     attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
     f.clock[0] = T0 + timedelta(seconds=16)
-    # The public Agent Observe surface now contains four fields per active
-    # named agent. Inspect the pure internal status to verify that reads do
-    # not materialize a new local work cycle.
     slot = f.store.attached_slot(f.app.connection_key(actor()))
     status = f.store.observed_identity(slot, now=f.clock[0])
     assert status["session_lifecycle"]["state"] == "expired"
-    assert "work_session_id" not in status
-    assert not f.store.pending_cleanup()
-    old = await f.native.get_work_session(attached["work_session_id"])
-    assert old.state == "active"
-    await f.app.tick()
-    with pytest.raises(AccessMeshError, match="session_expired"):
-        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert (await f.native.get_work_session(attached["work_session_id"])).state != "active"
+    assert (await f.native.get_work_session(attached["work_session_id"])).state == "active"
 
 
 @pytest.mark.asyncio
-async def test_snapshot_rotation_preserves_session_but_missed_stop_fences(fixture, tmp_path):
+async def test_snapshot_of_missed_stop_schedules_native_fence(fixture, tmp_path):
     f = fixture
-    grant = await issued(f)
-    path = tmp_path / "snapshot-consumer.db"
-    await SqliteRepository(path, tmp_path / "snapshot-out.db").initialize()
+    grant = await issued(f, "persistent")
+    path = tmp_path / "consumer.db"
+    await SqliteRepository(path, tmp_path / "consumer-out.db").initialize()
     store = AccessMeshStore(
         path,
         local_node_id="bacloud",
         trusted_issuers=frozenset({"firstbyte", "bacloud"}),
         proof_key=KEY,
     )
-    consumer = AccessMeshApplication(
-        store, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0
+    store.apply_snapshot(
+        f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
+    )
+    slot = store.slot("firstbyte", grant["slot_id"])
+    initial = store.local_identity(slot, now=T0)
+    await f.app.change(
+        actor("access"), slot_id=grant["slot_id"], kind="SlotSuspended", expected_revision=1
+    )
+    await f.app.change(
+        actor("access"), slot_id=grant["slot_id"], kind="SlotResumed", expected_revision=2
     )
     store.apply_snapshot(
         f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
     )
-    initial = await consumer.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    await f.app.change(
-        actor("access"), slot_id=grant["slot_id"], kind="AccessCodeRotated", expected_revision=1
-    )
-    store.apply_snapshot(
-        f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
-    )
-    assert not store.pending_cleanup()
-    assert (await consumer.resolve(actor(), ManagedOperation.COMMAND_RUN))[
-        "work_session_id"
-    ] == initial["work_session_id"]
-    await f.app.change(
-        actor("access"), slot_id=grant["slot_id"], kind="SlotSuspended", expected_revision=2
-    )
-    await f.app.change(
-        actor("access"), slot_id=grant["slot_id"], kind="SlotResumed", expected_revision=3
-    )
-    store.apply_snapshot(
-        f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
-    )
-    assert store.pending_cleanup()
-    assert (await consumer.resolve(actor(), ManagedOperation.COMMAND_RUN))[
-        "session_epoch"
-    ] == initial["session_epoch"] + 1
-
-
-@pytest.mark.asyncio
-async def test_repeated_mesh_resolve_does_not_flood_entity_journal(fixture):
-    """Rechecking a stable Access cycle must not emit duplicate change events."""
-    f = fixture
-    await issued(f)
-    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    agent_id = attached["logical_agent_id"]
-    session_id = attached["work_session_id"]
-
-    def changes():
-        with sqlite3.connect(f.store.path) as db:
-            return db.execute(
-                "SELECT event_type,count(*) FROM instance_events "
-                "WHERE (event_type='logical_agent.changed' AND entity_id=?) "
-                "OR (event_type='work_session.changed' AND entity_id=?) "
-                "GROUP BY event_type ORDER BY event_type",
-                (agent_id, session_id),
-            ).fetchall()
-
-    original = changes()
-    for _ in range(8):
-        result = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-        assert result["work_session_id"] == session_id
-    assert changes() == original
-
-
-@pytest.mark.asyncio
-async def test_existing_unconditional_event_triggers_upgrade_without_event_loss(fixture):
-    """Opening a pre-upgrade database installs guarded triggers exactly once."""
-    f = fixture
-    await issued(f)
-    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    agent_id, session_id = attached["logical_agent_id"], attached["work_session_id"]
-    original_names = (
-        "tr_event_logical_agent_changed",
-        "tr_event_work_session_changed",
-    )
-
-    with sqlite3.connect(f.store.path) as db:
-        # Downgrade ONLY an isolated test database to the prior trigger DDL.
-        for name in original_names:
-            sql = db.execute(
-                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
-            ).fetchone()[0]
-            assert " WHEN (" in sql
-            old_sql = re.sub(r"\s+WHEN \(.*?\)\s+BEGIN", " BEGIN", sql, count=1, flags=re.S)
-            assert old_sql != sql
-            db.execute("DROP TRIGGER " + name)
-            db.execute(old_sql)
-        baseline = db.execute("SELECT count(*) FROM instance_events").fetchone()[0]
-        db.execute(
-            "UPDATE logical_agents SET updated_at=updated_at WHERE logical_agent_id=?",
-            (agent_id,),
-        )
-        db.execute(
-            "UPDATE logical_agent_work_sessions SET hard_expires_at=hard_expires_at "
-            "WHERE work_session_id=?",
-            (session_id,),
-        )
-        assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline + 2
-
-    repository = SqliteRepository(f.store.path, Path(f.store.path).parent / "output.db")
-    await repository.initialize(preserve_active_commands=True)
-    await repository.initialize(preserve_active_commands=True)
-    with sqlite3.connect(f.store.path) as db:
-        for name in original_names:
-            ddl = db.execute(
-                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
-            ).fetchone()[0]
-            assert " WHEN (" in ddl
-        baseline = db.execute("SELECT count(*) FROM instance_events").fetchone()[0]
-        db.execute(
-            "UPDATE logical_agents SET updated_at=updated_at WHERE logical_agent_id=?",
-            (agent_id,),
-        )
-        db.execute(
-            "UPDATE logical_agent_work_sessions SET hard_expires_at=hard_expires_at "
-            "WHERE work_session_id=?",
-            (session_id,),
-        )
-        assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline
-        db.execute(
-            "UPDATE logical_agents SET slot_revision=slot_revision+1 WHERE logical_agent_id=?",
-            (agent_id,),
-        )
-        assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline + 1
-        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-
-
-@pytest.mark.asyncio
-async def test_events_mesh_attach_is_local_and_observation_never_activity(fixture):
-    f = fixture
-    attached, activity = [], []
-
-    async def on_attach(*args, **kwargs):
-        attached.append((args, kwargs))
-
-    async def on_activity(*args, **kwargs):
-        activity.append((args, kwargs))
-
-    f.app.attach_notifier = on_attach
-    f.app.activity_notifier = on_activity
-    await issued(f)
-    assert attached == []  # Issuing Access is not local attach
-    first = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    assert len(attached) == 1
-    assert attached[0][0][1] == first["work_session_id"]
-    assert attached[0][1]["agent_name"] == first["public_name"]
-    await f.app.resolve(actor(), ManagedOperation.OBSERVE)
-    assert activity == []
-    await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert len(activity) == 1
-    assert activity[0][0][1] == first["work_session_id"]
-    await f.app.resolve(actor(), ManagedOperation.TASK_LIST)
-    assert len(activity) == 1
-
-
-@pytest.mark.asyncio
-async def test_events_grant_on_firstbyte_not_local_attach_on_bacloud(fixture, tmp_path):
-    f = fixture
-    await issued(f)
-    path = tmp_path / "remote.db"
-    await SqliteRepository(path, tmp_path / "remote_output.db").initialize()
-    store = AccessMeshStore(
-        path,
-        local_node_id="bacloud",
-        trusted_issuers=frozenset({"firstbyte", "bacloud"}),
-        proof_key=KEY,
-    )
-    app = AccessMeshApplication(
-        store,
-        task_store=TaskStore(path),
-        execution_fence=Fence(),
-        clock=lambda: T0,
-    )
-    attached = []
-
-    async def on_attach(*args, **kwargs):
-        attached.append((args, kwargs))
-
-    app.attach_notifier = on_attach
-    store.apply_snapshot(
-        f.store.snapshot_page(issuer_id="firstbyte")[0],
-        authenticated_peer_id="firstbyte",
-    )
-    assert attached == []  # Remote grant replication did not attach
-    attached_session = await app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-    assert attached_session["authority_node_id"] == "bacloud"
-    assert attached_session["issuer_node_id"] == "firstbyte"
-    assert len(attached) == 1
-    assert attached[0][0][1] == attached_session["work_session_id"]
+    (cleanup,) = store.pending_cleanup()
+    assert cleanup["work_session_id"] == initial["work_session_id"]

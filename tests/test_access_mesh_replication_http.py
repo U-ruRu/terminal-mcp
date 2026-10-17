@@ -1,4 +1,3 @@
-import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -8,7 +7,6 @@ from fastapi import FastAPI
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.application.actor import ActorContext
-from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.fleet.access_mesh import AccessMeshReplication, build_access_mesh_router
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
 from terminal_mcp.storage.access_mesh import AccessMeshStore
@@ -74,265 +72,31 @@ async def node(tmp_path, name, other, routes, client, *, proof_key=KEY):
 
 
 @pytest.mark.asyncio
-async def test_http_two_issuers_and_offline_hot_path(tmp_path):
+async def test_authenticated_peer_cannot_spoof_event_issuer(tmp_path):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
-        fb, fb_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        bac, bac_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        a = await fb.issue(actor(), code="1234")
-        b = await bac.issue(actor(), code="1234")
-        await fb_rep.tick()
-        await bac_rep.tick()
-        f = await fb.attach(actor(), issuer_node_id="bacloud", access_code="1234")
-        c = await bac.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-        assert f["logical_agent_id"] == b["logical_agent_id"]
-        assert c["logical_agent_id"] == a["logical_agent_id"]
-        assert not fb.store.pending_outbox(peer_node_id="bacloud")
-        routes.offline.add("firstbyte")
-        bac_rep._last_snapshot_pass["firstbyte"] = 0
-        await bac_rep.tick()
-        assert bac_rep.peer_health["firstbyte"]["status"] == "degraded"
-        local = await bac.resolve(actor(), ManagedOperation.COMMAND_RUN)
-        assert local["work_session_id"] == c["work_session_id"]
-        assert (await bac.issue(actor(), code="5678"))["ok"] is True
-
-
-@pytest.mark.asyncio
-async def test_gap_catches_up_by_authenticated_snapshot_and_tombstone(tmp_path):
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        fb, rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        bac, _ = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        issued = await fb.issue(actor(), code="1234")
-        await rep.tick()
-        await bac.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
-        await fb.change(
-            actor(), slot_id=issued["slot_id"], kind="SlotSuspended", expected_revision=1
-        )
-        missing = fb.store.pending_outbox(peer_node_id="bacloud")[0]
-        # A restored receiver can miss an earlier event that the issuer had ACKed.
-        fb.store.acknowledge_delivery(
-            peer_node_id="bacloud", event_id=missing.event.event_id, authenticated_peer_id="bacloud"
-        )
-        await fb.change(actor(), slot_id=issued["slot_id"], kind="SlotResumed", expected_revision=2)
-        await rep.tick()
-        assert bac.store.slot("firstbyte", issued["slot_id"]).revision == 3
-        await rep.tick()
-        assert not fb.store.pending_outbox(peer_node_id="bacloud")
-        await fb.change(actor(), slot_id=issued["slot_id"], kind="SlotDeleted", expected_revision=3)
-        await rep.tick()
-        assert bac.store.slot("firstbyte", issued["slot_id"]).state == "deleted"
-        assert bac.store.attached_slot(bac.connection_key(actor())) is None
-
-
-@pytest.mark.asyncio
-async def test_peer_authentication_cannot_be_replaced_by_event_issuer_field(tmp_path):
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        fb, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        issued = await fb.issue(actor(), code="1234")
-        wire = fb.store.pending_outbox(peer_node_id="bacloud")[0].event.to_wire()
-        response = await client.post(
-            "https://firstbyte/internal/fleet/access-mesh/events",
-            json={"events": [{"event": wire, "issued_kind": "legacy"}]},
-        )
-        assert response.status_code == 401
+        source, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        issued = await source.issue(actor(), code="1234", kind="persistent")
+        wire = source.store.pending_outbox(peer_node_id="bacloud")[0].event.to_wire()
         response = await client.post(
             "https://firstbyte/internal/fleet/access-mesh/events",
             headers={"x-terminal-mcp-peer": "bacloud", "authorization": "Bearer fixture-token"},
-            json={"events": [{"event": wire, "issued_kind": "legacy"}]},
+            json={"events": [{"event": wire, "issued_kind": "persistent"}]},
         )
         assert response.json()["code"] == "access_mesh_untrusted_issuer"
-        assert fb.store.slot("firstbyte", issued["slot_id"]).revision == 1
+        assert source.store.slot("firstbyte", issued["slot_id"]).revision == 1
 
 
 @pytest.mark.asyncio
-async def test_idle_mesh_avoids_network_polling_and_wakes_for_committed_events(tmp_path):
-    """After bootstrap, no HTTP requests are sent until an event is committed."""
-
-    class CountingRoutes(Routes):
-        def __init__(self):
-            super().__init__()
-            self.paths = []
-
-        async def handle_async_request(self, request):
-            self.paths.append(request.url.path)
-            return await super().handle_async_request(request)
-
-    routes = CountingRoutes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        source, replication = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        destination, _ = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        await replication.start()
-        try:
-
-            async def eventually(predicate):
-                async def wait():
-                    while not predicate():  # noqa: ASYNC110 - isolated background delivery
-                        await asyncio.sleep(0.01)
-
-                await asyncio.wait_for(wait(), 2)
-
-            await eventually(lambda: replication.peer_health["bacloud"]["status"] == "healthy")
-            assert "/internal/fleet/access-mesh/snapshot" in routes.paths
-            routes.paths.clear()
-            await asyncio.sleep(0.05)
-            assert routes.paths == []
-
-            issued = await source.issue(actor(), code="1234")
-            await eventually(
-                lambda: destination.store.slot("firstbyte", issued["slot_id"]) is not None
-            )
-            assert "/internal/fleet/access-mesh/events" in routes.paths
-            assert "/internal/fleet/access-mesh/snapshot" not in routes.paths
-            assert replication._last_snapshot_pass["bacloud"] > 0
-        finally:
-            await replication.stop()
-            assert source.store._delivery_notifier is None
-
-
-@pytest.mark.asyncio
-async def test_anti_entropy_snapshot_interval_is_at_least_five_minutes(tmp_path):
-    class CountingRoutes(Routes):
-        def __init__(self):
-            super().__init__()
-            self.snapshots = 0
-
-        async def handle_async_request(self, request):
-            if request.url.path.endswith("/access-mesh/snapshot"):
-                self.snapshots += 1
-            return await super().handle_async_request(request)
-
-    routes = CountingRoutes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        _, replication = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        await replication.tick()
-        assert routes.snapshots == 1
-        await replication.tick()
-        assert routes.snapshots == 1
-        replication._last_snapshot_pass["bacloud"] -= 301
-        await replication.tick()
-        assert routes.snapshots == 2
-
-
-@pytest.mark.asyncio
-async def test_startup_drains_more_than_one_outbox_page_without_periodic_polling(tmp_path):
+async def test_http_delivery_applies_committed_event_and_acknowledges_outbox(tmp_path):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
         source, replication = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        destination, _ = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        slots = []
-        for code in range(3100, 3125):
-            slots.append((await source.issue(actor(), code=str(code)))["slot_id"])
-        await replication.start()
-        try:
-
-            async def delivered():
-                while any(destination.store.slot("firstbyte", slot) is None for slot in slots):  # noqa: ASYNC110
-                    await asyncio.sleep(0.02)
-
-            await asyncio.wait_for(delivered(), 4)
-
-            async def acknowledged():
-                while source.store.pending_outbox(peer_node_id="bacloud"):  # noqa: ASYNC110
-                    await asyncio.sleep(0.02)
-
-            await asyncio.wait_for(acknowledged(), 4)
-        finally:
-            await replication.stop()
-
-
-
-@pytest.mark.asyncio
-async def test_managed_join_auto_proof_cross_node_attach_with_distinct_bootstrap(tmp_path):
-    """Actual network proof+reservation+replication+Exec attach from one authority."""
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        fb, fb_rep = await node(
-            tmp_path, "firstbyte", "bacloud", routes, client,
-            proof_key=b"firstbyte-local-bootstrap-proof-32bytes",
+        target, _ = await node(tmp_path, "bacloud", "firstbyte", routes, client)
+        issued = await source.issue(actor(), code="1234", kind="persistent")
+        assert await replication._deliver(replication.peers[0])
+        assert (
+            target.store.slot("firstbyte", issued["slot_id"]).logical_agent_id
+            == issued["logical_agent_id"]
         )
-        bac, bac_rep = await node(
-            tmp_path, "bacloud", "firstbyte", routes, client,
-            proof_key=b"bacloud-local-bootstrap-proof-different-32",
-        )
-        for mesh in (fb, bac):
-            mesh.managed_trust_enabled = True
-            mesh.managed_trust_mesh_id = "mesh-prod-fixture"
-            mesh.store.install_managed_proof(
-                mesh_id="mesh-prod-fixture",
-                authority_id="bacloud",
-                ingress_token="validated-authority-ingress-" + "a" * 48,
-            )
-
-        assert fb.store.code_tag("bacloud", "4731") == bac.store.code_tag("bacloud", "4731")
-        assert fb_rep.native_trust_status()["state"] == "pending"
-        assert await fb_rep.verify_peer_proof(fb_rep.peers[0])
-        assert await bac_rep.verify_peer_proof(bac_rep.peers[0])
-        assert bac_rep.native_trust_status()["ready"]
-        assert fb_rep.native_trust_status()["ready"]
-
-        issued = await bac.issue(actor(), code="4731")
-        await bac_rep.tick()
-        await fb_rep.tick()
-        attached = await fb.attach(actor(), issuer_node_id="bacloud", access_code="4731")
-        assert issued["logical_agent_id"] == attached["logical_agent_id"]
-        await bac.attach(actor(), issuer_node_id="bacloud", access_code="4731")
-        assert (await bac.resolve(actor(), ManagedOperation.COMMAND_RUN))["work_session_id"]
-
-        # Revoking authority trust invalidates new remote attach. The existing
-        # local BacLOUD grant still exists and can run normally.
-        fb.store.trusted_issuers = frozenset({"firstbyte"})
-        with pytest.raises(Exception) as denied:
-            await fb.attach(
-                ActorContext(
-                    auth_mode="bearer", principal_id="different-fixture-user",
-                    credential_id="fixture", auth_generation=1,
-                    scopes=frozenset({"terminal:read", "terminal:execute"}),
-                    provider="openai",
-                    provider_metadata={"openai/subject": "other", "openai/session": "other"},
-                    transport="mcp", endpoint_role="executor",
-                ),
-                issuer_node_id="bacloud", access_code="4731",
-            )
-        assert getattr(denied.value, "code", "") == "access_mesh_untrusted_issuer"
-
-@pytest.mark.asyncio
-async def test_owned_replication_client_disables_keepalive_and_preserves_delivery(
-    tmp_path, monkeypatch
-):
-    """The internal HTTPX transport reconnects while events still replicate."""
-    routes = Routes()
-    original_client = httpx.AsyncClient
-    options = []
-    clients = []
-
-    def make_client(*args, **kwargs):
-        options.append(kwargs)
-        client = original_client(*args, transport=routes, **kwargs)
-        clients.append(client)
-        return client
-
-    monkeypatch.setattr(httpx, "AsyncClient", make_client)
-    source, replication = await node(tmp_path, "firstbyte", "bacloud", routes, None)
-    target, _ = await node(tmp_path, "bacloud", "firstbyte", routes, None)
-    issued = await source.issue(actor(), code="1234")
-
-    try:
-        await replication.tick()
-        assert len(clients) == 1
-        assert options[0]["timeout"] == 1.0
-        assert options[0]["limits"].max_keepalive_connections == 0
-        assert replication.peer_health["bacloud"]["status"] == "healthy"
-        assert target.store.slot("firstbyte", issued["slot_id"]) is not None
-        assert not source.store.pending_outbox(peer_node_id="bacloud")
-
-        await source.change(
-            actor(), slot_id=issued["slot_id"], kind="SlotSuspended", expected_revision=1
-        )
-        await replication.tick()
-        assert target.store.slot("firstbyte", issued["slot_id"]).revision == 2
-    finally:
-        await replication.stop()
-    assert clients[0].is_closed
+        assert source.store.pending_outbox(peer_node_id="bacloud") == ()

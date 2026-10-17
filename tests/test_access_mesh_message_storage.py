@@ -1,6 +1,6 @@
 """Current local message transactions; one database, no application or peer runtime."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -75,3 +75,92 @@ def test_oversized_acceptance_receipt_rolls_back_message_and_recipients(store):
     assert store.wire(WIRE["message_hash"]) is None
     assert row_count(store, "coordination_messages") == 0
     assert row_count(store, "coordination_message_recipients") == 0
+
+
+def test_notify_surface_marks_message_read(store):
+    store.accept(WIRE, [RECIPIENT])
+    stamp = (NOW + timedelta(seconds=1)).isoformat()
+
+    store.surface("receiver", [WIRE["message_hash"]], stamp)
+
+    row = store.recipient(WIRE["message_hash"], "receiver")
+    assert row["first_seen_at"] == row["read_at"] == stamp
+    assert row["seen_count"] == 1
+
+
+def test_ack_preserves_first_receipt_on_retry(store):
+    store.accept({**WIRE, "mode": "ack"}, [RECIPIENT])
+    store.acknowledge(WIRE["message_hash"], "receiver", NOW.isoformat())
+    before = store.recipient(WIRE["message_hash"], "receiver")
+
+    store.acknowledge(WIRE["message_hash"], "receiver", (NOW + timedelta(hours=6)).isoformat())
+
+    assert store.recipient(WIRE["message_hash"], "receiver") == before
+
+
+def test_alert_ack_keeps_reply_obligation(store):
+    store.accept({**WIRE, "mode": "alert", "alert": True, "require_reply": True}, [RECIPIENT])
+
+    store.acknowledge(WIRE["message_hash"], "receiver", NOW.isoformat())
+
+    assert [row["message_hash"] for row in store.page("receiver")] == [WIRE["message_hash"]]
+
+
+def reply_wire():
+    return {
+        **WIRE,
+        "message_hash": "node-a:localmsg:" + "b" * 32,
+        "sender_id": "receiver",
+        "sender_name": "Receiver",
+        "target": "Sender",
+        "text": "reply",
+        "reply_to": WIRE["message_hash"],
+    }
+
+
+def test_reply_acceptance_completes_parent_receipt(store):
+    store.accept({**WIRE, "mode": "alert", "alert": True, "require_reply": True}, [RECIPIENT])
+    reply = reply_wire()
+
+    store.accept(
+        reply, [{"logical_agent_id": "sender", "public_name": "Sender"}], reply_author="receiver"
+    )
+
+    row = store.recipient(WIRE["message_hash"], "receiver")
+    assert row["replied_at"] == reply["created_at"]
+    assert row["reply_message_hash"] == reply["message_hash"]
+
+
+def test_reply_failure_preserves_parent_obligation(store, monkeypatch):
+    store.accept({**WIRE, "mode": "alert", "alert": True, "require_reply": True}, [RECIPIENT])
+    before = store.recipient(WIRE["message_hash"], "receiver")
+
+    def reject_receipt(*args):
+        raise RuntimeError("injected receipt failure")
+
+    monkeypatch.setattr(store, "_validate_receipt_recipient", reject_receipt)
+    with pytest.raises(RuntimeError, match="injected receipt failure"):
+        store.accept(
+            reply_wire(),
+            [{"logical_agent_id": "sender", "public_name": "Sender"}],
+            reply_author="receiver",
+        )
+
+    assert store.recipient(WIRE["message_hash"], "receiver") == before
+    assert row_count(store, "coordination_messages") == 1
+
+
+def test_message_expires_at_original_twenty_four_hour_deadline(store):
+    store.accept(WIRE, [RECIPIENT])
+    store.clock = lambda: NOW + timedelta(hours=24)
+
+    assert store.page("receiver", history=True) == []
+
+
+def test_prune_removes_expired_local_message(store):
+    store.accept(WIRE, [RECIPIENT])
+
+    removed = store.prune_expired(now=NOW + timedelta(hours=24))
+
+    assert removed == 1
+    assert row_count(store, "coordination_messages") == 0

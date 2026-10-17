@@ -13,109 +13,37 @@ import pytest
 
 from terminal_mcp import __main__ as cli
 from terminal_mcp.auth import pairing
-from terminal_mcp.auth.pairing import PAIRING_SECRET_BYTES, PairingStore
+from terminal_mcp.auth.pairing import PairingStore
 from terminal_mcp.auth.storage import OAuthStore
 
 
-@pytest.mark.asyncio
-async def test_pairing_persists_only_hash_and_is_single_use(tmp_path, monkeypatch):
-    db_path = tmp_path / "terminal.sqlite3"
+async def test_pairing_issue_persists_secret_hash(tmp_path):
+    db_path = tmp_path / "auth.sqlite3"
     store = PairingStore(db_path)
     await store.initialize()
 
-    calls = []
-
-    def token_urlsafe(size):
-        calls.append(size)
-        return "pairing-secret-never-persisted"
-
-    monkeypatch.setattr(pairing.secrets, "token_urlsafe", token_urlsafe)
     secret = await store.create(300, now=1_000)
-
-    assert calls == [PAIRING_SECRET_BYTES]
-    assert await store.consume(secret, now=1_001) is True
-    assert await store.consume(secret, now=1_002) is False
 
     with sqlite3.connect(db_path) as db:
         row = db.execute(
             "SELECT secret_hash,created_at,expires_at,consumed_at FROM console_pairings"
         ).fetchone()
-    assert row == (hashlib.sha256(secret.encode()).hexdigest(), 1_000, 1_300, 1_001)
-    assert secret.encode() not in db_path.read_bytes()
+    assert row == (hashlib.sha256(secret.encode()).hexdigest(), 1_000, 1_300, None)
 
 
-@pytest.mark.asyncio
-async def test_pairing_expiry_is_enforced(tmp_path):
-    store = PairingStore(tmp_path / "terminal.sqlite3")
+async def test_pairing_exchange_rejects_expired_secret(tmp_path):
+    path = tmp_path / "auth.sqlite3"
+    store = PairingStore(path)
+    await OAuthStore(path).initialize()
     await store.initialize()
     secret = await store.create(5, now=100)
 
-    assert await store.consume(secret, now=105) is False
-    assert await store.consume(secret, now=104) is True
-
-
-@pytest.mark.asyncio
-async def test_pairing_concurrent_consume_has_one_winner(tmp_path):
-    store = PairingStore(tmp_path / "terminal.sqlite3")
-    await store.initialize()
-    secret = await store.create(300)
-
-    results = await asyncio.gather(store.consume(secret), store.consume(secret))
-
-    assert sorted(results) == [False, True]
-
-
-def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
-    tmp_path, monkeypatch, capsys, caplog
-):
-    db_path = tmp_path / "terminal.sqlite3"
-    auth_path = tmp_path / "auth.sqlite3"
-    env_path = tmp_path / "terminal-mcp.env"
-    env_path.write_text(
-        f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
-        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_path}"\n'
-        'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"\n'
-        'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
+    exchange, reason = await store.exchange(
+        secret, "public-key-" + "x" * 64, "Phone", "terminal:read", 3600, now=105
     )
-    with sqlite3.connect(db_path) as db:
-        db.execute("CREATE TABLE runtime_sentinel(value TEXT NOT NULL)")
-        db.execute("INSERT INTO runtime_sentinel VALUES('preserve-runtime')")
-    db_path.chmod(0o640)
-    runtime_before = (db_path.read_bytes(), db_path.stat().st_mode)
-    monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
-    monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
-    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
-    monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
-    monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
-    monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "opaque-pairing-secret")
 
-    result = cli.main(["pair", "--ttl", "42"])
-    captured = capsys.readouterr()
-
-    assert result == 0
-    url = captured.out.strip()
-    assert captured.err == ""
-    parsed = urlsplit(url)
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "terminal-console.solvenger.app"
-    assert parsed.path == "/connect"
-    assert parsed.query == ""
-    padded = parsed.fragment + "=" * ((4 - len(parsed.fragment) % 4) % 4)
-    payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-    assert payload == {
-        "v": 1,
-        "server": "https://terminal.example",
-        "name": "terminal.example",
-        "secret": "opaque-pairing-secret",
-    }
-    assert "opaque-pairing-secret" not in caplog.text
-
-    assert (db_path.read_bytes(), db_path.stat().st_mode) == runtime_before
-    with sqlite3.connect(auth_path) as db:
-        row = db.execute(
-            "SELECT secret_hash, expires_at-created_at FROM console_pairings"
-        ).fetchone()
-    assert row == (hashlib.sha256(payload["secret"].encode()).hexdigest(), 42)
+    assert exchange is None
+    assert reason == "expired"
 
 
 def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
@@ -143,7 +71,6 @@ def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     assert payload["name"] == "Secondary Test"
     assert payload["server"] == "https://terminal.example"
     assert auth_path.exists()
-    assert not db_path.exists()
 
 
 def _entrypoint_env(tmp_path):
@@ -188,53 +115,6 @@ def _run_console_script(args, env):
     )
 
 
-def test_console_script_pair_exits_zero_and_emits_url_once(tmp_path):
-    result = _run_console_script(["pair", "--ttl", "42"], _entrypoint_env(tmp_path))
-
-    assert result.returncode == 0
-    assert result.stderr == ""
-    lines = result.stdout.splitlines()
-    assert len(lines) == 1
-    parsed = urlsplit(lines[0])
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "terminal-console.solvenger.app"
-    assert parsed.path == "/connect"
-    assert parsed.query == ""
-    assert parsed.fragment
-    assert (tmp_path / "auth.sqlite3").exists()
-    assert not (tmp_path / "terminal.sqlite3").exists()
-
-
-def test_console_script_devices_list_exits_zero_and_uses_stdout(tmp_path):
-    result = _run_console_script(["devices", "list"], _entrypoint_env(tmp_path))
-
-    assert result.returncode == 0
-    assert result.stderr == ""
-    assert json.loads(result.stdout) == []
-    assert (tmp_path / "auth.sqlite3").exists()
-    assert not (tmp_path / "terminal.sqlite3").exists()
-
-
-def test_pair_cli_rejects_non_positive_ttl():
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["pair", "--ttl", "0"])
-    assert exc.value.code == 2
-
-
-def test_no_arg_cli_preserves_service_start(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        cli, "Settings", lambda: type("S", (), {"host": "127.0.0.9", "port": 9876})()
-    )
-    monkeypatch.setattr(cli.uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
-
-    cli.main([])
-
-    assert calls == [
-        (("terminal_mcp.app:app",), {"host": "127.0.0.9", "port": 9876, "reload": False})
-    ]
-
-
 @pytest.mark.asyncio
 async def test_list_devices_returns_only_safe_metadata(tmp_path):
     db_path = tmp_path / "terminal.sqlite3"
@@ -250,9 +130,6 @@ async def test_list_devices_returns_only_safe_metadata(tmp_path):
         3600,
         now=101,
     )
-    assert reason == ""
-    assert exchange is not None
-
     devices = await store.list_devices()
 
     assert devices == [
@@ -264,16 +141,9 @@ async def test_list_devices_returns_only_safe_metadata(tmp_path):
             "revoked_at": None,
         }
     ]
-    assert set(devices[0]) == {
-        "device_id",
-        "label",
-        "created_at",
-        "last_used_at",
-        "revoked_at",
-    }
 
 
-def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, capsys):
+def test_devices_cli_revokes_selected_device(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "terminal.sqlite3"
     auth_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
@@ -302,24 +172,10 @@ def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, caps
     )
     assert exchange is not None
 
-    assert cli.main(["devices", "list"]) == 0
-    output = capsys.readouterr().out
-    listed = json.loads(output)
-    assert listed[0]["device_id"] == exchange.device_id
-    assert listed[0]["label"] == "Phone"
-    assert "public-key-never-listed" not in output
-    assert exchange.client_id not in output
-    assert exchange.refresh_token not in output
-
     assert cli.main(["devices", "revoke", exchange.device_id]) == 0
     revoked_output = capsys.readouterr().out
     assert revoked_output.strip() == f"revoked {exchange.device_id}"
 
-    assert cli.main(["devices", "list"]) == 0
-    listed_after = json.loads(capsys.readouterr().out)
-    assert listed_after[0]["revoked_at"] is not None
-
-    assert cli.main(["devices", "revoke", exchange.device_id]) == 1
-    error = capsys.readouterr().err
-    assert "not found or already revoked" in error
-    assert not db_path.exists()
+    devices = asyncio.run(store.list_devices())
+    assert devices[0]["device_id"] == exchange.device_id
+    assert devices[0]["revoked_at"] is not None

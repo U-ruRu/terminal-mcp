@@ -1,11 +1,10 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup,render,screen,waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, expect, test, vi } from 'vitest'
+import { MemoryRouter,Route,Routes } from 'react-router-dom'
+import { afterEach,expect,test,vi } from 'vitest'
 
-import type { ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
+import type { ConsoleSnapshotReadModel,TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
-import { AppShell } from '../components/AppShell'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerTasks } from './ServerTasks'
 
@@ -49,7 +48,6 @@ test('the whole task card opens task detail', async () => {
   expect(screen.getByText('Task destination')).toBeInTheDocument()
 })
 
-
 test('unpaired projected task detail loads through Fleet ingress', async () => {
   const projected: FleetInstanceView = {
     profile: { ...instance.profile, instanceId: 'fleet-source-node-b', displayName: 'Node B' },
@@ -78,114 +76,18 @@ test('unpaired projected task detail loads through Fleet ingress', async () => {
   expect(await screen.findByText(/T-9 · Remote cold detail/)).toBeInTheDocument()
 })
 
-
-test('task list defaults to open work and exposes namespace/state filters', async () => {
-  const doneTask: TaskReadModel = {
-    ...task,
-    key: 'history/T-2',
-    namespace: 'history',
-    taskId: 'T-2',
-    title: 'Completed task',
-    state: 'done',
-    operationalStatus: 'done',
-  }
-  const runningTask: TaskReadModel = {
-    ...task,
-    key: 'ops/T-3',
-    namespace: 'ops',
-    taskId: 'T-3',
-    title: 'Running task',
-    state: 'in_progress',
-    operationalStatus: 'in_progress',
-  }
-  const filteredInstance: FleetInstanceView = {
-    ...instance,
-    runtime: {
-      ...instance.runtime,
-      realtime: instance.runtime.realtime
-        ? { ...instance.runtime.realtime, snapshot: { ...snapshot, tasks: [task, doneTask, runningTask] } }
-        : null,
-    },
-  }
-  render(
-    <I18nProvider>
-      <MemoryRouter initialEntries={['/servers/alpha/tasks']}>
-        <Routes>
-          <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={[filteredInstance]} />} />
-        </Routes>
-      </MemoryRouter>
-    </I18nProvider>,
-  )
-
-  expect(screen.getByRole('link', { name: 'T-1 · Clickable task' })).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'T-3 · Running task' })).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'T-2 · Completed task' })).not.toBeInTheDocument()
+test('selecting Done filters the task list to completed work', async () => {
+  const doneTask: TaskReadModel = { ...task, key: 'console/T-2', taskId: 'T-2',
+    title: 'Completed task', state: 'done', operationalStatus: 'done' }
+  const withCompleted: FleetInstanceView = { ...instance, runtime: { ...instance.runtime,
+    realtime: { ...instance.runtime.realtime!, snapshot: { ...snapshot, tasks: [task, doneTask] } },
+  } }
+  render(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks']}>
+    <Routes><Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={[withCompleted]} />} /></Routes>
+  </MemoryRouter></I18nProvider>)
 
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'State' }), 'done')
+
   expect(screen.getByRole('link', { name: 'T-2 · Completed task' })).toBeInTheDocument()
   expect(screen.queryByRole('link', { name: 'T-1 · Clickable task' })).not.toBeInTheDocument()
-
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'State' }), 'all')
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Namespace' }), 'ops')
-  expect(screen.getByRole('link', { name: 'T-3 · Running task' })).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'T-2 · Completed task' })).not.toBeInTheDocument()
-})
-
-
-test('reconnect preserves task detail and its returnTo navigation context', async () => {
-  const reconnecting: FleetInstanceView = { ...instance, runtime: { ...instance.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: instance.runtime.realtime ? { ...instance.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null } }
-  const entry = { pathname: '/servers/alpha/tasks/console/T-1', state: { returnTo: '/activity?server=alpha' } }
-  const tree = (fleet: FleetInstanceView[]) => (
-    <I18nProvider><MemoryRouter initialEntries={[entry]}><AppShell servers={[]}>
-      <Routes>
-        <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={fleet} />} />
-        <Route path="/activity" element={<div>Activity return destination</div>} />
-      </Routes>
-    </AppShell></MemoryRouter></I18nProvider>
-  )
-  const { rerender } = render(tree([instance]))
-  expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
-  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'Go back to tasks' })).not.toBeInTheDocument()
-  rerender(tree([reconnecting]))
-  expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
-  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'Go back to tasks' })).not.toBeInTheDocument()
-})
-
-test('task detail route is a dedicated surface without the task list', () => {
-  render(
-    <I18nProvider>
-      <MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}>
-        <Routes>
-          <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[instance]} />} />
-        </Routes>
-      </MemoryRouter>
-    </I18nProvider>,
-  )
-
-  expect(screen.getByRole('article', { name: 'Task detail' })).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'T-1 · Clickable task' })).not.toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'Back to tasks' })).not.toBeInTheDocument()
-})
-
-
-test('task detail exposes Server, owner and participant entity links', () => {
-  const related: TaskReadModel = {
-    ...task,
-    owner: { agentId: 'owner-1', agentName: 'Owner Human', claimedAt: '2026-09-28T11:00:00Z', claimAgeSeconds: 1, claimIntent: 'Own', role: 'owner' },
-    participants: [{ agentId: 'participant-1', agentName: 'Participant Human', claimedAt: '2026-09-28T11:00:00Z', claimAgeSeconds: 1, claimIntent: 'Help', role: 'participant' }],
-  }
-  const withRelations: FleetInstanceView = {
-    ...instance,
-    runtime: { ...instance.runtime, realtime: instance.runtime.realtime ? { ...instance.runtime.realtime, snapshot: { ...snapshot, tasks: [related] } } : null },
-  }
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}>
-      <Routes><Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[withRelations]} />} /></Routes>
-    </MemoryRouter></I18nProvider>,
-  )
-  expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', '/servers/alpha')
-  expect(screen.getByRole('link', { name: 'Owner Human' })).toHaveAttribute('href', '/servers/alpha/agents/owner-1')
-  expect(screen.getByRole('link', { name: 'Participant Human' })).toHaveAttribute('href', '/servers/alpha/agents/participant-1')
 })

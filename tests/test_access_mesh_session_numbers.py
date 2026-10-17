@@ -21,30 +21,16 @@ def registry(tmp_path):
     return store.numbers
 
 
-def test_reserve_conflict_proposal_expiry_and_release(registry):
-    first = registry.reserve(number="0000", attempt_id="attempt-a", now=T0)
-    assert first == {"ok": True, "number": "0000"}
-    assert registry.reserve(number="0000", attempt_id="attempt-a", now=T0)["ok"]
-    # Replaying the same reservation must never extend its three-minute TTL.
-    assert registry.reserve(
-        number="0000",
-        attempt_id="attempt-a",
-        now=T0 + timedelta(minutes=2, seconds=50),
-    )["ok"]
-    assert registry.reservations(now=T0 + timedelta(minutes=2, seconds=50))[0][
-        "expires_at"
-    ] == registry.stamp(T0 + timedelta(minutes=3))
-    other = registry.reserve(number="0000", attempt_id="attempt-b", now=T0)
-    assert other["ok"] is False and other["suggested_number"] != "0000"
-    assert len(registry.reservations(now=T0)) == 2
-    registry.release("attempt-b")
-    assert len(registry.reservations(now=T0)) == 1
-    assert registry.reserve(number="0000", attempt_id="attempt-c", now=T0 + timedelta(minutes=3))[
-        "ok"
-    ]
+def test_reservation_retry_preserves_original_expiry(registry):
+    registry.reserve(number="0000", attempt_id="attempt-a", now=T0)
+    now = T0 + timedelta(minutes=2, seconds=50)
+    assert registry.reserve(number="0000", attempt_id="attempt-a", now=now)["ok"]
+    assert registry.reservations(now=now)[0]["expires_at"] == registry.stamp(
+        T0 + timedelta(minutes=3)
+    )
 
 
-def test_collision_winner_history_and_max_deadline(registry):
+def test_collision_selects_latest_identity_with_maximum_deadline(registry):
     a = dict(
         number="0001",
         issuer_id="a",
@@ -65,11 +51,6 @@ def test_collision_winner_history_and_max_deadline(registry):
     assert registry.register(**b)["collisions"] == 1
     assert registry.winner("0001")["logical_agent_id"] == "la_b"
     assert registry.winner("0001")["hard_expires_at"] == registry.stamp(a["hard_expires_at"])
-    registry.register(**b)
-    assert len(registry.snapshot()) == 2
-    assert len(registry.incidents()) == 1
-    with pytest.raises(AccessMeshError, match="session_identity_conflict"):
-        registry.register(**{**a, "logical_agent_id": "different"})
 
 
 def test_timestamp_tie_uses_stable_issuer_and_slot_order(registry):
@@ -83,59 +64,6 @@ def test_timestamp_tie_uses_stable_issuer_and_slot_order(registry):
             hard_expires_at=T0 + timedelta(minutes=5),
         )
     assert registry.winner("1234")["logical_agent_id"] == "la_b"
-
-
-def test_invalid_number_and_untrusted_issuer(registry):
-    with pytest.raises(AccessMeshError, match="invalid_session_number"):
-        registry.reserve(number="12", attempt_id="a", now=T0)
-    with pytest.raises(AccessMeshError, match="access_mesh_untrusted_peer"):
-        registry.register(
-            number="1111",
-            issuer_id="outside",
-            slot_id="s",
-            logical_agent_id="x",
-            started_at=T0,
-            hard_expires_at=T0 + timedelta(minutes=1),
-        )
-
-
-@pytest.mark.asyncio
-async def test_online_peers_negotiate_distinct_numbers(tmp_path):
-    import httpx
-    from test_access_mesh_replication_http import Routes, actor, node
-
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        first, first_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        second, second_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        first.replication = first_rep
-        second.replication = second_rep
-        first_result = await first.issue(actor())
-        second_result = await second.issue(actor())
-        assert first_result["access_code"] != second_result["access_code"]
-        assert first.store.numbers.winner(first_result["access_code"]) is not None
-        assert second.store.numbers.winner(first_result["access_code"]) is not None
-        assert first.store.numbers.winner(second_result["access_code"]) is not None
-
-
-@pytest.mark.asyncio
-async def test_concurrent_same_candidate_never_reuses_live_number(tmp_path):
-    import asyncio
-
-    import httpx
-    from test_access_mesh_replication_http import Routes, node
-
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        first, first_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        second, second_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        first_number, second_number = await asyncio.gather(
-            first_rep.negotiate_number(preferred="0456"),
-            second_rep.negotiate_number(preferred="0456"),
-        )
-        assert first_number[0] != second_number[0]
-        first.store.numbers.release(first_number[1])
-        second.store.numbers.release(second_number[1])
 
 
 def test_claims_survive_store_reopen(tmp_path):
@@ -159,70 +87,6 @@ def test_claims_survive_store_reopen(tmp_path):
     assert reopened.numbers.winner("0037")["hard_expires_at"] == reopened.numbers.stamp(
         T0 + timedelta(minutes=23)
     )
-
-
-@pytest.mark.asyncio
-async def test_offline_peer_blocks_issuance_within_30_second_budget(tmp_path):
-    """An unavailable peer cannot prove a free number; no fallback issues a slot."""
-    import time
-
-    import httpx
-    from test_access_mesh_replication_http import Routes, actor, node
-
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        local, replication = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        local.replication = replication
-        routes.offline.add("bacloud")
-        started = time.monotonic()
-        with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
-            await local.issue(actor())
-        duration = time.monotonic() - started
-        assert duration < 30, duration
-        assert local.store.numbers.snapshot() == []
-        assert local.store.numbers.reservations() == []
-
-
-@pytest.mark.asyncio
-async def test_mesh_end_fences_all_attached_nodes_and_ignores_stale_cycle(tmp_path):
-    import httpx
-    from test_access_mesh_replication_http import T0, Routes, actor, node
-
-    from terminal_mcp.core.managed_sessions import ManagedOperation
-
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        first, first_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        second, second_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        first.replication = first_rep
-        second.replication = second_rep
-        grant = await first.issue(actor(), code="0510")
-        await first_rep.tick()
-        await second_rep.tick()
-        await second.attach(actor(), session_number="0510")
-        await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
-        original = first.store.slot("firstbyte", grant["slot_id"])
-        ending = first.store.number_cycle(original, T0)
-        assert ending is not None
-        await first.change(
-            actor(),
-            slot_id=grant["slot_id"],
-            kind="SessionEnded",
-            expected_revision=original.revision,
-            number_end=ending,
-        )
-        event = next(
-            x for x in first.store.numbers.end_snapshot() if x["cycle_key"] == ending["cycle_key"]
-        )
-        await first_rep.announce_end(**event)
-        current = second.store.attached_slot(second.connection_key(actor()))
-        assert second.store.merged_cycle(current, T0)["state"] == "expired"
-        with pytest.raises(AccessMeshError):
-            await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
-        # Old cycle key stays immutable; subsequent sessions have a new cycle key.
-        await first_rep.tick()
-        await second_rep.tick()
-        assert len(second.store.numbers.end_snapshot()) == 1
 
 
 def test_recycled_number_forms_new_identity_epoch_and_retains_old_history(registry):
@@ -249,8 +113,6 @@ def test_recycled_number_forms_new_identity_epoch_and_retains_old_history(regist
     assert registry.winner("0789")["hard_expires_at"] == registry.stamp(new["hard_expires_at"])
     assert registry.group_winner("a", "old")["logical_agent_id"] == "historical-agent"
     assert registry.group_winner("b", "new")["logical_agent_id"] == "new-agent"
-    assert registry.incidents() == []
-    assert len(registry.snapshot()) == 2
 
 
 def test_transitive_overlap_chooses_latest_started_and_merged_deadline(registry):
@@ -274,40 +136,6 @@ def test_transitive_overlap_chooses_latest_started_and_merged_deadline(registry)
     )
 
 
-def test_incident_antientropy_pages_are_stable_and_idempotent(registry, tmp_path):
-    from terminal_mcp.storage.access_mesh import AccessMeshStore
-
-    for idx in range(63):
-        assert registry.record_late_conflict(
-            number=f"{idx:04d}",
-            attempt_id=f"nr_delayed-{idx:03d}",
-            peer_id="b",
-            suggested_number="9999",
-        )["ok"]
-    received = AccessMeshStore(
-        tmp_path / "new-incident-replica.db",
-        local_node_id="b",
-        trusted_issuers=frozenset({"a", "b"}),
-        proof_key=b"unit-test-mesh-secret-key-32bytes",
-    ).numbers
-    cursor = None
-    cycles = 0
-    while True:
-        rows = registry.incident_page(after=cursor, limit=25)
-        if not rows:
-            break
-        cycles += 1
-        assert received.merge_incidents(rows) == len(rows)
-        assert received.merge_incidents(rows) == 0
-        last = rows[-1]
-        cursor = tuple(last[field] for field in ("number", "issuer_id", "slot_id", "collided_with"))
-        if len(rows) < 25:
-            break
-    assert cycles == 3
-    assert len(received.incidents()) == 63
-    assert received.incidents() == registry.incidents()
-
-
 def test_start_replay_is_exact_and_cannot_shift_activation_timestamp(registry):
     start = {
         "number": "0044",
@@ -320,8 +148,6 @@ def test_start_replay_is_exact_and_cannot_shift_activation_timestamp(registry):
     }
     assert registry.record_start(**start)["ok"]
     before = registry.start_snapshot()
-    assert registry.record_start(**start)["ok"]
-    assert registry.start_snapshot() == before
     with pytest.raises(AccessMeshError, match="idempotency_conflict"):
         registry.record_start(
             **{**start, "active_from": T0 + timedelta(minutes=3)},

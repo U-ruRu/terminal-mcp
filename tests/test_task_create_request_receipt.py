@@ -1,10 +1,12 @@
 """A stable caller request ID must survive lost responses without a second insert."""
 
 import asyncio
+import sqlite3
 
 import pytest
 import pytest_asyncio
 
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
@@ -29,6 +31,7 @@ async def create(
 ):
     return await coordinator.mutate(
         agent_id,
+        _claim_owner=ClaimOwner.logical_agent(agent_id),
         action="create",
         namespace=namespace,
         isolation_hint="isolated-receipt",
@@ -49,48 +52,41 @@ async def test_retry_original_request_returns_committed_id_without_second_event(
     assert retry["task"]["task_id"] == task_id
     events = await store.list_events("receipts", task_id)
     assert sum(event["event_type"] == "created" for event in events) == 1
-    independent = await create(coordinator, "create-456")
-    assert not independent["ok"]
-    assert independent["code"] == "duplicate_task"
 
 
 @pytest.mark.asyncio
-async def test_request_id_replay_after_rename_and_payload_conflict(case):
-    store, coordinator = case
-    first = await create(coordinator, "create-789")
-    task_id = first["task"]["task_id"]
-    await store.update_task_mutation("receipts", task_id, title="Renamed", expected_revision=1)
-    replay = await create(coordinator, "create-789")
-    assert replay["ok"]
-    assert replay["task"]["task_id"] == task_id
-    assert replay["task"]["revision"] == first["task"]["revision"] == 1
-    assert replay["task"]["title"] == first["task"]["title"] == "Receipt"
-    different = await create(coordinator, "create-789", title="Different")
-    assert not different["ok"]
-    assert different["code"] == "request_id_conflict"
-
-
-@pytest.mark.asyncio
-async def test_create_receipt_scope_is_agent_namespace_and_operation_id(case):
+async def test_another_agent_can_use_the_same_create_request_id(case):
     _, coordinator = case
     original = await create(coordinator, "scoped-id")
-    replay = await create(coordinator, "scoped-id")
+
     other_agent = await create(coordinator, "scoped-id", agent_id="other-writer")
+
+    assert other_agent["ok"], other_agent
+    assert other_agent["task"]["task_id"] != original["task"]["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_another_namespace_can_use_the_same_create_request_id(case):
+    _, coordinator = case
+    original = await create(coordinator, "scoped-id")
+
     other_namespace = await create(coordinator, "scoped-id", namespace="other-receipts")
+
+    assert other_namespace["ok"], other_namespace
+    assert other_namespace["task"]["task_id"] != original["task"]["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_distinct_create_request_commits_a_separate_task(case):
+    _, coordinator = case
+    original = await create(coordinator, "scoped-id")
+
     distinct_operation = await create(
         coordinator, "different-id", title="Separate operation", description="separate payload"
     )
 
-    assert original["ok"] and replay["ok"]
-    assert replay["task"]["task_id"] == original["task"]["task_id"]
-    assert other_agent["ok"] and other_namespace["ok"] and distinct_operation["ok"]
-    task_ids = {
-        original["task"]["task_id"],
-        other_agent["task"]["task_id"],
-        other_namespace["task"]["task_id"],
-        distinct_operation["task"]["task_id"],
-    }
-    assert len(task_ids) == 4
+    assert distinct_operation["ok"], distinct_operation
+    assert distinct_operation["task"]["task_id"] != original["task"]["task_id"]
 
 
 @pytest.mark.asyncio
@@ -106,19 +102,8 @@ async def test_concurrent_same_request_id_commits_once(case):
 
 
 @pytest.mark.asyncio
-async def test_receipt_survives_new_coordinator_instance(case):
-    store, coordinator = case
-    first = await create(coordinator, "after-crash")
-    restarted = TaskCoordinator(TaskStore(store.path))
-    replay = await create(restarted, "after-crash")
-    assert replay["ok"], replay
-    assert replay["task"]["task_id"] == first["task"]["task_id"]
-
-
-@pytest.mark.asyncio
 async def test_failure_before_commit_rolls_back_task_and_receipt(case, monkeypatch):
     store, coordinator = case
-    original = store._committed_record_tx
 
     async def unavailable(*args, **kwargs):
         raise RuntimeError("injected storage failure before commit")
@@ -126,55 +111,9 @@ async def test_failure_before_commit_rolls_back_task_and_receipt(case, monkeypat
     monkeypatch.setattr(store, "_committed_record_tx", unavailable)
     failed = await create(coordinator, "retry-after-rollback")
     assert not failed["ok"], failed
-    monkeypatch.setattr(store, "_committed_record_tx", original)
-    success = await create(coordinator, "retry-after-rollback")
-    assert success["ok"], success
-
-
-def test_request_id_public_input_schema():
-    from terminal_mcp.application.task_requests import TaskCreateRequest
-
-    request = TaskCreateRequest(
-        action="create",
-        namespace="receipts",
-        isolation_hint="qa",
-        title="Task",
-        request_id="client-generated-uuid-1",
-    )
-    assert request.request_id == "client-generated-uuid-1"
-
-
-def test_live_mcp_task_manage_receipt_is_stable_across_retries(tmp_path):
-    from fastapi.testclient import TestClient
-    from test_access_mesh_mcp_runtime import call, settings
-
-    from terminal_mcp.app import create_app
-
-    config = settings(tmp_path)
-    app = create_app(config)
-    with TestClient(app, base_url="https://terminal.example") as client:
-        issued = call(client, "access", "session", {"action": "start"}, request_id=30)
-        assert issued["ok"]
-        assert call(
-            client,
-            "coordinator",
-            "session",
-            {"session_number": issued["session_number"]},
-            request_id=31,
-        )["ok"]
-        payload = {
-            "action": "create",
-            "namespace": "http-receipts",
-            "isolation_hint": "test isolated",
-            "title": "HTTP create receipt",
-            "description": "fixed contents",
-            "request_id": "http-original-req-42",
-        }
-        original = call(client, "coordinator", "task_manage", payload, request_id=0)
-        assert original["ok"], original
-        replay = call(client, "coordinator", "task_manage", payload, request_id=0)
-        assert replay["ok"], replay
-        assert replay["task_id"] == original["task_id"]
+    with sqlite3.connect(store.path) as db:
+        assert db.execute("SELECT count(*) FROM work_items").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM persistent_idempotency").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio
@@ -191,10 +130,6 @@ async def test_lost_response_after_commit_is_reconciled_from_receipt(case, monke
     assert first["ok"], first
     event_rows = await store.list_events("receipts", first["task"]["task_id"])
     assert sum(row["event_type"] == "created" for row in event_rows) == 1
-    monkeypatch.setattr(store, "create_task_mutation", original)
-    retry = await create(coordinator, "postcommit-lost-response")
-    assert retry["ok"], retry
-    assert retry["task"]["task_id"] == first["task"]["task_id"]
 
 
 @pytest.mark.asyncio

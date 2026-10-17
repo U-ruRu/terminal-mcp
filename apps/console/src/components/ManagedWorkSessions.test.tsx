@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render,screen,waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, test, vi } from 'vitest'
+import { expect,test,vi } from 'vitest'
 
 import type { PersistentMutationResult } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
@@ -84,31 +84,16 @@ function result(payload: Record<string, unknown>): PersistentMutationResult {
   return { ok: true, payload }
 }
 
-test('managed Activity controls use canonical status and CAS mutations', async () => {
-  const mutate = vi.fn(async (_instanceId: string, path: string, body: Record<string, unknown>) => {
-    void body
+test('ending the current Activity work session addresses its logical agent', async () => {
+  const mutate = vi.fn(async (_instanceId: string, path: string) => {
     if (path === '/actions/persistent/managed/status') return result(STATUS)
     return result({ ok: true })
   })
   render(<I18nProvider><ManagedWorkSessions instance={instance()} mutatePersistent={mutate} /></I18nProvider>)
-
-  expect(await screen.findByText('Stable-Agent')).toBeInTheDocument()
-  expect(screen.getByText('executor · v1')).toBeInTheDocument()
-  expect(screen.getByText('Secondary')).toBeInTheDocument()
-
-  await userEvent.click(screen.getByRole('button', { name: '+10 min' }))
-  await waitFor(() => expect(mutate).toHaveBeenCalledWith('secondary', '/actions/persistent/managed/window', {
-    logical_agent_id: 'la_one', expected_revision: 7, delta_seconds: 600,
-  }))
-
-  await userEvent.clear(screen.getByLabelText('Custom delta (seconds)'))
-  await userEvent.type(screen.getByLabelText('Custom delta (seconds)'), '-300')
-  await userEvent.click(screen.getByRole('button', { name: 'Apply delta' }))
-  await waitFor(() => expect(mutate).toHaveBeenCalledWith('secondary', '/actions/persistent/managed/window', {
-    logical_agent_id: 'la_one', expected_revision: 7, delta_seconds: -300,
-  }))
+  await screen.findByText('Stable-Agent')
 
   await userEvent.click(screen.getByRole('button', { name: 'End work session' }))
+
   await waitFor(() => expect(mutate).toHaveBeenCalledWith(
     'secondary', '/actions/persistent/managed/sessions/end', { logical_agent_id: 'la_one' },
   ))

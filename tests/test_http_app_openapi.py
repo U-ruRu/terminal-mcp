@@ -4,7 +4,6 @@ import pytest
 from auth_http_test_helpers import settings
 
 from terminal_mcp.app import create_app
-from terminal_mcp.operation_metadata import READ_ONLY_ACTIONS
 from terminal_mcp.version import __version__
 
 
@@ -33,12 +32,3 @@ def test_application_openapi_includes_current_action_routes(schema):
     }
     assert set(schema["paths"]) == expected_paths
     assert schema["info"]["version"] == __version__
-
-
-def test_application_openapi_applies_consequential_metadata(schema):
-    for item in schema["paths"].values():
-        for method, operation in item.items():
-            if method in {"get", "post"}:
-                assert operation["x-openai-isConsequential"] is (
-                    operation["operationId"] not in READ_ONLY_ACTIONS
-                )

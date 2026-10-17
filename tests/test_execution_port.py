@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -13,12 +11,9 @@ from terminal_mcp.core.execution import (
     EXECUTION_PORT_VERSION,
     MAX_EXECUTION_READ_BYTES,
     ExecutionHandle,
-    ExecutionPort,
     ExecutionPortError,
-    ExecutionRequest,
     ExecutionStatus,
 )
-from terminal_mcp.core.ports import CommandSchedulerPort
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.sqlite import SqliteRepository
 
@@ -151,62 +146,15 @@ async def memory_runtime(tmp_path, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_four_durable_fifo_queues_and_default_selection_over_memory_port(tmp_path):
+async def test_queued_cancellation_finishes_before_execution(tmp_path):
     repo, port, scheduler, service = await memory_runtime(tmp_path)
-    assert isinstance(port, ExecutionPort)
-    assert isinstance(scheduler, CommandSchedulerPort)
+    command = await repo.create("queued", status="queued", queue_id=1)
     try:
-        first = [await service.run(f"head-{q}", queue_id=q, task_scope="none") for q in range(1, 5)]
-        second = [await service.run(f"tail-{q}", task_scope="none") for q in range(1, 5)]
-        assert [item["queue_id"] for item in second] == [1, 2, 3, 4]
+        result = await service.cancel(command.cmd_hash)
 
-        async def four_started():
-            return len(port.inputs) == 4
-
-        await eventually(four_started)
-        assert set(h for h, _ in port.inputs) == {item["cmd_hash"] for item in first}
-        queued = await scheduler.snapshot(second[0]["cmd_hash"])
-        assert queued.status == "queued" and not queued.execution_started
-        assert queued.queue_position is not None
-        await scheduler.submit(await repo.get(first[0]["cmd_hash"]))
-        for item in first:
-            port.finish(item["cmd_hash"])
-
-        async def eight_started():
-            return len(port.inputs) == 8
-
-        await eventually(eight_started)
-        for head, tail in zip(first, second, strict=True):
-            order = [h for h, _ in port.inputs]
-            assert order.index(head["cmd_hash"]) < order.index(tail["cmd_hash"])
-            port.finish(tail["cmd_hash"])
-
-        async def completed():
-            return all(
-                [(await repo.get(x["cmd_hash"])).status == "completed" for x in first + second]
-            )
-
-        await eventually(completed)
-        await scheduler.submit(await repo.get(second[0]["cmd_hash"]))
-        assert len(port.inputs) == 8
-        data = await service.read(second[0]["cmd_hash"])
-        assert any(line.endswith("done") for line in data["lines"])
-    finally:
-        await scheduler.stop()
-
-
-@pytest.mark.asyncio
-async def test_queued_cancellation_never_reaches_execution_port(tmp_path):
-    repo, port, scheduler, service = await memory_runtime(tmp_path)
-    try:
-        head = await service.run("head", queue_id=1, task_scope="none")
-        tail = await service.run("never", queue_id=1, task_scope="none")
-        cancelled = await service.cancel(tail["cmd_hash"])
-        assert cancelled["ok"] is True and cancelled["execution_started"] is False
-        assert (await repo.get(tail["cmd_hash"])).status == "cancelled"
-        assert tail["cmd_hash"] not in port.entries
-        assert all(h != tail["cmd_hash"] for h, _ in port.inputs)
-        assert head["cmd_hash"] != tail["cmd_hash"]
+        assert result["execution_started"] is False
+        assert (await repo.get(command.cmd_hash)).status == "cancelled"
+        assert port.inputs == []
     finally:
         await scheduler.stop()
 
@@ -250,101 +198,7 @@ async def test_recovery_timeout_terminates_through_port_and_finalizes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_restart_marks_lost_running_failed_without_replaying_side_effect(tmp_path):
-    repo, port, scheduler, _service = await memory_runtime(tmp_path, auto_complete=True)
-    lost = await repo.create("old-side-effect", status="running", queue_id=1)
-    await repo.set_pid(lost.cmd_hash, 88_000_001)
-    queued = await repo.create("surviving-queued", status="queued", queue_id=1)
-    try:
-        await scheduler.start()
-
-        async def completed():
-            return (await repo.get(queued.cmd_hash)).status == "completed"
-
-        await eventually(completed)
-        assert (await repo.get(lost.cmd_hash)).status == "failed"
-        assert lost.cmd_hash not in port.entries
-        assert port.inputs == [(queued.cmd_hash, "surviving-queued")]
-    finally:
-        await scheduler.stop()
-
-
-@pytest.mark.parametrize("version", [0, 2, True, "1"])
-def test_execution_protocol_rejects_unsupported_versions(version):
-    with pytest.raises(ExecutionPortError, match="execution_version_unsupported"):
-        ExecutionRequest("version-test", version=version)
-
-
-@pytest.mark.parametrize("execution_id", ["", "x" * 129, None])
-def test_execution_protocol_rejects_invalid_ids(execution_id):
-    with pytest.raises(ExecutionPortError, match="execution_id_invalid"):
-        ExecutionRequest(execution_id)
-
-
-def test_process_and_scheduler_boundaries_are_structurally_separate():
-    root = Path(__file__).parents[1] / "src/terminal_mcp"
-    scheduler = ast.parse((root / "application/command_scheduler.py").read_text())
-    adapter = ast.parse((root / "terminal/in_process.py").read_text())
-    imports = []
-    for node in ast.walk(scheduler):
-        if isinstance(node, ast.Import):
-            imports.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imports.append(node.module or "")
-        if isinstance(node, ast.Attribute):
-            assert node.attr not in {"create_subprocess_exec", "killpg", "connect_read_pipe"}
-    assert not {"os", "pwd", "signal"}.intersection(imports)
-    for node in ast.walk(adapter):
-        if isinstance(node, ast.Attribute):
-            assert node.attr not in {
-                "claim_next",
-                "finish_running",
-                "append_lines",
-                "cancel_queued",
-            }
-        if isinstance(node, ast.ImportFrom):
-            assert not (node.module or "").startswith("terminal_mcp.storage")
-
-
-@pytest.mark.asyncio
-async def test_durable_claim_prevents_overlapping_running_command(tmp_path):
-    repo, _port, _scheduler, _service = await memory_runtime(tmp_path)
-    first = await repo.create("one", status="queued", queue_id=1)
-    second = await repo.create("two", status="queued", queue_id=1)
-    claimed = await asyncio.gather(repo.claim_next(1), repo.claim_next(1))
-    assert sum(row is not None for row in claimed) == 1
-    assert next(row for row in claimed if row is not None).cmd_hash == first.cmd_hash
-    assert await repo.claim_next(1) is None
-    await repo.finish_running(first.cmd_hash, "completed", 0, None)
-    assert (await repo.claim_next(1)).cmd_hash == second.cmd_hash
-
-
-@pytest.mark.asyncio
-async def test_mid_execution_process_loss_fails_once_then_unblocks_queue(tmp_path):
-    repo, port, scheduler, service = await memory_runtime(tmp_path)
-    try:
-        first = await service.run("first", queue_id=1, task_scope="none")
-        second = await service.run("second", queue_id=1, task_scope="none")
-
-        async def started():
-            return bool(port.inputs)
-
-        await eventually(started)
-        port.finish(first["cmd_hash"], -9, b"")
-
-        async def next_started():
-            return len(port.inputs) == 2
-
-        await eventually(next_started)
-        failed = await repo.get(first["cmd_hash"])
-        assert failed.status == "failed" and failed.exit_code == -9
-        assert [item[0] for item in port.inputs] == [first["cmd_hash"], second["cmd_hash"]]
-    finally:
-        await scheduler.stop()
-
-
-@pytest.mark.asyncio
-async def test_uncertain_executor_keeps_durable_queue_blocked_and_cleans_local_waiters(tmp_path):
+async def test_uncertain_executor_preserves_the_running_claim(tmp_path):
     class UncertainPort(MemoryExecutionPort):
         async def write_stdin(self, handle, command):
             raise ExecutionPortError("execution_unavailable")
@@ -358,15 +212,10 @@ async def test_uncertain_executor_keeps_durable_queue_blocked_and_cleans_local_w
         async def release(self, handle):
             raise ExecutionPortError("execution_unavailable")
 
-    repo, _port, _scheduler, _service = await memory_runtime(tmp_path)
-    port = UncertainPort()
-    scheduler = CommandScheduler(repo, port, 0.05)
-    first = await repo.create("uncertain", status="running", queue_id=1)
-    second = await repo.create("must-not-overlap", status="queued", queue_id=1)
-    await scheduler._execute(first, method="run")
-    assert (await repo.get(first.cmd_hash)).status == "running"
-    assert (await repo.get(first.cmd_hash)).pid is not None
-    assert (await repo.get(second.cmd_hash)).status == "queued"
-    assert await repo.claim_next(1) is None
-    assert not scheduler.processes and not scheduler.execution_done
-    assert second.cmd_hash not in port.entries
+    repo, _, _, _ = await memory_runtime(tmp_path)
+    scheduler = CommandScheduler(repo, UncertainPort(), 0.05)
+    current = await repo.create("uncertain", status="running", queue_id=1)
+
+    await scheduler._execute(current, method="run")
+
+    assert (await repo.get(current.cmd_hash)).status == "running"

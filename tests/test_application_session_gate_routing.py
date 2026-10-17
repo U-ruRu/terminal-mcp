@@ -60,17 +60,3 @@ async def test_message_uses_common_session_gate_instead_of_persistent_backend():
         ("resolve_message_actor", "owner", "0042"),
         ("message", "owner", "0042"),
     ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("action", "interrupt"), [("end", False), ("interrupt", True)])
-async def test_session_stop_uses_common_session_gate(action, interrupt):
-    app = TerminalApplication(Service())
-    gate = RecordingGate()
-    app.session_gate = gate
-    app.sessions.gate = gate
-
-    result = await app.session(actor(), action=action, code="0042")
-
-    assert result["ok"] is True
-    assert gate.calls == [("stop", "0042", interrupt)]

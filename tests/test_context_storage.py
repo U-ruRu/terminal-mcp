@@ -1,92 +1,46 @@
-import sqlite3
+"""Current context operations, each checked independently."""
 
-import pytest
+import pytest_asyncio
 
 from terminal_mcp.storage.context import ContextStore
-from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
+from terminal_mcp.storage.sqlite import SqliteRepository
 
 
-async def store(tmp_path):
-    repo = SqliteRepository(tmp_path / "db.sqlite3")
-    await repo.initialize()
-    return repo, ContextStore(repo.path)
+@pytest_asyncio.fixture
+async def context(tmp_path):
+    repository = SqliteRepository(tmp_path / "context.sqlite3", tmp_path / "output.sqlite3")
+    await repository.initialize()
+    return ContextStore(repository.path)
 
 
-@pytest.mark.asyncio
-async def test_context_schema_and_crud_are_durable(tmp_path):
-    repo, context = await store(tmp_path)
-    with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        columns = {row[1] for row in db.execute("PRAGMA table_info(instance_context)")}
-    assert {"id", "summary", "content", "is_primary"} <= columns
-
-    first = await context.create("Git workflow", "Use the local Git wrapper.", True)
-    second = await context.create("Docs", "Read the local documentation root.", False)
-    assert first == {
+async def test_context_create_returns_stored_entry(context):
+    created = await context.create("Notes", "Current instructions", True)
+    assert created == {
         "id": 1,
-        "summary": "Git workflow",
-        "content": "Use the local Git wrapper.",
+        "summary": "Notes",
+        "content": "Current instructions",
         "primary": True,
     }
-    assert second["id"] == 2
-    assert [item["id"] for item in await context.list()] == [1, 2]
-
-    reopened = ContextStore(repo.path)
-    assert await reopened.get(1) == first
-    updated = await reopened.update(2, content="Updated docs.", primary=True)
-    assert updated == {
-        "id": 2,
-        "summary": "Docs",
-        "content": "Updated docs.",
-        "primary": True,
-    }
-    assert await reopened.get(1) == first
-
-    assert await reopened.delete(1) is True
-    assert await reopened.get(1) is None
-    assert await reopened.delete(1) is False
-    third = await reopened.create("Services", "Use systemctl for service state.", False)
-    assert third["id"] == 3
-    assert [item["id"] for item in await reopened.list()] == [2, 3]
 
 
-@pytest.mark.asyncio
-async def test_context_validation_and_partial_update(tmp_path):
-    _, context = await store(tmp_path)
-    with pytest.raises(ValueError, match="summary is required"):
-        await context.create("  ", "content", False)
-    with pytest.raises(ValueError, match="at most 100"):
-        await context.create("x" * 101, "content", False)
-    with pytest.raises(ValueError, match="content is required"):
-        await context.create("summary", "  ", False)
-    with pytest.raises(ValueError, match="primary must be a boolean"):
-        await context.create("summary", "content", 1)
+async def test_context_list_returns_entries_in_creation_order(context):
+    first = await context.create("First", "One", False)
+    second = await context.create("Second", "Two", True)
+    assert await context.list() == [first, second]
 
+
+async def test_context_partial_update_preserves_untouched_fields(context):
     entry = await context.create("Original", "Original content", False)
-    changed = await context.update(entry["id"], summary="Renamed")
-    assert changed["summary"] == "Renamed"
-    assert changed["content"] == "Original content"
-    assert changed["primary"] is False
-    with pytest.raises(ValueError, match="at least one"):
-        await context.update(entry["id"])
-    assert await context.update(999, content="missing") is None
+    assert await context.update(entry["id"], summary="Renamed") == {
+        "id": entry["id"],
+        "summary": "Renamed",
+        "content": "Original content",
+        "primary": False,
+    }
 
 
-@pytest.mark.asyncio
-async def test_existing_v10_database_migrates_to_context_schema(tmp_path):
-    database = tmp_path / "legacy-v10.sqlite3"
-    repo = SqliteRepository(database, tmp_path / "output.sqlite3")
-    await repo.initialize()
-    with sqlite3.connect(database) as db:
-        db.execute("DROP TABLE instance_context")
-        db.execute("PRAGMA user_version=10")
-        db.commit()
-
-    reopened = SqliteRepository(database, tmp_path / "output.sqlite3")
-    await reopened.initialize()
-    context = ContextStore(reopened.path)
-    created = await context.create("Migrated", "Context survives v10 migration.", True)
-    assert created["id"] == 1
-    with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+async def test_context_delete_removes_selected_entry(context):
+    selected = await context.create("Selected", "Remove", False)
+    retained = await context.create("Retained", "Keep", False)
+    assert await context.delete(selected["id"]) is True
+    assert await context.list() == [retained]

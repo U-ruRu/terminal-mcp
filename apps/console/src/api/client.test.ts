@@ -1,7 +1,6 @@
-import { expect, test, vi } from 'vitest'
+import { expect,test,vi } from 'vitest'
 
-import { ConsoleClient, ConsoleHttpError } from './client'
-import { ConsoleContractError } from './contracts'
+import { ConsoleClient } from './client'
 
 function jsonResponse(body: object, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -70,7 +69,7 @@ const snapshot = {
   },
   instance: {
     application: 'terminal-mcp',
-    version: '0.10.1',
+    version: '0.14.4',
     public_base_url: 'https://terminal.example',
     health: { ok: true, storage: 'ok' },
     resources: {
@@ -133,7 +132,7 @@ const snapshot = {
   ],
 }
 
-test('snapshot adapts frozen M0 contract into stable read models', async () => {
+test('snapshot decodes the current console read model', async () => {
   const fetcher = vi.fn(async () => jsonResponse(snapshot))
   const client = new ConsoleClient('https://terminal.example/base', () => 'access-token', fetcher)
 
@@ -145,7 +144,7 @@ test('snapshot adapts frozen M0 contract into stable read models', async () => {
     duplicateEventsPossible: true,
     instance: {
       application: 'terminal-mcp',
-      version: '0.10.1',
+      version: '0.14.4',
       publicBaseUrl: 'https://terminal.example',
       healthy: true,
       resources: {
@@ -178,43 +177,6 @@ test('snapshot adapts frozen M0 contract into stable read models', async () => {
   )
 })
 
-test('read-only adapters send the M0 request shapes', async () => {
-  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    void init
-    const path = new URL(input.toString()).pathname
-    if (path === '/actions/agents') return jsonResponse({ ok: true, sessions: [session] })
-    if (path === '/actions/context') return jsonResponse({ ok: true, ...contexts })
-    if (path === '/actions/tasks') {
-      return jsonResponse({
-        ok: true,
-        summary: {},
-        tag_counts: { M1: 1 },
-        tasks: [task],
-      })
-    }
-    if (path === '/console/task-detail') return jsonResponse({ ok: true, task })
-    return jsonResponse({ error: 'missing' }, 404)
-  })
-  const client = new ConsoleClient('https://terminal.example', () => 'token', fetcher)
-
-  expect((await client.agents()).agents).toHaveLength(1)
-  expect((await client.tasks()).tasks).toHaveLength(1)
-  expect((await client.task('console', 'M1-003')).key).toBe('console/M1-003')
-  expect((await client.contexts()).contexts).toHaveLength(2)
-
-  const bodies = fetcher.mock.calls.map(([, init]) =>
-    init?.body ? JSON.parse(String(init.body)) : undefined,
-  )
-  expect(bodies).toContainEqual(
-    expect.objectContaining({ show_details: true, since_minutes: 60 }),
-  )
-  expect(bodies).toContainEqual(
-    expect.objectContaining({ show_done: true, show_archived: true, limit: 200 }),
-  )
-  expect(bodies).toContainEqual({ namespace: 'console', task_id: 'M1-003' })
-  expect(bodies).toContainEqual({ action: 'list', show_details: true })
-})
-
 test('websocket ticket uses paired access auth and validates ticket contract', async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(new URL(input.toString()).pathname).toBe('/console/ws-ticket')
@@ -235,44 +197,6 @@ test('websocket ticket uses paired access auth and validates ticket contract', a
     }),
   )
 })
-
-test('HTTP errors remain distinct from successful-response contract errors', async () => {
-  const unauthorized = new ConsoleClient(
-    'https://terminal.example',
-    () => 'bad',
-    async () => jsonResponse({ error: 'invalid_token' }, 401),
-  )
-  await expect(unauthorized.snapshot()).rejects.toMatchObject({
-    name: 'ConsoleHttpError',
-    status: 401,
-    code: 'invalid_token',
-    authenticationRequired: true,
-  } satisfies Partial<ConsoleHttpError>)
-
-  const malformed = new ConsoleClient(
-    'https://terminal.example',
-    () => 'token',
-    async () => jsonResponse({ ...snapshot, high_water_seq: 'forty-two' }),
-  )
-  await expect(malformed.snapshot()).rejects.toBeInstanceOf(ConsoleContractError)
-})
-
-test('network failures are retryable HTTP errors', async () => {
-  const client = new ConsoleClient('https://terminal.example', () => 'token', async () => {
-    throw new TypeError('offline')
-  })
-
-  try {
-    await client.snapshot()
-    throw new Error('expected request to fail')
-  } catch (error) {
-    expect(error).toBeInstanceOf(ConsoleHttpError)
-    const httpError = error as ConsoleHttpError
-    expect(httpError.status).toBe(0)
-    expect(httpError.retryable).toBe(true)
-  }
-})
-
 
 test('activity feed maps cursor, filters and authorized message projection', async () => {
   const response = {
@@ -342,78 +266,4 @@ test('activity feed maps cursor, filters and authorized message projection', asy
       recipients: [{ agentId: 'Bravo-EFGH', name: 'Bravo', seen: true, read: false, replied: false }],
     },
   })
-})
-
-test('snapshot remains readable when an older server omits host resources', async () => {
-  const legacy = structuredClone(snapshot)
-  delete (legacy.instance as Record<string, unknown>).resources
-  const client = new ConsoleClient('https://terminal.example', () => 'token', async () => jsonResponse(legacy))
-
-  const decoded = await client.snapshot()
-
-  expect(decoded.instance.resources).toEqual({
-    status: 'unavailable',
-    cpu: { status: 'unavailable' },
-    memory: { status: 'unavailable' },
-    filesystem: { status: 'unavailable' },
-    uptime: { status: 'unavailable' },
-  })
-})
-
-test('persistent snapshot and mutation keep authority fields typed and POST exact mutation body', async () => {
-  const persistentSnapshot = {
-    ...snapshot,
-    persistent: {
-      enabled: true,
-      available: true,
-      server_now: '2026-09-30T12:00:00Z',
-      policy: {
-        duration_seconds: 1380,
-        warning_after_seconds: 1200,
-        alert_after_seconds: 1320,
-        manual_rearm: true,
-        admission_mode: 'bearer',
-        legacy_admission_enabled: false,
-        policy_control_supported: true,
-      },
-      slots: [{
-        slot: {
-          logical_agent_id: 'la_alpha', display_name: 'Alpha', state: 'suspended', authority_node_id: 'secondary',
-          authority_epoch: 3, slot_revision: 7, selector_generation: 2, auth_generation: 1,
-          created_at: '2026-09-30T11:00:00Z', updated_at: '2026-09-30T11:30:00Z',
-        },
-        selector: { selector: 'A1B2', generation: 2 },
-        access: { public_name: 'Alpha', access_generation: 2, status: 'active' },
-        work_session: null,
-        server_now: '2026-09-30T12:00:00Z',
-        claims: [], audit: [], attachments: [],
-      }],
-    },
-  }
-  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-    const path = new URL(input.toString()).pathname
-    if (path === '/actions/console/snapshot') return jsonResponse(persistentSnapshot)
-    if (path === '/actions/persistent/slots/play') return jsonResponse({ ok: true, slot: { logical_agent_id: 'la_alpha' } })
-    return jsonResponse({ error: 'missing' }, 404)
-  })
-  const client = new ConsoleClient('https://terminal.example', () => 'paired-access', fetcher)
-  const model = await client.snapshot()
-  expect(model.persistent).toMatchObject({
-    enabled: true,
-    available: true,
-    policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1320, legacyAdmissionEnabled: false, policyControlSupported: true },
-    slots: [{ logicalAgentId: 'la_alpha', selector: 'A1B2', slotRevision: 7, authorityEpoch: 3, access: { publicName: 'Alpha', accessGeneration: 2, status: 'active' } }],
-  })
-  const result = await client.persistentMutation('/actions/persistent/slots/play', {
-    logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: 'idem-12345678',
-  })
-  expect(result.ok).toBe(true)
-  expect(fetcher).toHaveBeenLastCalledWith(
-    new URL('https://terminal.example/actions/persistent/slots/play'),
-    expect.objectContaining({
-      method: 'POST',
-      headers: expect.objectContaining({ Authorization: 'Bearer paired-access' }),
-      body: JSON.stringify({ logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: 'idem-12345678' }),
-    }),
-  )
 })

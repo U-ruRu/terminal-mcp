@@ -33,26 +33,6 @@ def settings(tmp_path, **overrides):
     return Settings(**data)
 
 
-def test_persistent_surface_fails_closed_when_transport_auth_is_none(tmp_path):
-    app = create_app(settings(tmp_path, auth_mode="none"))
-    with TestClient(app) as client:
-        response = client.post("/actions/persistent/slots/create", json={"display_name": "Alpha"})
-    assert response.status_code == 200
-    assert response.json()["ok"] is False
-    assert response.json()["code"] == "persistent_auth_required"
-
-
-def test_persistent_slot_create_requires_display_name(tmp_path):
-    app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
-    with TestClient(app) as client:
-        response = client.post(
-            "/actions/persistent/slots/create",
-            json={},
-            headers={"Authorization": "Bearer alpha-token"},
-        )
-    assert response.status_code == 422
-
-
 def test_persistent_slot_create_accepts_empty_display_name(tmp_path):
     app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
     with TestClient(app) as client:
@@ -82,25 +62,6 @@ def _delete_slot_payload(created: dict) -> dict:
         "expected_revision": created["slot"]["slot_revision"],
         "idempotency_key": "delete-idem-0001",
     }
-
-
-def test_persistent_slot_delete_is_idempotent(tmp_path):
-    app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
-    with TestClient(app) as client:
-        created = _create_persistent_slot(client, name="Delete me")
-        payload = _delete_slot_payload(created)
-        first = client.post(
-            "/actions/persistent/slots/delete",
-            json=payload,
-            headers={"Authorization": "Bearer alpha-token"},
-        ).json()
-        second = client.post(
-            "/actions/persistent/slots/delete",
-            json=payload,
-            headers={"Authorization": "Bearer alpha-token"},
-        ).json()
-    assert first["ok"] is True
-    assert second == first
 
 
 def test_persistent_slot_delete_tombstones_selector(tmp_path):

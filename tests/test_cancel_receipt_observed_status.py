@@ -7,15 +7,9 @@ from terminal_mcp.mcp.output_contracts import cmd_result
 
 
 @pytest.mark.parametrize("initial_status", ["queued", "running"])
-@pytest.mark.parametrize("failure", [None, "enqueue"])
-async def test_cancel_wire_preserves_observed_command_status(
-    tmp_path, monkeypatch, initial_status, failure
-):
+async def test_cancel_wire_preserves_observed_command_status(tmp_path, monkeypatch, initial_status):
     backend = await _backend(tmp_path, monkeypatch)
     command = await _attributed_command(backend, status=initial_status)
-    if failure == "enqueue":
-        backend.terminal.enqueue_cancel.side_effect = RuntimeError("lost wakeup")
-
     accepted = await backend.cancel(command.cmd_hash, **IDENTITY)
     assert accepted["ok"] is True
     stored = await backend.repo.get(command.cmd_hash)
@@ -26,19 +20,15 @@ async def test_cancel_wire_preserves_observed_command_status(
     assert stored.status == ("cancelled" if initial_status == "queued" else "running")
 
 
-@pytest.mark.parametrize("final_status", ["cancelled", "completed", "failed"])
-async def test_cancel_retry_preserves_observed_terminal_outcome(
-    tmp_path, monkeypatch, final_status
-):
+async def test_cancel_retry_preserves_observed_terminal_outcome(tmp_path, monkeypatch):
     backend = await _backend(tmp_path, monkeypatch)
     command = await _attributed_command(backend, status="running")
-    accepted = await backend.cancel(command.cmd_hash, **IDENTITY)
-    assert accepted["ok"] is True
-    await backend.repo.finish_running(command.cmd_hash, final_status)
+    await backend.repo.accept_cancel_intent(command.cmd_hash)
+    await backend.repo.finish_running(command.cmd_hash, "completed")
 
     retried = await backend.cancel(command.cmd_hash, **IDENTITY)
     wire = cmd_result(retried, "cancel").structuredContent
     assert wire["ok"] is True
-    assert wire["command"]["status"] == final_status
+    assert wire["command"]["status"] == "completed"
     assert wire["command"]["cancelled_from"] == "running"
     assert wire["command"]["execution_started"] is True

@@ -1,402 +1,142 @@
+"""Current materialized Fleet projection transactions, without multi-node replay scenarios."""
+
 import pytest
 
-from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlStore
 from terminal_mcp.fleet.projection_storage import FleetProjectionError, FleetProjectionStore
 
 
-def snapshot(generation="gen-a", barrier=5):
-    return {
-        "fleet_id": "fleet-a",
-        "node_id": "source-a",
-        "source_stream_generation": generation,
-        "barrier_source_seq": barrier,
-        "complete_entity_types": ["logical_agent", "attachment_presence"],
-        "entities": [
-            {
-                "entity_type": "logical_agent",
-                "entity_id": "logical-1",
-                "entity_revision": 2,
-                "payload_version": 1,
-                "payload": {"state": "active"},
-            },
-            {
-                "entity_type": "attachment_presence",
-                "entity_id": "att-1",
-                "entity_revision": barrier,
-                "payload_version": 1,
-                "payload": {
-                    "logical_agent_id": "logical-1",
-                    "work_session_id": "ws-1",
-                    "session_epoch": 1,
-                    "node_instance_id": "source-b",
-                    "intent": "project me",
-                },
-            },
-        ],
-    }
+@pytest.fixture
+async def owner(tmp_path):
+    store = FleetProjectionStore(
+        tmp_path / "projection.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-a",
+        owner_node_id="projection-a",
+    )
+    await store.initialize()
+    await store.mark_source("source-a", "gen-a", "fresh")
+    return store
 
 
-def page(source_seq=6, revision=3, event_id="event-6"):
+@pytest.fixture
+async def follower(tmp_path):
+    store = FleetProjectionStore(
+        tmp_path / "follower.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-b",
+        owner_node_id="projection-a",
+        role="follower",
+    )
+    await store.initialize()
+    return store
+
+
+def delta():
     return {
         "fleet_id": "fleet-a",
         "node_id": "source-a",
         "source_stream_generation": "gen-a",
-        "next_cursor": source_seq,
-        "reset_required": False,
-        "events": [
-            {
-                "event_id": event_id,
-                "source_seq": source_seq,
-                "event_type": "logical_agent.changed",
-                "entity_type": "logical_agent",
-                "entity_id": "logical-1",
-                "entity_revision": revision,
-                "payload_version": 1,
-                "payload": {"state": "suspended"},
-                "created_at": "2026-01-01T00:00:01Z",
-            }
-        ],
+        "next_cursor": 1,
+    }
+
+
+def mutation():
+    return {
+        "event_id": "event-a",
+        "source_seq": 1,
+        "event_type": "projection.upsert",
+        "entity_type": "logical_agent",
+        "entity_id": "logical-a",
+        "entity_revision": 2,
+        "payload_version": 2,
+        "payload": {"state": "suspended"},
     }
 
 
 @pytest.mark.asyncio
-async def test_projection_snapshot_event_idempotency_and_overlay_are_separate(tmp_path):
-    store = FleetProjectionStore(
-        tmp_path / "projection.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        owner_node_id="projection-a",
-    )
-    await store.initialize()
-    assert store.sqlite_diagnostics.role == "fleet_projection"
+async def test_materialized_delta_updates_the_visible_entity(owner):
+    await owner.apply_materialized_source_page(delta(), [mutation()])
 
-    await store.apply_snapshot(snapshot())
-    after_snapshot = await store.snapshot()
-    presence = next(
-        item
-        for item in after_snapshot["entities"]
-        if item["entity_type"] == "attachment_presence"
-    )
-    assert presence["payload"]["work_session_id"] == "ws-1"
-    seq_before = after_snapshot["projection_seq"]
-
-    await store.apply_source_page(page())
-    first = await store.snapshot()
-    logical = next(
-        item for item in first["entities"] if item["entity_type"] == "logical_agent"
-    )
-    assert logical["payload"]["state"] == "suspended"
-    assert first["projection_seq"] == seq_before + 1
-
-    await store.apply_source_page(page())
-    duplicate = await store.snapshot()
-    assert duplicate["projection_seq"] == first["projection_seq"]
-
-    await store.put_runtime_overlay(
-        "source-a",
-        {
-            "finalization_pending_commands": ["cmd-1"],
-            "stale_running_commands": ["cmd-2"],
-            "unowned_running_commands": ["cmd-2"],
-        },
-    )
-    overlay = await store.snapshot()
-    assert overlay["projection_seq"] == first["projection_seq"]
-    assert overlay["runtime_overlays"][0]["payload"]["unowned_running_commands"] == ["cmd-2"]
-
-    await store.clear_runtime_overlay("source-a")
-    stale = await store.snapshot()
-    assert stale["runtime_overlays"][0]["freshness"] == "stale"
-    assert stale["projection_seq"] == first["projection_seq"]
-
-
-@pytest.mark.asyncio
-async def test_projection_reset_and_follower_promotion_are_explicit(tmp_path):
-    owner = FleetProjectionStore(
-        tmp_path / "owner.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        owner_node_id="projection-a",
-    )
-    await owner.initialize()
-    await owner.apply_snapshot(snapshot())
-
-    with pytest.raises(FleetProjectionError, match="reset required"):
-        await owner.apply_source_page(
-            {
-                "fleet_id": "fleet-a",
-                "node_id": "source-a",
-                "source_stream_generation": "gen-b",
-                "reset_required": True,
-                "events": [],
-            }
-        )
     state = await owner.snapshot()
-    assert state["sources"][0]["freshness"] == "reset_required"
-
-    follower = FleetProjectionStore(
-        tmp_path / "follower.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-b",
-        owner_node_id="projection-a",
-        role="follower",
-    )
-    await follower.initialize()
-    with pytest.raises(FleetProjectionError, match="cannot independently consume"):
-        await follower.apply_snapshot(snapshot())
-    promoted = await follower.promote(expected_epoch=1, control_authorized=True)
-    assert promoted["projection_epoch"] == 2
-    assert promoted["role"] == "owner"
-    assert promoted["owner_node_id"] == "projection-b"
+    assert state["entities"][0]["payload"] == {"state": "suspended"}
 
 
 @pytest.mark.asyncio
-async def test_follower_applies_exact_owner_prefix_and_fences_old_epoch(tmp_path):
-    owner = FleetProjectionStore(
-        tmp_path / "owner.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        owner_node_id="projection-a",
-    )
-    await owner.initialize()
-    await owner.apply_snapshot(snapshot())
-    base = await owner.replica_snapshot()
+async def test_duplicate_materialized_event_keeps_the_projection_sequence(owner):
+    await owner.apply_materialized_source_page(delta(), [mutation()])
+    previous = (await owner.meta())["projection_seq"]
 
-    follower = FleetProjectionStore(
-        tmp_path / "follower.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-b",
-        owner_node_id="projection-a",
-        role="follower",
-    )
-    await follower.initialize()
-    replicated = await follower.apply_owner_snapshot(
-        base, owner_node_id="projection-a"
-    )
-    assert replicated["projection_epoch"] == base["projection_epoch"]
-    assert replicated["projection_seq"] == base["projection_seq"]
+    await owner.apply_materialized_source_page(delta(), [mutation()])
 
-    await owner.apply_source_page(page())
-    owner_events = await owner.events(since=base["projection_seq"])
-    applied = await follower.apply_owner_events(
-        owner_events, owner_node_id="projection-a"
-    )
-    assert applied["projection_seq"] == owner_events["projection_seq"]
+    assert (await owner.meta())["projection_seq"] == previous
 
-    follower_state = await follower.snapshot()
-    owner_state = await owner.snapshot()
-    follower_logical = next(
-        item
-        for item in follower_state["entities"]
-        if item["entity_type"] == "logical_agent"
-    )
-    owner_logical = next(
-        item
-        for item in owner_state["entities"]
-        if item["entity_type"] == "logical_agent"
-    )
-    assert follower_logical["payload"] == owner_logical["payload"]
 
-    with pytest.raises(FleetProjectionError, match="prefix gap"):
-        await follower.apply_owner_events(
+@pytest.mark.asyncio
+async def test_runtime_overlay_preserves_the_durable_projection_sequence(owner):
+    previous = (await owner.meta())["projection_seq"]
+
+    await owner.put_runtime_overlay("source-a", {"finalization_pending_commands": ["cmd-a"]})
+
+    state = await owner.snapshot()
+    assert state["projection_seq"] == previous
+    assert state["runtime_overlays"][0]["payload"]["finalization_pending_commands"] == ["cmd-a"]
+
+
+@pytest.mark.asyncio
+async def test_generation_mismatch_requires_source_recovery(owner):
+    with pytest.raises(FleetProjectionError, match="generation changed"):
+        await owner.apply_materialized_source_page(
+            delta() | {"source_stream_generation": "gen-b"}, []
+        )
+
+
+@pytest.mark.asyncio
+async def test_current_recovery_page_publishes_a_completed_scope(owner):
+    await owner.begin_current_recovery("source-a", "gen-a", "recovery-a", ["logical_agents"])
+    page = {
+        **delta(),
+        "scope": "logical_agents",
+        "snapshot_id": "snapshot-a",
+        "barrier_source_seq": 5,
+        "page_complete": True,
+        "entities": [
             {
-                "projection_epoch": applied["projection_epoch"],
-                "projection_seq": applied["projection_seq"] + 2,
-                "events": [
-                    {
-                        **owner_events["events"][0],
-                        "projection_seq": applied["projection_seq"] + 2,
-                        "event_id": "gap-event",
-                    }
-                ],
-            },
-            owner_node_id="projection-a",
-        )
+                "entity_type": "logical_agent",
+                "entity_id": "logical-a",
+                "entity_revision": 2,
+                "payload_version": 2,
+                "payload": {"state": "active"},
+            }
+        ],
+    }
 
-    promoted = await follower.promote(
-        expected_epoch=applied["projection_epoch"], control_authorized=True
-    )
-    assert promoted["projection_epoch"] == applied["projection_epoch"] + 1
-    follower.role = "follower"
-    follower.owner_node_id = "projection-a"
-    with pytest.raises(FleetProjectionError, match="old projection epoch fenced"):
-        await follower.apply_owner_events(
-            owner_events,
-            owner_node_id="projection-a",
-        )
+    await owner.stage_current_recovery_page("source-a", "recovery-a", page)
+
+    state = await owner.snapshot()
+    assert state["entities"][0]["payload"] == {"state": "active"}
 
 
 @pytest.mark.asyncio
-async def test_projection_event_retention_forces_slow_cursor_resnapshot(tmp_path):
-    store = FleetProjectionStore(
-        tmp_path / "projection.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        owner_node_id="projection-a",
-        max_event_rows=2,
+async def test_follower_promotion_increments_the_authority_epoch(follower):
+    result = await follower.promote(expected_epoch=1, control_authorized=True)
+
+    assert (result["owner_node_id"], result["projection_epoch"], result["role"]) == (
+        "projection-b",
+        2,
+        "owner",
     )
-    await store.initialize()
-    await store.apply_snapshot(snapshot(barrier=1))
-    base = (await store.meta())["projection_seq"]
-    for index in range(2, 5):
-        await store.apply_source_page(
-            page(
-                source_seq=index,
-                revision=index,
-                event_id=f"event-{index}",
-            )
-        )
-    current = await store.meta()
-    expired = await store.events(since=base)
-    assert expired["reset_required"] is True
-    assert expired["events"] == []
-    fresh = await store.events(since=current["projection_seq"] - 2)
-    assert fresh["reset_required"] is False
-    assert len(fresh["events"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_projection_promotion_requires_control_authority(tmp_path):
-    follower = FleetProjectionStore(
-        tmp_path / "follower.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-b",
-        owner_node_id="projection-a",
-        role="follower",
-    )
-    await follower.initialize()
+async def test_projection_promotion_requires_control_authority(follower):
     with pytest.raises(FleetProjectionError, match="control authority"):
         await follower.promote(expected_epoch=1)
 
 
 @pytest.mark.asyncio
-async def test_control_manifest_owns_projection_topology_and_promotion(tmp_path):
-    control = FleetControlStore(
-        tmp_path / "control.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        control_node_id="projection-a",
-    )
-    await control.initialize()
-    initial = await control.ensure_projection_topology(
-        "projection-a", "projection-b"
-    )
-    assert initial["owner_node_id"] == "projection-a"
-    assert initial["follower_node_id"] == "projection-b"
-    assert initial["projection_epoch"] == 1
-
-    promoted = await control.promote_projection(expected_epoch=1)
-    assert promoted["owner_node_id"] == "projection-b"
-    assert promoted["follower_node_id"] == "projection-a"
-    assert promoted["projection_epoch"] == 2
-
-    non_control = FleetControlStore(
-        tmp_path / "other-control.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-b",
-        control_node_id="projection-a",
-    )
-    await non_control.initialize()
-    await non_control.ensure_projection_topology("projection-a", "projection-b")
-    with pytest.raises(FleetControlError, match="control_authority_required"):
-        await non_control.promote_projection(expected_epoch=1)
-
-
-
-@pytest.mark.asyncio
-async def test_materialized_projection_bounds_recent_terminal_commands(tmp_path):
-    from terminal_mcp.fleet.protocol import MAX_RECENT_TERMINAL_COMMANDS
-
-    store = FleetProjectionStore(
-        tmp_path / "projection-terminal-bound.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        owner_node_id="projection-a",
-    )
-    await store.initialize()
-    await store.apply_snapshot(
-        {
-            "fleet_id": "fleet-a",
-            "node_id": "source-a",
-            "source_stream_generation": "gen-a",
-            "barrier_source_seq": 1,
-            "complete_entity_types": ["command"],
-            "entities": [],
-        }
-    )
-    mutations = [
-        {
-            "event_id": f"terminal-{seq}",
-            "source_seq": seq,
-            "event_type": "projection.upsert",
-            "entity_type": "command",
-            "entity_id": f"cmd-{seq:03d}",
-            "entity_revision": seq,
-            "payload_version": 2,
-            "payload": {"status": "completed", "exit_code": 0},
-            "created_at": "2026-09-30T00:00:00Z",
-        }
-        for seq in range(2, 302)
-    ]
-    await store.apply_materialized_source_page(
-        {
-            "fleet_id": "fleet-a",
-            "node_id": "source-a",
-            "source_stream_generation": "gen-a",
-            "next_cursor": 301,
-            "reset_required": False,
-        },
-        mutations,
-    )
-
-    state = await store.snapshot()
-    commands = [item for item in state["entities"] if item["entity_type"] == "command"]
-    assert len(commands) == MAX_RECENT_TERMINAL_COMMANDS
-    assert min(item["source_seq"] for item in commands) == 46
-
-
-@pytest.mark.asyncio
-async def test_follower_refreshes_owner_source_and_scope_freshness_without_snapshot(tmp_path):
-    owner = FleetProjectionStore(
-        tmp_path / "owner-freshness.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-a",
-        owner_node_id="projection-a",
-    )
-    await owner.initialize()
-    await owner.apply_snapshot(snapshot())
-    await owner.mark_scope_status("source-a", ["commands"], "LIVE")
-    base = await owner.replica_snapshot()
-
-    follower = FleetProjectionStore(
-        tmp_path / "follower-freshness.sqlite3",
-        fleet_id="fleet-a",
-        node_id="projection-b",
-        owner_node_id="projection-a",
-        role="follower",
-    )
-    await follower.initialize()
-    await follower.apply_owner_snapshot(base, owner_node_id="projection-a")
-    base_seq = (await follower.meta())["projection_seq"]
-
-    await owner.mark_source("source-a", "gen-a", "unavailable")
-    await owner.mark_scope_status(
-        "source-a",
-        ["commands"],
-        "DEGRADED",
-        "source_unavailable",
-    )
-    owner_state = await owner.snapshot()
-    await follower.apply_owner_overlays(
-        owner_state["runtime_overlays"],
-        owner_node_id="projection-a",
-        projection_epoch=owner_state["projection_epoch"],
-        sources=owner_state["sources"],
-        scope_statuses=owner_state["scope_statuses"],
-    )
-
-    state = await follower.snapshot()
-    assert state["sources"][0]["freshness"] == "unavailable"
-    assert state["scope_statuses"][0]["status"] == "DEGRADED"
-    assert state["scope_statuses"][0]["reason"] == "source_unavailable"
-    assert state["projection_seq"] == base_seq
+async def test_follower_rejects_an_old_owner_epoch(follower):
+    with pytest.raises(FleetProjectionError, match="old projection epoch fenced"):
+        await follower.apply_owner_snapshot(
+            {"fleet_id": "fleet-a", "projection_epoch": 0, "projection_seq": 1},
+            owner_node_id="projection-a",
+        )

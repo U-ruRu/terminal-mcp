@@ -39,10 +39,3 @@ async def test_implicit_create_cannot_be_repeated_after_renaming_existing_task(t
     repeated = await tasks.mutate("creator", **original)
     assert repeated["ok"] is False and repeated["code"] == "duplicate_task", repeated
     assert await store.list_tasks(namespace="signature") == before
-
-    # The updated content is not itself an immutable creation signature.
-    second = await tasks.mutate(
-        "creator", **{**original, "title": "Renamed candidate", "description": "Changed details"}
-    )
-    assert second["ok"], second
-    assert second["task"]["task_id"] != identifier

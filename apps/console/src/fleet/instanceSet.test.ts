@@ -1,6 +1,6 @@
-import { expect, test } from 'vitest'
-import type { FleetInstanceView } from './types'
+import { expect,test } from 'vitest'
 import { preserveSavedServerInstances } from './instanceSet'
+import type { FleetInstanceView } from './types'
 
 const view = (instanceId: string, status: FleetInstanceView['runtime']['status']): FleetInstanceView => ({
   profile: { instanceId, origin: `https://${instanceId}.example`, displayName: instanceId, credentialRef: `cred-${instanceId}`, metadata: { deviceId: 'd', clientId: 'c', deviceLabel: 'Console', scope: 'terminal:read', pairedAt: 1 }, createdAt: 1, updatedAt: 1 },

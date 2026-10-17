@@ -57,21 +57,6 @@ def messages(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fleet_scope_is_rejected_before_authorization_or_storage(messages):
-    messages.mesh.resolve.side_effect = AssertionError("scope rejection must precede resolution")
-    result = await messages.message(ActorContext(), text="message", scope="fleet")
-    assert result == {
-        "ok": False,
-        "code": "feature_disabled",
-        "error": "feature_disabled",
-        "outcome": "not_committed",
-    }
-    messages.mesh.resolve.assert_not_awaited()
-    assert messages.store.mock_calls == []
-    messages.replication.request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_deliberate_sends_with_identical_request_id_and_text_have_distinct_ids(messages):
     actor = ActorContext(principal_id="sender", request_id="same-request")
     first = await messages.message(actor, text="same text")

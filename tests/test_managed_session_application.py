@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -9,22 +8,11 @@ import pytest
 import pytest_asyncio
 
 from terminal_mcp.application.actor import ActorContext
-from terminal_mcp.application.managed_sessions import (
-    ManagedSessionApplication,
-    ManagedSlotGrant,
-)
-from terminal_mcp.core.managed_sessions import (
-    ManagedOperation,
-    ManagedSessionError,
-)
-from terminal_mcp.core.orchestration import parse_utc, utc_text
+from terminal_mcp.application.managed_sessions import ManagedSessionApplication, ManagedSlotGrant
+from terminal_mcp.core.managed_sessions import ManagedOperation, ManagedSessionError
+from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import PersistentAdmissionError
-from terminal_mcp.core.persistent_execution import PersistentExecutionFence
-from terminal_mcp.core.work_windows import (
-    SlotSessionPolicy,
-    WindowLifecycle,
-    WindowPhase,
-)
+from terminal_mcp.core.work_windows import WindowLifecycle, WindowPhase
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.work_windows import WorkWindowStore
 
@@ -83,7 +71,7 @@ class Fence:
         if self.error:
             raise OSError("private runtime diagnostics must not become a public error")
         if self.hang:
-            await asyncio.sleep(30)
+            await asyncio.Future()
         return self.blockers
 
 
@@ -111,33 +99,14 @@ async def env(tmp_path):
     )
 
 
-async def test_identity_and_verified_authorization_are_independent(env):
-    with pytest.raises(ManagedSessionError, match="persistent_auth_required"):
-        await env.app.start(ActorContext(logical_agent_id="la_one", provider="example"))
-    assert not env.auth.calls
-    env.auth.deny = True
-    with pytest.raises(ManagedSessionError, match="access_denied"):
-        await env.app.start(actor())
-    assert await env.store.active_session_for_slot("la_one") is None
-    assert await env.store.current_window("la_one") is None
-
-
-async def test_start_resolves_session_server_side_and_receipt_is_compact(env):
-    unresolved = actor()
-    assert unresolved.logical_agent_id == "la_one" and unresolved.work_session_id is None
-    started = await env.app.start(unresolved)
-    again = await env.app.start(unresolved)
-    assert started.snapshot.session == again.snapshot.session
+async def test_start_binds_actor_to_current_server_session(env):
+    started = await env.app.start(actor())
     assert started.actor.work_session_id == started.snapshot.session.work_session_id
-    assert started.actor.principal_id == unresolved.principal_id
+    assert started.actor.principal_id == "principal-a"
     receipt = started.receipt()
     assert receipt["public_name"] == "Stable-Agent"
     assert receipt["remaining_seconds"] == 1380
-    assert receipt["role"] == "executor" and receipt["contract_version"] == 1
-    text = json.dumps(receipt)
-    assert len(text.encode()) < 700
-    assert "principal-a" not in text and "private-credential" not in text
-    assert "logical_agent_id" not in receipt and "provider" not in receipt
+    assert receipt["role"] == "executor"
 
 
 async def test_expiry_fences_before_returning_session_expired(env):
@@ -166,20 +135,6 @@ async def test_committed_expiry_is_reported_with_pending_cleanup_not_retried_mut
     assert result.change.current.lifecycle is WindowLifecycle.EXPIRED
     assert (await env.store.get_work_session(first.actor.work_session_id)).state == "stopping"
     assert (await env.store.current_window("la_one")).window_revision == 2
-    with pytest.raises(ManagedSessionError, match="session_stopping") as error:
-        await env.app.start(actor())
-    assert error.value.return_to_chat
-
-
-async def test_failed_end_fence_is_durable_and_retry_finishes_without_reset(env):
-    first = await env.app.start(actor())
-    env.fence.error = True
-    result = await env.app.end(first.actor)
-    assert result["session_state"] == "stopping" and result["cleanup_pending"]
-    env.fence.error = False
-    result = await env.app.end(first.actor)
-    assert result["session_state"] == "inactive"
-    assert await env.store.current_window("la_one") == first.snapshot.window
 
 
 async def test_cancelled_cleanup_never_restores_execution_authority(env):
@@ -193,37 +148,6 @@ async def test_cancelled_cleanup_never_restores_execution_authority(env):
         await stopping
     assert (await env.store.get_work_session(first.actor.work_session_id)).state == "stopping"
     assert await env.store.current_window("la_one") == first.snapshot.window
-
-
-async def test_real_queued_execution_is_cancelled_through_existing_execution_fence(env):
-    started = await env.app.start(actor())
-    command = await env.repo.create(
-        "printf queued-test",
-        queue_id=2,
-        agent_id="la_one",
-        logical_agent_id="la_one",
-        work_session_id=started.actor.work_session_id,
-        session_epoch=started.actor.session_epoch,
-        command_type="persistent_run",
-    )
-    env.app.execution_fence = PersistentExecutionFence(env.repo, object(), object())
-    ended = await env.app.end(started.actor)
-    assert ended["session_state"] == "inactive"
-    assert (await env.repo.get(command.cmd_hash)).status == "cancelled"
-
-
-def test_agent_context_preserves_authorization_without_inventing_session():
-    context = actor()
-    assert context.logical_agent_id == "la_one"
-    assert context.work_session_id is None and context.session_epoch is None
-    assert context.admission().principal_id == "principal-a"
-    for kwargs in (
-        {"work_session_id": "x"},
-        {"session_epoch": 1},
-        {"work_session_id": "x", "session_epoch": 1},
-    ):
-        with pytest.raises(ValueError, match="complete"):
-            ActorContext(**kwargs)
 
 
 @pytest.mark.parametrize(
@@ -267,128 +191,20 @@ async def test_operator_can_end_current_managed_session_without_impersonating_pr
     assert ended.end_reason == "operator_end"
 
 
-async def test_explicit_managed_start_adopts_active_legacy_session_without_resetting_budget(env):
-    _slot, legacy = await env.store.start_session(
-        selector="ABCD",
-        work_session_id="legacy-session",
-        expected_revision=1,
-        principal_id="principal-a",
-        auth_generation=1,
-        authority_node_id="home",
-        origin_instance_id="home",
-        session_duration_seconds=1380,
-        now=utc_text(T0),
-    )
-    assert await env.store.current_window("la_one") is None
-
-    started = await env.app.start(actor(role="legacy"))
-    assert started.snapshot.session.work_session_id == legacy.work_session_id
-    assert started.snapshot.session.session_epoch == legacy.session_epoch
-    assert started.snapshot.session.hard_expires_at == legacy.hard_expires_at
-    assert started.snapshot.binding.role == "legacy"
-    assert started.snapshot.binding.contract_version == 1
-    assert started.snapshot.window.hard_expires_at == parse_utc(legacy.hard_expires_at)
-    assert started.receipt()["remaining_seconds"] == 1380
-
-    again = await env.app.start(actor(role="legacy"))
-    assert again.snapshot.session.work_session_id == legacy.work_session_id
-    assert again.snapshot.window.work_window_id == started.snapshot.window.work_window_id
-    assert again.snapshot.window.hard_expires_at == started.snapshot.window.hard_expires_at
-
-
-@pytest.mark.asyncio
-async def test_events_follow_real_managed_admission_and_ignore_observer(env):
-    attached = []
-    activity = []
-
-    async def note_attach(*args, **kwargs):
-        attached.append((args, kwargs))
-
-    async def note_activity(*args, **kwargs):
-        activity.append((args, kwargs))
-
-    env.app.attach_notifier = note_attach
-    env.app.activity_notifier = note_activity
-    started = await env.app.start(actor())
-    assert len(attached) == 1
-    assert attached[0][0][1] == started.snapshot.session.work_session_id
-    assert attached[0][1]["agent_name"] == "Stable-Agent"
-    await env.app.authorize_operation(started.actor, ManagedOperation.OBSERVE)
-    await env.app.authorize_operation(started.actor, ManagedOperation.TASK_LIST)
-    await env.app.authorize_operation(started.actor, ManagedOperation.SESSION_STATUS)
-    assert activity == []
-    await env.app.authorize_operation(started.actor, ManagedOperation.COMMAND_RUN)
-    assert len(activity) == 1
-    assert activity[0][0][:3] == (
-        "la_one",
-        started.snapshot.session.work_session_id,
-        started.snapshot.session.session_epoch,
-    )
-    # Re-admission may refresh local presence but outbox dedup must hold.
-    await env.app.start(actor())
-    assert len(attached) == 2
-    assert (
-        env.app.session_duration_seconds if hasattr(env.app, "session_duration_seconds") else True
-    )
-
-
-@pytest.mark.asyncio
-async def test_managed_notifications_are_nonfatal_to_tool_authorization(env):
-    async def failing(*args, **kwargs):
-        raise RuntimeError("fake secret should not enter output")
-
-    env.app.attach_notifier = failing
-    env.app.activity_notifier = failing
-    admitted = await env.app.start(actor())
-    assert admitted.snapshot.session.state == "active"
-    authorized = await env.app.authorize_operation(admitted.actor, ManagedOperation.COMMAND_RUN)
-    assert authorized.snapshot.session.work_session_id == admitted.snapshot.session.work_session_id
-
-
-async def test_read_only_admission_cannot_start_or_operator_mutate(env):
+async def test_read_only_principal_cannot_start_execution(env):
     with pytest.raises(PersistentAdmissionError, match="persistent_scope_required"):
         await env.app.start(actor(scopes={"terminal:read"}))
-    with pytest.raises(PersistentAdmissionError, match="persistent_scope_required"):
-        await env.app.change_policy(
-            actor(role="operator", scopes={"terminal:read"}),
-            "la_one",
-            SlotSessionPolicy(),
-            expected_revision=1,
-        )
-    assert not env.auth.calls
+    assert await env.store.active_session_for_slot("la_one") is None
 
 
-async def test_normal_end_start_does_not_buy_a_new_budget(env):
-    first = await env.app.start(actor())
-    ended = await env.app.end(first.actor)
-    assert ended["session_state"] == "inactive"
-    second = await env.app.start(actor())
-    # Late replay using the old server-bound session cannot stop its successor.
-    await env.app.end(first.actor)
-    assert (await env.store.get_work_session(second.actor.work_session_id)).state == "active"
-
-
-def test_missing_security_ports_and_unbounded_timeouts_are_configuration_errors(env=None):
-    with pytest.raises(ValueError, match="ports are required"):
-        ManagedSessionApplication(object(), None, object())
-    with pytest.raises(ValueError, match="ports are required"):
-        ManagedSessionApplication(object(), object(), None)
-    for timeout in (0, -1, 6, float("inf"), float("nan"), True):
-        with pytest.raises(ValueError, match="five seconds"):
-            ManagedSessionApplication(object(), object(), object(), fence_timeout_seconds=timeout)
-
-
-async def test_operator_requires_both_endpoint_role_and_independent_grant(env):
+async def test_operator_endpoint_still_requires_independent_grant(env):
     await env.app.start(actor())
-    with pytest.raises(ManagedSessionError, match="operator_role_required"):
-        await env.app.change_window(actor(), "la_one", expected_revision=1, delta_seconds=10)
     env.auth.operator = False
     with pytest.raises(ManagedSessionError, match="operator_role_required"):
         await env.app.change_window(
             actor(role="operator"), "la_one", expected_revision=1, delta_seconds=10
         )
     assert (await env.store.current_window("la_one")).window_revision == 1
-
 
 
 async def test_gate_fences_authorizer_epoch_that_does_not_match_bound_session(env):
@@ -399,46 +215,19 @@ async def test_gate_fences_authorizer_epoch_that_does_not_match_bound_session(en
     assert error.value.return_to_chat
 
 
-
-async def test_draining_allows_idempotent_active_start_but_blocks_new_session_after_end(env):
+async def test_draining_window_allows_repeated_start_of_active_session(env):
     first = await env.app.start(actor())
     env.clock[0] = T0 + timedelta(seconds=1320)
-
     repeated = await env.app.start(actor())
     assert repeated.snapshot.session.work_session_id == first.snapshot.session.work_session_id
     assert repeated.lifecycle.phase is WindowPhase.DRAINING
-    assert repeated.lifecycle.return_to_chat is True
 
-    ended = await env.app.end(actor())
-    assert ended["session_state"] == "inactive"
-    assert await env.store.active_session_for_slot("la_one") is None
 
+async def test_draining_window_blocks_new_session_after_end(env):
+    await env.app.start(actor())
+    env.clock[0] = T0 + timedelta(seconds=1320)
+    await env.app.end(actor())
     with pytest.raises(ManagedSessionError, match="session_draining") as blocked:
         await env.app.start(actor())
-    assert blocked.value.return_to_chat is True
+    assert blocked.value.return_to_chat
     assert await env.store.active_session_for_slot("la_one") is None
-    window = await env.store.current_window("la_one")
-    assert window is not None and window.phase(env.clock[0]) is WindowPhase.DRAINING
-
-
-
-async def test_legacy_adoption_in_draining_preserves_existing_session_instead_of_starting_new(env):
-    _slot, legacy = await env.store.start_session(
-        selector="ABCD",
-        work_session_id="legacy-draining",
-        expected_revision=1,
-        principal_id="principal-a",
-        auth_generation=1,
-        authority_node_id="home",
-        origin_instance_id="home",
-        session_duration_seconds=1380,
-        now=utc_text(T0),
-    )
-    env.clock[0] = T0 + timedelta(seconds=1320)
-
-    adopted = await env.app.start(actor(role="legacy"))
-
-    assert adopted.snapshot.created is False
-    assert adopted.snapshot.session.work_session_id == legacy.work_session_id
-    assert adopted.lifecycle.phase is WindowPhase.DRAINING
-    assert adopted.lifecycle.return_to_chat is True

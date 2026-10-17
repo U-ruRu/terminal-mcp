@@ -1,7 +1,7 @@
-import { expect, test } from 'vitest'
+import { expect,test } from 'vitest'
 
 import type { KeyValueStorage } from '../auth/vault'
-import { BrowserDiagnosticJournal, DIAGNOSTIC_EVENT_LIMIT, diagnosticErrorCode } from './journal'
+import { BrowserDiagnosticJournal,DIAGNOSTIC_EVENT_LIMIT } from './journal'
 
 class MemoryStorage implements KeyValueStorage {
   values = new Map<string, string>()
@@ -10,50 +10,25 @@ class MemoryStorage implements KeyValueStorage {
   removeItem(key: string) { this.values.delete(key) }
 }
 
-test('persists a bounded last-100 diagnostic ring and filters global plus server events', () => {
+test('appending at the journal limit replaces the oldest diagnostic event', () => {
   const storage = new MemoryStorage()
-  let second = 0
-  const journal = new BrowserDiagnosticJournal(storage, () => new Date(1_700_000_000_000 + second++ * 1000))
-  for (let index = 0; index < DIAGNOSTIC_EVENT_LIMIT + 5; index += 1) {
-    journal.append({ type: 'tick', instanceId: index % 2 ? 'a' : 'b', detail: String(index) })
-  }
+  const events = Array.from({ length: DIAGNOSTIC_EVENT_LIMIT }, (_, index) => ({ seq: index + 1, at: '2026-10-01T00:00:00Z', type: 'tick' }))
+  storage.setItem('terminal-mcp.console.diagnostics.v1', JSON.stringify({ version: 1, nextSeq: DIAGNOSTIC_EVENT_LIMIT + 1, events }))
+  const journal = new BrowserDiagnosticJournal(storage)
+
   journal.append({ type: 'app_foreground' })
 
-  const reloaded = new BrowserDiagnosticJournal(storage)
-  expect(reloaded.list()).toHaveLength(100)
-  expect(reloaded.list().at(-1)?.type).toBe('app_foreground')
-  expect(reloaded.list('a').every((event) => !event.instanceId || event.instanceId === 'a')).toBe(true)
+  expect(journal.list()).toHaveLength(DIAGNOSTIC_EVENT_LIMIT)
+  expect(journal.list()[0].seq).toBe(2)
+  expect(journal.list().at(-1)?.type).toBe('app_foreground')
 })
-
-test('records app update boundary and exports readable text without structured secrets', () => {
+test('clearing diagnostics preserves the current app build marker', () => {
   const storage = new MemoryStorage()
-  const journal = new BrowserDiagnosticJournal(storage, () => new Date('2026-09-30T06:00:00Z'))
-  journal.recordApplicationStart('0.2.9', '9')
-  journal.recordApplicationStart('0.2.10', '10')
-  const text = journal.exportText()
-  expect(text).toContain('app_updated')
-  expect(text).toContain('0.2.9 (9) -> 0.2.10 (10)')
-  expect(text).not.toContain('refreshToken')
-})
-
-test('extracts stable diagnostic error codes', () => {
-  expect(diagnosticErrorCode('Cannot resolve host. Diagnostic: dns_error.')).toBe('dns_error')
-  expect(diagnosticErrorCode('network_error')).toBe('network_error')
-  expect(diagnosticErrorCode('long human readable message')).toBeUndefined()
-})
-
-
-test('clear removes only diagnostic events and preserves the app build marker', () => {
-  const storage = new MemoryStorage()
-  const journal = new BrowserDiagnosticJournal(storage, () => new Date('2026-09-30T07:00:00Z'))
-  journal.recordApplicationStart('0.2.8', '10')
-  journal.append({ type: 'network_error', code: 'network_error' })
-  expect(journal.list().length).toBeGreaterThan(0)
+  const journal = new BrowserDiagnosticJournal(storage)
+  journal.recordApplicationStart('0.14.4', '100')
 
   journal.clear()
-  expect(journal.list()).toEqual([])
 
-  journal.recordApplicationStart('0.2.9', '11')
-  expect(journal.list().map((event) => event.type)).toEqual(['app_updated', 'app_started'])
-  expect(journal.exportText()).toContain('0.2.8 (10) -> 0.2.9 (11)')
+  expect(journal.list()).toEqual([])
+  expect(storage.getItem('terminal-mcp.console.last-build.v1')).toBe('0.14.4 (100)')
 })

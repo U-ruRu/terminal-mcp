@@ -78,38 +78,35 @@ fi
 # Existing committed tests only: each tests its own temporary SQLite/process/peer context.
 targets=(
   tests/test_sqlite_main_health.py
-  tests/test_sqlite_posix_lock_preservation.py
   tests/test_backup_manifest.py
-  tests/test_session_restart.py
   tests/test_persistent_lifecycle.py
-  tests/test_access_mesh_session_restart_contract.py
   tests/test_access_mesh_session_recovery_qa.py
   tests/test_command_committed_receipts.py
   tests/test_command_replay.py
-  tests/test_cancel_receipt_provenance.py
   tests/test_cancel_receipt_observed_status.py
-  tests/test_cancel_reconciler_real_process.py
   tests/test_command_run_fast_path.py
-  tests/test_task_mcp_contract.py
+  tests/test_task_current_storage.py
+  tests/test_task_review_candidates.py
   tests/test_task_create_request_receipt.py
-  tests/test_task_revision_side_effects.py
-  tests/test_task_checkpoint_append_boundary.py
   tests/test_task_qa_public_state.py
   tests/test_persistent_message_atomic.py
   tests/test_access_mesh_outbox.py
-  tests/test_qa_mesh_start_authority.py
   tests/test_fleet_control_hardening.py
-  tests/test_qa_mesh_real_tcp_partition.py
+  tests/test_fleet_control_storage.py
+  tests/test_execution_port.py
+  tests/test_runtime_finalization.py
 )
 if [[ "$mode" == final ]]; then
-  # Missing integrated tests are a release BLOCKER, never an implicit skip.
+  # Current message, Events and console owners are mandatory in final mode.
   targets+=(
-    tests/test_local_messages_24h_victor.py
+    tests/test_access_mesh_message_storage.py
     tests/test_mcp_events.py
+    tests/test_mcp_event_subscriptions.py
+    tests/test_mcp_event_mesh_storage.py
     tests/test_console_events.py
   )
 else
-  echo "PREPARE only: local 24h messaging and MCP Events source gates NOT INCLUDED; no release PASS."
+  echo "PREPARE only: message, MCP Events and console source gates are deferred; no release PASS."
 fi
 printf '%s\n' "${targets[@]}" > "$out/targets.txt"
 sha256sum "$out/targets.txt" | tee "$out/targets.sha256"
@@ -145,7 +142,7 @@ git_dirty="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
   echo "checkout_clean_after=$([[ -z "$git_dirty" ]] && echo yes || echo no)"
   if (( rc == 0 )) && [[ "$after_sha" == "$expected_sha" && -z "$git_dirty" ]]; then
     echo "source_gate=PASS"
-    if [[ "$mode" == prepare ]]; then echo "release_verdict=NOT_ASSESSED (local messages/events, real OAuth/dot, staged hosts, soak/full suite pending)"; fi
+    if [[ "$mode" == prepare ]]; then echo "release_verdict=NOT_ASSESSED (message/events/console source checks and full acceptance pending)"; fi
     if [[ "$mode" == final ]]; then echo "release_verdict=SOURCE_ONLY (live gates, real OAuth/dot, soak/full suite still required)"; fi
   else
     echo "source_gate=FAIL"

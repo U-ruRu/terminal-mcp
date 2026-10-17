@@ -1,4 +1,4 @@
-import { expect, test, vi } from 'vitest'
+import { expect,test,vi } from 'vitest'
 import type { RealtimeScheduler } from '../realtime/engine'
 import { FleetAdaptiveLifecycle } from './adaptiveLifecycle'
 
@@ -14,31 +14,36 @@ function runtime() {
   }
 }
 
-test('adaptive lifecycle owns one sync loop and background cancels it', async () => {
-  const timers: Array<() => void> = []
+function scheduledLifecycle() {
+  const queue = new Map<object, () => void>()
   const scheduler: RealtimeScheduler = {
-    setTimeout(callback) { timers.push(callback); return timers.length },
-    clearTimeout: vi.fn(),
+    setTimeout(callback) { const handle = {}; queue.set(handle, callback); return handle },
+    clearTimeout(handle) { queue.delete(handle as object) },
   }
   const value = runtime()
-  const lifecycle = new FleetAdaptiveLifecycle(value as never, () => [], undefined, undefined, scheduler, 1, 2)
+  const lifecycle = new FleetAdaptiveLifecycle(value as never, () => [], undefined, undefined, scheduler)
+  return { queue, value, lifecycle }
+}
+
+test('a scheduled tick syncs once and schedules its next tick', async () => {
+  const { queue, value, lifecycle } = scheduledLifecycle()
   await lifecycle.startAll()
-  expect(value.start).toHaveBeenCalledTimes(1)
-  expect(timers).toHaveLength(1)
-  timers.shift()?.()
-  await vi.waitFor(() => expect(value.syncOnce).toHaveBeenCalledTimes(1))
-  expect(timers).toHaveLength(1)
-  lifecycle.stopAll()
-  expect(value.setBackground).toHaveBeenLastCalledWith(true)
+  const [handle, callback] = queue.entries().next().value!
+  queue.delete(handle)
+
+  callback()
+  await Promise.resolve()
+
+  expect(value.syncOnce).toHaveBeenCalledOnce()
+  expect(queue.size).toBe(1)
 })
 
-test('foreground recovery marks network change and reevaluates', async () => {
-  const value = runtime()
-  const lifecycle = new FleetAdaptiveLifecycle(value as never, () => [])
+test('background suspension cancels the pending sync tick', async () => {
+  const { queue, value, lifecycle } = scheduledLifecycle()
   await lifecycle.startAll()
-  await lifecycle.recoverAll()
-  expect(value.networkChanged).toHaveBeenCalledTimes(1)
-  expect(value.syncOnce).toHaveBeenCalled()
-  expect(value.evaluate).toHaveBeenCalled()
+
   lifecycle.stopAll()
+
+  expect(queue.size).toBe(0)
+  expect(value.setBackground).toHaveBeenLastCalledWith(true)
 })

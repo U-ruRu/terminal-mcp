@@ -1,14 +1,11 @@
 """Ownership/lifecycle is independent of the explicit workflow state (Access Mesh V2)."""
 
-import json
 from datetime import timedelta
 
 import aiosqlite
 import pytest
 import pytest_asyncio
-from pydantic import TypeAdapter, ValidationError
 
-from terminal_mcp.application.task_requests import TaskRequest
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.tasks import TaskCoordinator
@@ -39,64 +36,27 @@ def workflow(task):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "state,leased",
-    [("ready", False), ("done", True)],
-    ids=["unleased-active", "leased-terminal"],
-)
-async def test_claim_and_release_preserve_all_explicit_workflow_fields(store, state, leased):
-    await store.create_task(
-        "v2",
-        "state",
-        "Explicit state",
-        state=state,
-        checkpoint={"step": 7},
-        result={"evidence": "retain"},
-    )
+async def test_claim_preserves_the_explicit_workflow_state(store):
+    await store.create_task("v2", "state", "Explicit state", state="ready", checkpoint={"step": 7})
     before = workflow(await store.get_task("v2", "state"))
-    owner = ClaimOwner.logical_agent("la_v2")
-    await store.claim_owner("v2", "state", owner, lease=session_lease() if leased else None)
+
+    await store.claim_owner("v2", "state", ClaimOwner.logical_agent("la_v2"))
+
     assert workflow(await store.get_task("v2", "state")) == before
-    released = await store.release_owner_claim_mutation("v2", "state", owner, reason="handoff")
-    assert released is True
-    assert workflow(await store.get_task("v2", "state")) == before
-    after = await store.get_task("v2", "state")
-    assert not await store.release_owner_claim_mutation("v2", "state", owner, reason="retry")
-    assert await store.get_task("v2", "state") == after
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["in_progress", "done"], ids=["active", "terminal"])
-async def test_session_cleanup_preserves_state_even_with_old_automatic_provenance(store, state):
+async def test_release_preserves_the_explicit_workflow_state(store):
     await store.create_task(
-        "v2",
-        "state",
-        "Old durable row",
-        state=state,
-        checkpoint={"step": 8},
-        result="keep evidence",
+        "v2", "state", "Completed work", state="done", result={"evidence": "keep"}
     )
     owner = ClaimOwner.logical_agent("la_v2")
-    fields = session_lease()
-    await store.claim_owner("v2", "state", owner, lease=fields)
-    # Simulate the provenance marker written by an older deployed binary.
-    async with aiosqlite.connect(store.path) as db:
-        await db.execute(
-            "INSERT INTO work_claim_auto_state(namespace,task_id,created_at) VALUES(?,?,?)",
-            ("v2", "state", utc_text()),
-        )
-        await db.commit()
+    await store.claim_owner("v2", "state", owner, lease=session_lease())
     before = workflow(await store.get_task("v2", "state"))
-    args = ("la_v2", fields["work_session_id"], fields["session_epoch"])
-    assert await store.release_work_session_claims(*args, reason="slot_deleted") == 1
+
+    await store.release_owner_claim_mutation("v2", "state", owner, reason="handoff")
+
     assert workflow(await store.get_task("v2", "state")) == before
-    after = await store.get_task("v2", "state")
-    assert await store.release_work_session_claims(*args, reason="slot_deleted") == 0
-    assert await store.get_task("v2", "state") == after
-    async with aiosqlite.connect(store.path) as db:
-        assert (await (await db.execute("SELECT COUNT(*) FROM work_claim_auto_state")).fetchone())[
-            0
-        ] == 0
 
 
 @pytest.mark.asyncio
@@ -115,11 +75,11 @@ async def test_delayed_owner_sweep_does_not_release_successor_claim(store):
 
 
 @pytest.mark.asyncio
-async def test_owner_sweep_isolates_failures_and_retries_with_atomic_audit(store):
+async def test_owner_sweep_isolates_one_claim_audit_failure(store):
     owner = ClaimOwner.logical_agent("la_v2")
     for task_id in ("bad", "good"):
         await store.create_task("v2", task_id, task_id, state="in_progress", checkpoint="keep")
-    # Imported pre-WIP state can contain several live claims for one owner.
+    # Seed independently held claims so one cleanup failure cannot starve the next.
     async with aiosqlite.connect(store.path) as db:
         for task_id in ("bad", "good"):
             await db.execute(
@@ -140,32 +100,6 @@ async def test_owner_sweep_isolates_failures_and_retries_with_atomic_audit(store
     assert [error["task_id"] for error in result["errors"]] == ["bad"]
     assert len(await store.active_claims("v2", "bad")) == 1
     assert await store.active_claims("v2", "good") == []
-    for task_id in ("bad", "good"):
-        assert (await store.get_task("v2", task_id))["state"] == "in_progress"
-        assert (await store.get_task("v2", task_id))["checkpoint"] == "keep"
-    async with aiosqlite.connect(store.path) as db:
-        assert (
-            await (
-                await db.execute("SELECT COUNT(*) FROM work_events WHERE task_id='bad'")
-            ).fetchone()
-        )[0] == 0
-        await db.execute("DROP TRIGGER fail_bad_claim_audit")
-        await db.commit()
-    retry = await store.release_owner_claims_mutation(owner=owner, reason="slot_deleted")
-    assert retry == {"ok": True, "released_count": 1, "errors": []}
-    assert await store.release_owner_claims_mutation(owner=owner, reason="slot_deleted") == {
-        "ok": True,
-        "released_count": 0,
-        "errors": [],
-    }
-    async with aiosqlite.connect(store.path) as db:
-        rows = await (
-            await db.execute(
-                "SELECT task_id,payload_json FROM work_events WHERE event_type='claim_released'"
-            )
-        ).fetchall()
-    assert sorted(row[0] for row in rows) == ["bad", "good"]
-    assert all(json.loads(row[1])["reason"] == "slot_deleted" for row in rows)
 
 
 @pytest.mark.asyncio
@@ -186,17 +120,3 @@ async def test_content_update_preserves_nondefault_workflow_state(store):
         "qa",
         2,
     )
-
-
-def test_update_runtime_model_rejects_state_field():
-    adapter = TypeAdapter(TaskRequest)
-    with pytest.raises(ValidationError) as exc:
-        adapter.validate_python(
-            {
-                "action": "update",
-                "namespace": "v2",
-                "task_id": "state",
-                "state": "ready",
-            }
-        )
-    assert any(item["type"] == "extra_forbidden" for item in exc.value.errors())

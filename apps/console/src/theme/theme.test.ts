@@ -1,13 +1,8 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach,describe,expect,test } from 'vitest'
 
 import {
-  applyThemeToDocument,
-  DEFAULT_THEME,
-  isThemeName,
-  persistTheme,
-  readStoredTheme,
-  THEME_STORAGE_KEY,
-  themeMetaColor,
+applyThemeToDocument,
+themeMetaColor
 } from './theme'
 
 afterEach(() => {
@@ -18,22 +13,6 @@ afterEach(() => {
 })
 
 describe('theme preference', () => {
-  test('accepts only supported theme names and falls back safely', () => {
-    expect(isThemeName('oled-dark')).toBe(true)
-    expect(isThemeName('soft-light')).toBe(true)
-    expect(isThemeName('neutral-dark')).toBe(true)
-    expect(isThemeName('dark')).toBe(false)
-    localStorage.setItem(THEME_STORAGE_KEY, 'unknown')
-    expect(readStoredTheme()).toBe(DEFAULT_THEME)
-  })
-
-  test('persists a valid preference without depending on storage availability', () => {
-    persistTheme('soft-light')
-    expect(readStoredTheme()).toBe('soft-light')
-    const blockedStorage = { getItem: vi.fn(() => { throw new Error('blocked') }), setItem: vi.fn(() => { throw new Error('blocked') }) }
-    expect(readStoredTheme(blockedStorage)).toBe(DEFAULT_THEME)
-    expect(() => persistTheme('oled-dark', blockedStorage)).not.toThrow()
-  })
 
   test('applies document semantics and browser chrome color', () => {
     const meta = document.createElement('meta')

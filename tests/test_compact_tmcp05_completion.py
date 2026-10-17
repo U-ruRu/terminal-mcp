@@ -2,6 +2,7 @@
 
 import pytest
 
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
@@ -14,7 +15,9 @@ async def test_blank_archive_note_masks_fallback_note(tmp_path):
     store = TaskStore(repo.path)
     core = TaskCoordinator(store)
     await store.create_task("qa", "archive", "Archive example")
-    await store.claim("qa", "archive", "owner", claim_intent="real intent")
+    await store.claim_owner(
+        "qa", "archive", ClaimOwner.logical_agent("owner"), claim_intent="real intent"
+    )
 
     result = await core._action_archive(
         "owner", "qa", "archive", archive_note="   ", note="valid fallback"
@@ -29,7 +32,11 @@ async def test_candidate_reference_is_frozen_after_completion(tmp_path):
     store = TaskStore(repo.path)
     core = TaskCoordinator(store)
     await store.create_task(
-        "qa", "done", "Completed", state="done", result={"evidence": "ok"},
+        "qa",
+        "done",
+        "Completed",
+        state="done",
+        result={"evidence": "ok"},
         candidate_ref="candidate-done",
     )
     revision = (await store.get_task("qa", "done"))["revision"]

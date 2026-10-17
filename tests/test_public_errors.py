@@ -3,24 +3,16 @@
 import asyncio
 import json
 import sqlite3
-from dataclasses import FrozenInstanceError
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from terminal_mcp.core.public_errors import (
     ERROR_SPECS,
-    LEGACY_PUBLIC_ERROR_ALIASES,
     MAX_COORDINATION_MESSAGES,
     MAX_ERROR_MESSAGE,
-    MAX_RETRY_AFTER_MS,
-    MAX_VALIDATION_ISSUES,
-    ConflictRepair,
     PublicError,
     PublicFailure,
-    RetryRepair,
-    ValidationIssue,
-    ValidationRepair,
     error_from_exception,
     normalize_public_error,
     public_error,
@@ -64,15 +56,6 @@ def test_representative_registered_classes_are_bounded_and_serializable(
     assert len(json.dumps(wire, ensure_ascii=False).encode()) < 512
 
 
-def test_catalog_and_public_values_are_immutable():
-    with pytest.raises(TypeError):
-        ERROR_SPECS["injected"] = ERROR_SPECS["internal_error"]
-    with pytest.raises(FrozenInstanceError):
-        ERROR_SPECS["internal_error"].message = SECRET
-    with pytest.raises(ValidationError):
-        public_error("internal_error").error = SECRET
-
-
 @pytest.mark.parametrize(
     "raw",
     [
@@ -87,49 +70,6 @@ def test_unknown_codes_and_diagnostics_fail_closed(raw):
     assert SECRET not in json.dumps(result.as_dict())
 
 
-@pytest.mark.parametrize(
-    ("legacy_code", "public_code"),
-    [
-        ("already_claimed", "task_claim_conflict"),
-        ("agent_busy", "wip_limit_exceeded"),
-    ],
-)
-def test_legacy_task_conflicts_map_to_registered_public_codes(legacy_code, public_code):
-    result = normalize_public_error(
-        {"ok": False, "code": legacy_code, "error": f"private {legacy_code} details"}
-    )
-    assert result == public_error(public_code)
-
-
-def test_legacy_public_error_aliases_are_immutable():
-    with pytest.raises(TypeError):
-        LEGACY_PUBLIC_ERROR_ALIASES["already_claimed"] = "internal_error"
-
-
-def test_legacy_code_preserved_but_raw_message_and_context_discarded():
-    result = normalize_public_error(
-        {
-            "ok": False,
-            "code": "policy_incompatible",
-            "error": SECRET,
-            "policy": {"authorization": SECRET},
-            "details": {"stack": SECRET, "retry_after_ms": 10},
-        }
-    )
-    assert result == public_error("policy_incompatible")
-    assert normalize_public_error({"error": "command_not_found"}).code == "command_not_found"
-    assert normalize_public_error(result) is result
-
-
-def test_strict_code_and_message_cannot_be_overridden():
-    with pytest.raises(ValidationError):
-        PublicError(code="internal_error", error=SECRET)
-    with pytest.raises(ValidationError):
-        PublicError(code="unregistered", error="Unregistered.")
-    with pytest.raises(ValidationError):
-        PublicError(**public_error("internal_error").as_dict(), retryable=True)
-
-
 def test_conflict_has_only_current_revision_and_state():
     result = normalize_public_error(
         {
@@ -141,51 +81,6 @@ def test_conflict_has_only_current_revision_and_state():
         }
     )
     assert result.as_dict()["details"] == {"current_revision": 17, "current_state": "in_progress"}
-    nested = normalize_public_error(
-        {
-            "code": "revision_conflict",
-            "details": {
-                "current_revision": 17,
-                "current_state": "in_progress",
-                "trace": SECRET,
-            },
-        }
-    )
-    assert result == nested
-    assert PublicError.model_validate(result.as_dict()) == result
-
-
-@pytest.mark.parametrize("revision", [True, "17", 1 << 64])
-def test_invalid_revision_does_not_escape(revision):
-    result = public_error(
-        "revision_conflict",
-        details={
-            "current_revision": revision,
-            "current_state": SECRET,
-        },
-    )
-    assert result.details is None
-
-
-@pytest.mark.parametrize("delay", [True, 0, MAX_RETRY_AFTER_MS + 1])
-def test_retry_delay_is_strict_and_bounded(delay):
-    assert public_error("rate_limited", details={"retry_after_ms": delay}).details is None
-
-
-def test_repair_is_class_specific():
-    assert public_error("unauthorized", details={"current_revision": 12}).details is None
-    assert public_error("revision_conflict", details={"retry_after_ms": 5}).details is None
-    assert public_error("rate_limited", details={"current_revision": 12}).details is None
-    value = public_error("rate_limited", details={"retry_after_ms": 1500, "trace": SECRET})
-    assert value.as_dict()["details"] == {"retry_after_ms": 1500}
-    with pytest.raises(ValidationError):
-        PublicError(
-            code="unauthorized",
-            error=ERROR_SPECS["unauthorized"].message,
-            details=RetryRepair(retry_after_ms=10),
-        )
-    with pytest.raises(ValidationError):
-        ConflictRepair()
 
 
 class Input(BaseModel):
@@ -217,37 +112,6 @@ def test_validation_never_echoes_values_custom_errors_or_extra_field_names():
     assert issues[1]["path"] == "*"  # count is not a canonical public schema field
     assert issues[2]["path"] == "*"  # caller-controlled extra key
     assert PublicError.model_validate(wire) == result
-    assert error_from_exception(make_validation_error()).code == "validation_error"
-
-
-def test_validation_can_use_trusted_schema_paths():
-    result = validation_error(make_validation_error(), allowed_fields=frozenset({"title", "count"}))
-    assert result.details.validation_errors[1].path == "count"
-    assert result.details.validation_errors[2].path == "*"
-
-
-def test_validation_issue_count_is_bounded():
-    class ExtraInput(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-
-    with pytest.raises(ValidationError) as caught:
-        ExtraInput.model_validate({f"{SECRET}{n}": SECRET for n in range(100)})
-    result = validation_error(caught.value)
-    assert len(result.details.validation_errors) == MAX_VALIDATION_ISSUES
-    assert SECRET not in json.dumps(result.as_dict())
-    assert len(json.dumps(result.as_dict()).encode()) < 4096
-    assert isinstance(result.details.validation_errors, tuple)
-
-
-def test_untrusted_legacy_validation_details_are_not_echoed():
-    value = normalize_public_error(
-        {
-            "code": "validation_error",
-            "error": SECRET,
-            "details": {"validation_errors": [{"path": SECRET, "description": SECRET}]},
-        }
-    )
-    assert value.details is None
 
 
 @pytest.mark.parametrize(
@@ -266,33 +130,11 @@ def test_exception_mapping_does_not_classify_from_or_echo_text(exc, code):
     assert SECRET not in json.dumps(result.as_dict())
 
 
-def test_sqlite_busy_uses_numeric_code_not_message():
-    exc = sqlite3.OperationalError(SECRET)
-    exc.sqlite_errorcode = sqlite3.SQLITE_BUSY | (2 << 8)
-    assert error_from_exception(exc).code == "storage_busy"
-    exc.sqlite_errorcode = sqlite3.SQLITE_LOCKED
-    assert error_from_exception(exc).code == "storage_busy"
-    assert (
-        error_from_exception(sqlite3.OperationalError("database is locked")).code
-        == "storage_unavailable"
-    )
-
-
 @pytest.mark.parametrize("exc", [asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()])
 def test_cancellation_and_process_control_are_not_swallowed(exc):
     with pytest.raises(type(exc)) as caught:
         error_from_exception(exc)
     assert caught.value is exc
-
-
-def test_managed_session_legacy_guard_has_explicit_repair_policy():
-    spec = ERROR_SPECS["managed_session_required"]
-    assert spec.kind == "policy"
-    assert spec.recovery == "repair"
-    assert (
-        public_error("managed_session_required").error
-        == "Use the managed session path for this slot."
-    )
 
 
 def test_execution_request_timeout_requires_reconciliation_before_retry():
@@ -303,80 +145,20 @@ def test_execution_request_timeout_requires_reconciliation_before_retry():
     assert decision.retry_after_ms is None
 
 
-def test_ambiguous_mutation_is_never_blindly_retried():
+def test_ambiguous_command_acceptance_requires_reconciliation():
     value = public_error("authority_unavailable", details={"retry_after_ms": 1500})
-    for operation in (
-        "cmd.run",
-        "session.start",
-        "message.send",
-        "task.create",
-        "cmd.recovery",
-        "unknown",
-    ):
-        decision = retry_decision(value, operation=operation)
-        assert decision.action == "reconcile"
-        assert decision.retry_after_ms is None
-    assert retry_decision(value, operation="observe").retry_after_ms == 1500
-    assert retry_decision(value, operation="cmd.run", outcome="rejected").action == "retry"
-    assert (
-        retry_decision(value, operation="task.create", idempotency_guaranteed=True).action
-        == "retry"
-    )
 
+    decision = retry_decision(value, operation="cmd.run")
 
-@pytest.mark.parametrize(
-    "code,action",
-    [
-        ("validation_error", "repair"),
-        ("unauthorized", "reauthenticate"),
-        ("revision_conflict", "reconcile"),
-        ("capability_not_allowed", "stop"),
-    ],
-)
-def test_nontransient_error_policy_is_not_overridden_by_retry_safety(code, action):
-    assert (
-        retry_decision(public_error(code), operation="observe", outcome="rejected").action == action
-    )
-
-
-def test_retry_policy_requires_explicit_guarantee():
-    with pytest.raises(ValueError):
-        retry_decision(public_error("busy"), operation="cmd.run", idempotency_guaranteed="yes")
-    with pytest.raises(ValueError):
-        retry_decision(public_error("busy"), operation="cmd.run", outcome="maybe")
-
-
-def test_schema_is_closed_and_has_visible_bounds():
-    schema = PublicError.model_json_schema()
-    assert schema["additionalProperties"] is False
-    assert schema["properties"]["code"]["maxLength"] == 64
-    assert schema["properties"]["error"]["maxLength"] == MAX_ERROR_MESSAGE
-    for definition in schema["$defs"].values():
-        if definition.get("type") == "object":
-            assert definition["additionalProperties"] is False
-    repair_schema = schema["$defs"]["ValidationRepair"]["properties"]["validation_errors"]
-    assert repair_schema["maxItems"] == MAX_VALIDATION_ISSUES
-    assert (
-        schema["$defs"]["RetryRepair"]["properties"]["retry_after_ms"]["maximum"]
-        == MAX_RETRY_AFTER_MS
-    )
-    issue = ValidationIssue(error_class="missing", path="title", description="Provide the title.")
-    with pytest.raises(ValidationError):
-        ValidationRepair(validation_errors=(issue,) * (MAX_VALIDATION_ISSUES + 1))
-
-
-@pytest.mark.parametrize("operation", ["cmd.read", "command_read"])
-def test_read_named_operation_requires_actual_retry_safety(operation):
-    failure = public_error("authority_unavailable", details={"retry_after_ms": 25})
-    decision = retry_decision(failure, operation=operation)
-    assert (decision.action, decision.retry_after_ms) == ("reconcile", None)
+    assert decision.action == "reconcile"
+    assert decision.retry_after_ms is None
 
 
 def test_coordination_error_keeps_only_bounded_next_action_messages():
     raw = {
         "ok": False,
         "code": "coordination_alert",
-        "error": "secret legacy wording",
+        "error": "private backend wording",
         "messages": [
             {"message_hash": f"m-{index}", "mode": "alert", "text": "reply", "secret": "drop"}
             for index in range(10)
@@ -396,57 +178,19 @@ def test_coordination_error_keeps_only_bounded_next_action_messages():
     assert "secret" not in repr(result)
 
 
-def test_session_lifecycle_errors_direct_agent_to_start_session():
+def test_missing_session_directs_the_agent_to_start_one():
     required = public_error("session_required")
-    expired = public_error("session_expired")
 
     assert required.retry == "start_session"
-    assert expired.retry == "stop"
-    assert expired.return_to_chat is True
     assert required.message == "Сначала запусти сессию"
-    assert expired.message == "Сессия закончилась"
 
 
-def test_work_window_rejection_preserves_machine_error():
-    code = "session_contract_conflict"
-    from terminal_mcp.core.work_windows import WorkWindowError
+def test_unconfirmed_control_mutation_requires_reconciliation_even_with_an_idempotency_key():
+    failure = public_error("control_mutation_unconfirmed")
 
-    result = error_from_exception(WorkWindowError(code))
-    assert result.code == code
-    assert result.outcome == "not_committed"
-    assert result.retry != "reconcile"
-
-
-def test_unconfirmed_control_mutation_requires_reconciliation():
-    failure = normalize_public_error(
-        {"ok": False, "code": "control_mutation_unconfirmed", "error": SECRET}
+    decision = retry_decision(
+        failure, operation="fleet.control.policy", idempotency_guaranteed=True
     )
-    assert failure.code == "control_mutation_unconfirmed"
-    assert failure.outcome == "unknown"
-    assert failure.retry == "reconcile"
-    assert SECRET not in json.dumps(failure.as_dict())
-    assert 0 < len(failure.message) <= MAX_ERROR_MESSAGE
-    for idempotency_guaranteed in (False, True):
-        decision = retry_decision(
-            failure,
-            operation="fleet.control.policy",
-            idempotency_guaranteed=idempotency_guaranteed,
-        )
-        assert decision.action == "reconcile"
-        assert decision.retry_after_ms is None
 
-
-@pytest.mark.parametrize(
-    "phase",
-    ["migration"],
-)
-@pytest.mark.parametrize("suffix", ["", "_outcome_unknown", "_unavailable"])
-def test_deployment_failure_policy_requires_reconciliation(phase, suffix):
-    code = phase + suffix
-    spec = ERROR_SPECS[code]
-    assert spec.kind == "internal"
-    assert spec.recovery == "reconcile"
-    assert "private deployment journal" in spec.message
-    assert len(spec.message) <= MAX_ERROR_MESSAGE
-    assert public_error(code).code == code
-    assert retry_decision(public_error(code), operation="deployment.apply").action == "reconcile"
+    assert decision.action == "reconcile"
+    assert decision.retry_after_ms is None

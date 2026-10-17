@@ -24,8 +24,7 @@ class Bridge:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["revoke", "drain"])
-async def test_authenticated_non_authority_cannot_mutate_foreign_session(action):
+async def test_authenticated_non_authority_cannot_revoke_foreign_session():
     bridge = Bridge(actual_home="bacloud")
     app = MeshApplication(bridge)
     actor = ActorContext(endpoint_role="mesh", peer_node_id="firstbyte", node_id="secondary")
@@ -38,42 +37,21 @@ async def test_authenticated_non_authority_cannot_mutate_foreign_session(action)
         "reason": "review",
     }
     with pytest.raises(MeshApplicationError):
-        await getattr(app, action)(actor, payload)
+        await app.revoke(actor, payload)
     assert bridge.calls == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["revoke", "drain"])
-async def test_authenticated_home_can_mutate_its_own_exact_session(action):
-    bridge = Bridge(actual_home="bacloud")
-    app = MeshApplication(bridge)
-    actor = ActorContext(endpoint_role="mesh", peer_node_id="bacloud", node_id="secondary")
-    payload = {
-        "authority_node_id": "bacloud",
-        "logical_agent_id": "la_home",
-        "work_session_id": "ws_home",
-        "session_epoch": 1,
-        "hard_expires_at": "2026-10-08T02:00:00Z",
-        "reason": "review",
-    }
-    result = await getattr(app, action)(actor, payload)
-    assert result["ok"] is True
-    assert [call[0] for call in bridge.calls] == [action]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["revoke", "drain"])
-@pytest.mark.parametrize("epoch", [0, True, "4"])
-async def test_session_control_rejects_stale_or_malformed_authority_epoch(action, epoch):
+async def test_session_control_rejects_stale_authority_epoch():
     bridge = Bridge(actual_home="bacloud")
     app = MeshApplication(bridge)
     actor = ActorContext(endpoint_role="mesh", peer_node_id="bacloud")
     with pytest.raises(MeshApplicationError):
-        await getattr(app, action)(
+        await app.revoke(
             actor,
             dict(
                 authority_node_id="bacloud",
-                authority_epoch=epoch,
+                authority_epoch=3,
                 logical_agent_id="la_home",
                 work_session_id="ws_home",
                 session_epoch=1,

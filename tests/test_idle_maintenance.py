@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
-from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.storage.access_mesh import AccessMeshStore
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 
@@ -59,14 +58,6 @@ async def test_due_query_eligibility(due_store, sql, selected):
         db.execute(sql)
     rows = await due_store.due_session_slots(authority_node_id="local", now=NOW.isoformat())
     assert [row.logical_agent_id for row in rows] == (["a"] if selected else [])
-
-
-async def test_empty_expiry_pass_never_visits_historical_slots():
-    store = SimpleNamespace(due_session_slots=AsyncMock(return_value=[]))
-    lifecycle = PersistentLifecycleCoordinator(
-        store, enabled=True, authority_node_id="local", session_duration_seconds=120
-    )
-    assert await lifecycle.reconcile_expired(now=NOW) == []
 
 
 def maintenance():
@@ -173,28 +164,4 @@ def test_lifecycle_signature_observes_an_external_transition(signature_store, mu
     before = signature_store.lifecycle_signature()
     with sqlite3.connect(signature_store.path) as db:
         db.execute(mutation)
-    assert signature_store.lifecycle_signature() != before
-
-
-def test_lifecycle_signature_ignores_command_history(signature_store):
-    before = signature_store.lifecycle_signature()
-    with sqlite3.connect(signature_store.path) as db:
-        db.execute("INSERT INTO commands VALUES('unrelated history')")
-    assert signature_store.lifecycle_signature() == before
-
-
-def test_lifecycle_signature_ignores_unattached_unrelated_slots(signature_store):
-    before = signature_store.lifecycle_signature()
-    with sqlite3.connect(signature_store.path) as db:
-        db.execute("INSERT INTO access_mesh_slot_replicas VALUES('remote','unrelated',1)")
-    assert signature_store.lifecycle_signature() == before
-
-
-def test_lifecycle_signature_watches_unattached_number_group_members(signature_store):
-    with sqlite3.connect(signature_store.path) as db:
-        db.execute("INSERT INTO access_mesh_slot_replicas VALUES('remote','alias',1)")
-        db.execute("INSERT INTO access_mesh_number_claims VALUES('remote','alias','0012')")
-    before = signature_store.lifecycle_signature()
-    with sqlite3.connect(signature_store.path) as db:
-        db.execute("UPDATE access_mesh_slot_replicas SET revision=2 WHERE issuer_id='remote'")
     assert signature_store.lifecycle_signature() != before

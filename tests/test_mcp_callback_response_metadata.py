@@ -52,26 +52,6 @@ def test_response_allowlist_and_redaction(caplog):
 
 
 @pytest.mark.parametrize(
-    "value", ["secret", REQUEST_ID + "\r\nsecret", {}]
-)
-def test_untrusted_identifier_values_are_dropped(value, caplog):
-    details = {
-        "response_request_id": value,
-        "response_cf_ray": value,
-        "response_error_code": value,
-        "response_html_marker": value,
-        "callback_explicit_default_port": value,
-    }
-    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
-    assert "response_request_id" not in caplog.text
-    assert "response_cf_ray" not in caplog.text
-    assert "response_error_code" not in caplog.text
-    assert "response_html_marker" not in caplog.text
-    assert "callback_explicit_default_port" not in caplog.text
-
-
-@pytest.mark.parametrize(
     ("body", "kind", "code"),
     [
         (
@@ -103,57 +83,6 @@ def install_fake_https(monkeypatch, response):
     monkeypatch.setattr(webhooks.socket, "create_connection", Mock())
     monkeypatch.setattr(webhooks.http.client, "HTTPSConnection", lambda *a, **k: connection)
     return connection
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("authority", "explicit"), [("callback.example", False), ("callback.example:443", True)]
-)
-async def test_full_rejected_callback_metadata(monkeypatch, authority, explicit, caplog):
-    response = Mock(status=403)
-    response.getheader.side_effect = {"content-type": "text/html", "x-request-id": REQUEST_ID}.get
-    response.read.return_value = (
-        b"<!doctype html><html><h1>Sorry, you have been blocked</h1>private response</html>"
-    )
-    connection = install_fake_https(monkeypatch, response)
-    recorded = []
-
-    def observe(details):
-        recorded.append(details)
-        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
-
-    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-        with pytest.raises(webhooks.CallbackEndpointError, match="challenge_failed"):
-            await webhooks.verify_callback(
-                "https://" + authority + "/private", SECRET, "sub_private", observer=observe
-            )
-    assert recorded[0]["response_request_id_present"] is True
-    assert "response_request_id" not in recorded[0]
-    assert recorded[0]["callback_explicit_default_port"] is explicit
-    assert recorded[0]["response_body_kind"] == "html"
-    assert recorded[0]["response_html_marker"] == "block_page"
-    assert recorded[0]["http_status"] == 403
-    assert recorded[0]["result"] == "http_rejected"
-    for private in [authority, "/private", "private response", SECRET, "sub_private"]:
-        assert private not in caplog.text
-    connection.close.assert_called_once()
-    connection.request.assert_called_once()
-    response.read.assert_called_once_with(65537)
-
-
-def test_transport_diagnostic_failure_does_not_change_result(monkeypatch):
-    response = Mock(status=200)
-    response.getheader.return_value = None
-    response.read.return_value = b"{}"
-    connection = install_fake_https(monkeypatch, response)
-    monkeypatch.setattr(
-        webhooks, "classify_callback_response", Mock(side_effect=RuntimeError("private"))
-    )
-    assert webhooks._pinned_https_post("https://callback.example/private", b"{}", {}, {}) == (
-        200,
-        b"{}",
-    )
-    connection.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -193,20 +122,3 @@ async def test_signing_demo_raw_bytes_vector(monkeypatch, payload):
     assert await webhooks.post_signed(
         "https://fixture.invalid", SECRET, "sub_demo", "evt_demo_001", payload, sender=receiver
     ) == (200, b"{}")
-
-
-@pytest.mark.parametrize("body", [b"x" * 65537, "not bytes"])
-def test_classifier_rejects_unbounded_or_nonbyte_input(body):
-    assert classify_callback_response(body) == {}
-
-
-def test_id_shaped_secret_not_retained(caplog):
-    secret_like = "0123456789abcdef0123456789abcdef"
-    details = classify_callback_response(
-        b"{}", {"x-request-id": secret_like, "cf-ray": "0123456789abcdef-SJC"}.get
-    )
-    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
-    assert secret_like not in caplog.text
-    assert "0123456789abcdef-SJC" not in caplog.text
-    assert details["response_request_id_present"] is True

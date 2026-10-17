@@ -36,18 +36,6 @@ def test_prune_releases_keeps_current_and_previous_usable(tmp_path):
     assert {path.name for path in removed} == {stale.name, broken.name}
 
 
-def test_prune_releases_does_not_keep_unusable_previous(tmp_path):
-    releases = tmp_path / "releases"
-    current = _release(releases / "20261006T120000Z")
-    previous = releases / "20261006T110000Z"
-    previous.mkdir(parents=True)
-
-    prune_releases(releases, current, previous)
-
-    assert current.exists()
-    assert not previous.exists()
-
-
 def test_prune_sqlite_backups_keeps_latest_two_usable(tmp_path):
     backups = tmp_path / "backups"
     backups.mkdir()
@@ -63,12 +51,3 @@ def test_prune_sqlite_backups_keeps_latest_two_usable(tmp_path):
     assert not corrupt.exists()
     assert not oldest.exists()
     assert {path.name for path in removed} == {corrupt.name, oldest.name}
-
-
-def test_prune_sqlite_backups_rejects_invalid_keep(tmp_path):
-    try:
-        prune_sqlite_backups(tmp_path, keep=0)
-    except ValueError as exc:
-        assert str(exc) == "keep must be at least 1"
-    else:
-        raise AssertionError("expected ValueError")

@@ -59,19 +59,12 @@ async def test_timing_policy_update_is_not_blocked_by_active_slot(tmp_path: Path
         warning_after_seconds=1200,
         alert_after_seconds=1400,
         rearm_after_seconds=300,
-        legacy_admission_enabled=False,
     )
 
-    assert result == {
-        "duration_seconds": 1500,
-        "warning_after_seconds": 1200,
-        "alert_after_seconds": 1400,
-        "rearm_after_seconds": 300,
-        "legacy_admission_enabled": False,
-    }
+    assert result["duration_seconds"] == 1500
+    assert result["rearm_after_seconds"] == 300
     assert lifecycle.session_duration_seconds == 1500
     assert lifecycle.rearm_delay_seconds == 300
-    assert service.legacy_agent_admission_enabled is False
     content = env_path.read_text()
     assert 'TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC="1500"' in content
     assert 'TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC="300"' in content

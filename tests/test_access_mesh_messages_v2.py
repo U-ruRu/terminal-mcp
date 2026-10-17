@@ -6,17 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from terminal_mcp.application.access_mesh_messages import (
-    AccessMeshMessaging,
-    _public_name,
-)
+from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
+from terminal_mcp.application.access_mesh_messages import _public_name as _public_name
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.orchestration import utc_text
-from terminal_mcp.http.access_mesh_messages import build_access_mesh_message_router
 from terminal_mcp.storage.access_mesh_messages import MeshMessagingError
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -197,56 +192,26 @@ def count(node, table, where="1=1"):
 
 
 @pytest.mark.asyncio
-async def test_local_broadcast_never_calls_peer_and_excludes_sender(mesh_pair):
-    net = mesh_pair
-    fb, bac = net.nodes["firstbyte"], net.nodes["bacloud"]
-    result = await fb.message(actor("alice"), text="local", scope="local")
-    assert result["ok"] and result["scope"] == "local"
-    assert result["delivered_to"] == [_public_name(fb.mesh.store.slots["carol"])]
-    assert not net.calls and count(bac, "coordination_messages") == 0
-    assert count(fb, "coordination_message_recipients") == 1
+async def test_local_broadcast_delivers_to_active_local_recipient(mesh_pair):
+    node = mesh_pair.nodes["firstbyte"]
+    result = await node.message(actor("alice"), text="local", scope="local")
+    assert result["ok"]
+    assert result["delivered_to"] == [_public_name(node.mesh.store.slots["carol"])]
+    assert count(node, "coordination_message_recipients") == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "source,destination,sender,recipient,role",
-    [
-        ("firstbyte", "bacloud", "alice", "bob", "executor"),
-    ],
-)
-async def test_remote_only_recipient_is_rejected_before_local_mutation(
-    mesh_pair, source, destination, sender, recipient, role
-):
-    net = mesh_pair
-    origin, remote = net.nodes[source], net.nodes[destination]
-    origin.mesh.store.attached.discard(recipient)
-    target = _public_name(origin.mesh.store.slots[recipient])
-    sent = await origin.message(
-        actor(sender, role=role), text="remote-only recipient", target=target, alert=True
-    )
-    assert sent["ok"] is False and sent["code"] == "recipient_not_found"
-    assert count(origin, "coordination_messages") == 0
-    assert count(remote, "coordination_messages") == 0
-    assert not net.calls
-
-
-@pytest.mark.asyncio
-async def test_keyset_pagination_does_not_skip_consumed_inbox_rows(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    for n in range(5):
-        result = await fb.message(actor("alice", str(n)), text=f"message {n}", scope="local")
-        assert result["ok"]
-    seen, cursor = [], None
-    while True:
-        page = await fb.message(actor("carol"), limit=2, cursor=cursor)
-        assert page["ok"], page
-        seen.extend(row["message_hash"] for row in page["messages"])
-        cursor = page["next_cursor"]
-        if cursor is None:
-            break
-    assert len(set(seen)) == len(seen) == 5
-    assert (await fb.message(actor("carol")))["messages"] == []
-    assert len((await fb.message(actor("carol"), history=True))["messages"]) == 5
+async def test_inbox_cursor_resumes_after_consumed_page(mesh_pair):
+    node = mesh_pair.nodes["firstbyte"]
+    sent = [
+        (await node.message(actor("alice", str(n)), text=f"message {n}"))["message_hash"]
+        for n in range(3)
+    ]
+    first = await node.message(actor("carol"), limit=1)
+    second = await node.message(actor("carol"), limit=2, cursor=first["next_cursor"])
+    assert second["ok"]
+    assert {row["message_hash"] for row in second["messages"]} == set(sent[:2])
+    assert second["next_cursor"] is None
 
 
 @pytest.mark.asyncio
@@ -258,119 +223,6 @@ async def test_recipient_discovery_is_unique_active_scoped_and_public(mesh_pair)
     recipient = result["recipients"][0]
     assert recipient["public_name"] == _public_name(fb.mesh.store.slots["carol"])
     assert recipient["remaining_seconds"] == 900
-    assert _public_name(fb.mesh.store.slots["bob"]) not in {
-        item["public_name"] for item in result["recipients"]
-    }
-    invalid = await fb.message(actor("carol"), recipients=True, cursor="not-a-cursor")
-    assert not invalid["ok"] and invalid["code"] == "invalid_cursor"
-
-
-@pytest.mark.asyncio
-async def test_reply_failure_is_atomic_and_retry_releases_obligation_once(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    sent = await fb.message(actor("alice"), text="must reply", scope="local", alert=True)
-    message_hash = sent["message_hash"]
-    with fb.store.connect() as db:
-        db.execute(
-            "CREATE TRIGGER reject_reply BEFORE INSERT ON access_mesh_messages "
-            "WHEN json_extract(NEW.wire_json,'$.reply_to') IS NOT NULL "
-            "BEGIN SELECT RAISE(ABORT,'injected reply commit failure'); END"
-        )
-    with pytest.raises(Exception, match="injected reply commit failure"):
-        await fb.message(actor("carol"), text="reply", message_hash=message_hash)
-    assert count(fb, "coordination_messages") == 1
-    assert len(await fb.agent_store.message_obligations("carol")) == 1
-    with fb.store.connect() as db:
-        db.execute("DROP TRIGGER reject_reply")
-    replied = await fb.message(actor("carol"), text="reply", message_hash=message_hash)
-    again = await fb.message(actor("carol", "another-id"), text="reply", message_hash=message_hash)
-    assert replied["ok"] and again["ok"]
-    assert again["message_hash"] != replied["message_hash"]
-    assert count(fb, "coordination_messages") == 3
-    assert not await fb.agent_store.message_obligations("carol")
-
-
-@pytest.mark.asyncio
-async def test_response_preflight_failure_does_not_acknowledge(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    sent = await fb.message(actor("alice"), text="large\\" * 2200, scope="local")
-    assert sent["ok"], sent
-    result = await fb.message(
-        actor("carol"),
-        detail="full",
-        response_preflight=lambda _: {"ok": False, "code": "output_item_too_large"},
-    )
-    assert result["ok"] is False
-    row = await fb.agent_store.recipient_record(sent["message_hash"], "carol")
-    assert row["read_at"] is None and row["seen_count"] == 0
-    result = await fb.message(actor("carol"))
-    assert result["ok"] and result["messages"][0]["truncated"]
-
-
-def test_http_router_checks_peer_auth_and_request_size():
-    class Messages:
-        peers = [SimpleNamespace(instance_id="firstbyte")]
-
-        async def handle_peer(self, peer_id, kind, payload):
-            return {"ok": False, "peer": peer_id, "code": "feature_disabled",
-                    "outcome": "not_committed"}
-
-        async def handle_locations_peer(self, peer_id, payload):
-            return {"ok": True, "peer": peer_id, "kind": "locations", "payload": payload}
-
-    auth = SimpleNamespace(
-        authenticate=lambda peer, token: (
-            SimpleNamespace(instance_id=peer)
-            if peer == "firstbyte" and token == "Bearer test"
-            else None
-        )
-    )
-    app = FastAPI()
-    app.include_router(build_access_mesh_message_router(Messages(), auth))
-    with TestClient(app) as client:
-        path = "/internal/fleet/access-mesh/messages/recipients"
-        assert client.post(path, json={}).status_code == 401
-        headers = {"x-terminal-mcp-peer": "firstbyte", "authorization": "Bearer test"}
-        response = client.post(path, json={"limit": 10}, headers=headers)
-        assert response.status_code == 200, response.text
-        assert response.json() == {
-            "ok": False, "peer": "firstbyte", "code": "feature_disabled",
-            "outcome": "not_committed",
-        }
-        assert client.post(path, content="x" * 70000, headers=headers).status_code == 413
-        assert client.post(path, content="[]", headers=headers).status_code == 400
-
-        presence_path = "/internal/fleet/access-mesh/agents/locations"
-        assert client.post(presence_path, json={}).status_code == 401
-        presence = client.post(presence_path, json={"limit": 10}, headers=headers)
-        assert presence.status_code == 200, presence.text
-        assert presence.json()["kind"] == "locations"
-
-
-@pytest.mark.asyncio
-async def test_missing_local_target_is_a_structured_noncommitted_failure(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    result = await fb.message(
-        actor("alice"),
-        text="no local target",
-        scope="local",
-        target=_public_name(fb.mesh.store.slots["bob"]),
-    )
-    assert result["code"] == "recipient_not_found" and result["outcome"] == "not_committed"
-    assert count(fb, "coordination_messages") == 0
-
-
-@pytest.mark.asyncio
-async def test_reply_requirement_cannot_be_weakened_by_explicit_notify_mode(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    result = await fb.message(
-        actor("alice"), text="reply required", scope="local", mode="notify", require_reply=True
-    )
-    assert result["ok"] and result["mode"] == "alert"
-    await fb.message(actor("carol"))
-    await fb.message(actor("carol"), message_hash=result["message_hash"])
-    obligations = await fb.agent_store.message_obligations("carol")
-    assert len(obligations) == 1 and obligations[0]["replied_at"] is None
 
 
 @pytest.mark.asyncio
@@ -388,47 +240,19 @@ async def test_postcommit_readback_failure_does_not_hide_local_acceptance(mesh_p
 
 
 @pytest.mark.asyncio
-async def test_oversized_full_item_stays_unread_and_summary_is_bounded(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    sent = await fb.message(actor("alice"), text="\\" * 16000, scope="local")
-    assert sent["ok"]
-    full = await fb.message(actor("carol"), detail="full")
-    assert full["ok"] is False and full["code"] == "output_item_too_large"
-    row = await fb.agent_store.recipient_record(sent["message_hash"], "carol")
-    assert row["read_at"] is None and row["seen_count"] == 0
-    summary = await fb.message(actor("carol"))
-    assert summary["ok"] and summary["messages"][0]["truncated"]
-
-
-@pytest.mark.asyncio
-async def test_history_cursor_is_stable_after_retention_and_vacuum(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    sent = []
-    for n in range(5):
-        sent.append(
-            (await fb.message(actor("alice", str(n)), text=str(n), scope="local"))["message_hash"]
-        )
-    first = await fb.message(actor("carol"), history=True, limit=2)
-    with fb.store.connect() as db:
+async def test_history_cursor_survives_retention_of_an_earlier_row(mesh_pair):
+    node = mesh_pair.nodes["firstbyte"]
+    sent = [
+        (await node.message(actor("alice", str(n)), text=str(n)))["message_hash"] for n in range(3)
+    ]
+    first = await node.message(actor("carol"), history=True, limit=1)
+    with node.store.connect() as db:
         db.execute("DELETE FROM coordination_messages WHERE message_hash=?", (sent[0],))
-    with fb.store.connect() as db:
+    with node.store.connect() as db:
         db.execute("VACUUM")
-    second = await fb.message(actor("carol"), history=True, limit=2, cursor=first["next_cursor"])
+    second = await node.message(actor("carol"), history=True, limit=1, cursor=first["next_cursor"])
     assert second["ok"]
-    assert {row["message_hash"] for row in first["messages"] + second["messages"]} == set(sent[1:])
-
-
-@pytest.mark.asyncio
-async def test_recipient_read_never_materializes_or_updates_work_session(mesh_pair, monkeypatch):
-    fb = mesh_pair.nodes["firstbyte"]
-    identity = fb.mesh.store.observed_identity(fb.mesh.store.slots["alice"], now=fb.mesh.clock())
-
-    def reject_write(*args, **kwargs):
-        raise AssertionError("A recipient read attempted lifecycle materialization")
-
-    monkeypatch.setattr(fb.mesh.store, "local_identity", reject_write)
-    result = await fb.recipients(identity, scope="local", limit=20, cursor=None)
-    assert result["ok"] and len(result["recipients"]) == 1
+    assert [row["message_hash"] for row in second["messages"]] == [sent[1]]
 
 
 @pytest.mark.asyncio

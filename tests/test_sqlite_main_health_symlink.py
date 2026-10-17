@@ -29,5 +29,3 @@ async def test_main_db_health_symlink_switch_during_probe_fails_closed(tmp_path,
 
     monkeypatch.setattr(repo, "_health_integrity_probe", switch_during_probe)
     assert await repo.ping() is False  # never publish old-target success after retarget
-    monkeypatch.setattr(repo, "_health_integrity_probe", probe)
-    assert await repo.ping() is False

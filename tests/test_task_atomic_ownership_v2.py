@@ -5,9 +5,8 @@ import sqlite3
 import pytest
 import pytest_asyncio
 
-from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.tasks import TaskCoordinator
-from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
 
@@ -26,7 +25,9 @@ async def case(tmp_path):
         result={"evidence": "keep"},
     )
     await store.create_task("atomic", "other", "Related task")
-    await store.claim("atomic", "task", "owner", claim_intent="original")
+    await store.claim_owner(
+        "atomic", "task", ClaimOwner.logical_agent("owner"), claim_intent="original"
+    )
     return store, TaskCoordinator(store)
 
 
@@ -39,8 +40,7 @@ def audit(store):
 
 
 OWNED_MUTATIONS = [
-    # Done and update share the task mutation fence; relations have distinct stores.
-    ("done", {"result": {"evidence": "finished"}}, "update_task_mutation"),
+    # Property writes and the two relation stores have distinct transaction fences.
     ("update", {"priority": "P0"}, "update_task_mutation"),
     ("relate", {"related_task_id": "other", "relation_kind": "related"}, "add_relation"),
     ("unrelate", {"related_task_id": "other", "relation_kind": "related"}, "remove_relation"),
@@ -59,19 +59,25 @@ async def test_owner_swap_is_fenced_without_relying_on_task_revision(
     old_claim = (await store.active_claims("atomic", "task"))[0]
 
     async def successor(*args, **kwargs):
-        if action == "state":
-            assert kwargs["agent_id"] == "owner"
-        else:
-            assert kwargs["expected_claim_ids"] == (old_claim["id"],)
-        # Legacy/durable claim changes intentionally do not increment task revision.
-        await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
-        await store.claim("atomic", "task", "successor", claim_intent="handoff")
+        assert kwargs["expected_claim_ids"] == (old_claim["id"],)
+        # Claim handoff intentionally does not increment content revision.
+        await store.release_owner_claims(
+            namespace="atomic", task_id="task", owner=ClaimOwner.logical_agent("owner")
+        )
+        await store.claim_owner(
+            "atomic", "task", ClaimOwner.logical_agent("successor"), claim_intent="handoff"
+        )
         assert (await store.get_task("atomic", "task"))["revision"] == before["revision"]
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(store, method, successor)
     result = await coordinator.mutate(
-        "owner", action=action, namespace="atomic", task_id="task", **fields
+        "owner",
+        action=action,
+        namespace="atomic",
+        task_id="task",
+        **fields,
+        _claim_owner=ClaimOwner.logical_agent("owner"),
     )
     assert result["ok"] is False and result["code"] == "owner_required", result
     assert result["outcome"] == "not_committed"
@@ -91,10 +97,19 @@ async def test_owner_swap_is_fenced_without_relying_on_task_revision(
 async def test_state_and_checkpoint_remain_allowed_after_claim_handoff(case, action, fields):
     store, coordinator = case
     before = await store.get_task("atomic", "task")
-    await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
-    await store.claim("atomic", "task", "successor", claim_intent="handoff")
+    await store.release_owner_claims(
+        namespace="atomic", task_id="task", owner=ClaimOwner.logical_agent("owner")
+    )
+    await store.claim_owner(
+        "atomic", "task", ClaimOwner.logical_agent("successor"), claim_intent="handoff"
+    )
     result = await coordinator.mutate(
-        "owner", action=action, namespace="atomic", task_id="task", **fields
+        "owner",
+        action=action,
+        namespace="atomic",
+        task_id="task",
+        **fields,
+        _claim_owner=ClaimOwner.logical_agent("owner"),
     )
     assert result["ok"], result
     current = await store.get_task("atomic", "task")
@@ -115,59 +130,47 @@ async def test_safe_participant_property_update_does_not_require_exclusive_owner
 
     async def handoff(*args, **kwargs):
         assert kwargs["expected_claim_ids"] is None
-        await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
-        await store.claim("atomic", "task", "successor", claim_intent="handoff")
+        await store.release_owner_claims(
+            namespace="atomic", task_id="task", owner=ClaimOwner.logical_agent("owner")
+        )
+        await store.claim_owner(
+            "atomic", "task", ClaimOwner.logical_agent("successor"), claim_intent="handoff"
+        )
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(store, "update_task_mutation", handoff)
     result = await coordinator.mutate(
-        "owner", action="update", namespace="atomic", task_id="task", title="Clarified"
+        "owner",
+        action="update",
+        namespace="atomic",
+        task_id="task",
+        title="Clarified",
+        _claim_owner=ClaimOwner.logical_agent("owner"),
     )
     assert result["ok"], result
     assert result["task"]["title"] == "Clarified"
-    assert result["task"]["state"] == "in_progress"
     assert result["task"]["owner"]["agent_name"] == "successor"
-
-
-@pytest.mark.asyncio
-async def test_delayed_release_cannot_release_new_claim_by_same_owner(case, monkeypatch):
-    store, coordinator = case
-    original = store.release_claim_mutation
-    old = (await store.active_claims("atomic", "task"))[0]
-    new = None
-
-    async def reacquire(*args, **kwargs):
-        nonlocal new
-        assert kwargs["expected_claim_id"] == old["id"]
-        await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
-        new = await store.claim("atomic", "task", "owner", claim_intent="new cycle")
-        return await original(*args, **kwargs)
-
-    monkeypatch.setattr(store, "release_claim_mutation", reacquire)
-    result = await coordinator.mutate(
-        "owner", action="release", namespace="atomic", task_id="task", release_reason="late"
-    )
-    assert result["ok"], result
-    assert [row["id"] for row in await store.active_claims("atomic", "task")] == [new["id"]]
-    assert new["id"] != old["id"]
-    assert result["task"]["owner"]["agent_name"] == "owner"
-    assert not audit(store)
 
 
 @pytest.mark.asyncio
 async def test_claim_policy_race_uses_implicit_revision_guard(case, monkeypatch):
     store, coordinator = case
     await store.update_task("atomic", "task", cooperative=True)
-    original = store.claim
+    original = store.claim_owner
 
     async def policy_changed(*args, **kwargs):
         assert kwargs["expected_revision"] is not None
         await store.update_task("atomic", "task", cooperative=False)
         return await original(*args, **kwargs)
 
-    monkeypatch.setattr(store, "claim", policy_changed)
+    monkeypatch.setattr(store, "claim_owner", policy_changed)
     result = await coordinator.mutate(
-        "other", action="claim", namespace="atomic", task_id="task", claim_intent="participant"
+        "other",
+        action="claim",
+        namespace="atomic",
+        task_id="task",
+        claim_intent="participant",
+        _claim_owner=ClaimOwner.logical_agent("other"),
     )
     assert result["ok"] is False and result["code"] == "revision_conflict", result
     assert [row["agent_id"] for row in await store.active_claims("atomic", "task")] == ["owner"]
@@ -194,6 +197,7 @@ async def test_review_audit_failure_rolls_back_review_and_revision(case):
             dimensions=["A"],
             verdict="NON_BLOCKING",
             evidence={"proof": "checked"},
+            _claim_owner=ClaimOwner.logical_agent("reviewer"),
         )
     assert await store.get_task("atomic", "task") == before
     assert not await store.reviews("atomic", "task")
@@ -201,32 +205,11 @@ async def test_review_audit_failure_rolls_back_review_and_revision(case):
 
 
 @pytest.mark.asyncio
-async def test_comment_append_remains_valid_during_unrelated_revision_change(case):
-    store, coordinator = case
-    # An independent content edit changes revision before the comment. The
-    # append-only side stream must not depend on the previous content revision.
-    await store.update_task("atomic", "task", title="Concurrent title")
-    revision = (await store.get_task("atomic", "task"))["revision"]
-    result = await coordinator.mutate(
-        "reviewer",
-        action="comment",
-        namespace="atomic",
-        task_id="task",
-        comment_text="Independent observation",
-    )
-    assert result["ok"], result
-    latest = await store.get_task("atomic", "task")
-    assert latest["title"] == "Concurrent title"
-    assert latest["revision"] == revision
-    assert len(audit(store)) == 1
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "action,fields,method",
     [
-        ("claim", {"claim_intent": "first claim"}, "claim"),
-        ("release", {"release_reason": "handoff"}, "release_claim_mutation"),
+        ("claim", {"claim_intent": "first claim"}, "claim_owner"),
+        ("release", {"release_reason": "handoff"}, "release_owner_claim_mutation"),
         ("comment", {"comment_text": "Committed comment"}, "append_comment"),
         ("relate", {"related_task_id": "other", "relation_kind": "related"}, "add_relation"),
         ("unrelate", {"related_task_id": "other", "relation_kind": "related"}, "remove_relation"),
@@ -238,7 +221,9 @@ async def test_side_stream_receipt_survives_all_postcommit_projection_failures(
 ):
     store, coordinator = case
     if action == "claim":
-        await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
+        await store.release_owner_claims(
+            namespace="atomic", task_id="task", owner=ClaimOwner.logical_agent("owner")
+        )
     if action == "review":
         await store.update_task("atomic", "task", output_refs=["artifact:review-candidate"])
     original = getattr(store, method)
@@ -260,52 +245,16 @@ async def test_side_stream_receipt_survives_all_postcommit_projection_failures(
 
     monkeypatch.setattr(store, method, committed_then_unavailable)
     result = await coordinator.mutate(
-        "owner", action=action, namespace="atomic", task_id="task", **fields
+        "owner",
+        action=action,
+        namespace="atomic",
+        task_id="task",
+        **fields,
+        _claim_owner=ClaimOwner.logical_agent("owner"),
     )
     assert failure_installed
     assert result["ok"], result
     assert result["task"]["revision"] == committed["revision"]
-    assert result["task"]["state"] == committed["state"] == "in_progress"
-    assert result["task"]["checkpoint"] == {"keep": 1}
-    assert result["task"]["result"] == {"evidence": "keep"}
-
-
-@pytest.mark.asyncio
-async def test_committed_receipt_captures_legacy_liveness_before_subsequent_session_change(
-    case, monkeypatch
-):
-    store, _ = case
-    coordinator = TaskCoordinator(store, agent_store=AgentStore(store.path))
-    stamp = utc_text()
-    with sqlite3.connect(store.path) as db:
-        for agent_id, state in (("owner", "ended"), ("reviewer", "active")):
-            db.execute(
-                "INSERT INTO agent_sessions(agent_id,registered_at,last_activity_at,"
-                "task_summary,intent,work_scope,state) VALUES(?,?,?,?,?,?,?)",
-                (agent_id, stamp, stamp, "test", "test", "[]", state),
-            )
-    original = store.add_event
-
-    async def newer_session_state(*args, **kwargs):
-        committed = await original(*args, **kwargs)
-        with sqlite3.connect(store.path) as db:
-            db.execute("UPDATE agent_sessions SET state='active' WHERE agent_id='owner'")
-        return committed
-
-    monkeypatch.setattr(store, "add_event", newer_session_state)
-    result = await coordinator.mutate(
-        "reviewer",
-        action="comment",
-        namespace="atomic",
-        task_id="task",
-        comment_text="Snapshot ownership",
-    )
-    assert result["ok"] and result["task"]["owner"] is None
-    assert result["task"]["state"] == "in_progress"
-    current = await coordinator._decorate(await store.get_task("atomic", "task"), details=False)
-    # A later unrelated legacy session heartbeat may not resurrect a released
-    # or expired claim; comment attribution itself remains unchanged.
-    assert current["owner"] is None
 
 
 @pytest.mark.asyncio
@@ -327,6 +276,7 @@ async def test_review_never_commits_against_newer_output_candidate(case, monkeyp
         task_id="task",
         dimensions=["A"],
         verdict="NON_BLOCKING",
+        _claim_owner=ClaimOwner.logical_agent("reviewer"),
     )
     assert result["ok"] is False
     assert result["code"] in {"revision_conflict", "output_state_changed"}

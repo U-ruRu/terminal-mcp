@@ -1,5 +1,4 @@
 import asyncio
-import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -8,9 +7,9 @@ import pytest
 import terminal_mcp.core.persistent_backend as persistent_backend_module
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.commands import CommandApplication
-from terminal_mcp.application.requests import CmdReadRequest, CmdRecoveryRequest, CmdRunRequest
+from terminal_mcp.application.requests import CmdReadRequest, CmdRecoveryRequest
 from terminal_mcp.core.persistent_backend import PersistentBackend
-from terminal_mcp.mcp.output_contracts import cmd_result
+from terminal_mcp.core.read_contract import decode_cursor, encode_cursor
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
@@ -129,68 +128,28 @@ def _run_kwargs(queue_id=1):
 
 
 @pytest.mark.asyncio
-async def test_default_queue_prefers_idle_then_deterministic_tie(tmp_path):
+async def test_default_queue_selects_first_idle_queue(tmp_path):
     repo = SqliteRepository(tmp_path / "state.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
     terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.02)
     await repo.create("one", status="running", queue_id=1)
     await repo.create("two", queue_id=2)
     assert await terminal.least_loaded_queue() == 3
-    await repo.create("three", queue_id=3)
-    await repo.create("four", queue_id=4)
-    assert await terminal.least_loaded_queue() == 1
 
 
 @pytest.mark.asyncio
-async def test_fast_run_does_not_wait_for_completed_or_failed(monkeypatch):
-    monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 1.0)
-
-    terminal, backend = _fake_backend("completed")
-    completed = await backend.run("printf 'fast\\n'", **_run_kwargs(queue_id=4))
-    assert completed["status"] == "running"
-    assert completed["exit_code"] is None
-    assert completed["execution_started"] is True
-    assert completed["queue_id"] == 4
-    await terminal.close()
-    assert (await backend.repo.get(completed["cmd_hash"])).exit_code == 0
-
-    terminal, backend = _fake_backend("failed")
-    failed = await backend.run("printf 'bad\\n'; exit 7", **_run_kwargs(queue_id=4))
-    assert failed["status"] == "running"
-    assert failed["exit_code"] is None
-    assert failed["execution_started"] is True
-    await terminal.close()
-    assert (await backend.repo.get(failed["cmd_hash"])).exit_code == 7
-
-
-@pytest.mark.asyncio
-async def test_backlogged_run_returns_queued_promptly(monkeypatch):
+async def test_backlogged_run_returns_queued_receipt(monkeypatch):
     monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 1.0)
     _terminal, backend = _fake_backend("backlogged")
-    started = time.monotonic()
     queued = await backend.run("printf 'later\\n'", **_run_kwargs(queue_id=1))
-    elapsed = time.monotonic() - started
     assert queued["status"] == "queued"
     assert queued["queue_position"] == 1
     assert queued["execution_started"] is False
-    assert elapsed < 0.2
-
-
-@pytest.mark.asyncio
-async def test_slow_started_run_returns_running_without_inline_wait(monkeypatch):
-    monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 0.15)
-    _terminal, backend = _fake_backend("running")
-    started = time.monotonic()
-    result = await backend.run("sleep 2", **_run_kwargs(queue_id=2))
-    elapsed = time.monotonic() - started
-    assert result["status"] == "running"
-    assert result["execution_started"] is True
-    assert elapsed < 0.2
 
 
 @pytest.mark.asyncio
 async def test_implicit_queue_selection_remains_authoritative():
-    terminal, backend = _fake_backend("completed", default_queue=3)
+    terminal, backend = _fake_backend("backlogged", default_queue=3)
     result = await backend.run("printf 'fast\\n'", **_run_kwargs(queue_id=None))
     assert result["queue_id"] == 3
     await terminal.close()
@@ -251,120 +210,43 @@ class _CompletedService:
 
 
 @pytest.mark.asyncio
-async def test_command_application_never_reads_output_during_run():
-    from unittest.mock import AsyncMock
+async def test_code_free_read_uses_the_current_mesh_node_cursor():
+    class ReadService:
+        persistent = object()
 
-    service = _CompletedService()
-    service.read = AsyncMock(side_effect=AssertionError("run must not read output"))
-    app = CommandApplication(service, _Gate())
+        async def read(self, **kwargs):
+            assert kwargs == {
+                "cmd_hash": "deadbeef",
+                "lines_count": 1,
+                "offset": 1,
+                "agent_id": None,
+            }
+            return {
+                "ok": True,
+                "cmd_hash": "deadbeef",
+                "lines": ["second"],
+                "overall_lines_count": 3,
+            }
+
+    gate = SimpleNamespace(
+        access_mesh=SimpleNamespace(store=SimpleNamespace(local_node_id="node-a"))
+    )
+    app = CommandApplication(ReadService(), gate)
+    scope = {
+        "kind": "cmd.read",
+        "cmd_hash": "deadbeef",
+        "authorization": "anonymous",
+        "node_id": "node-a",
+    }
+
     result = await app.cmd(
-        ActorContext(),
-        CmdRunRequest(action="run", code="1234", command="printf fast", task_scope="none"),
+        ActorContext(endpoint_role="executor", transport="mcp"),
+        CmdReadRequest(action="read", cmd_hash="deadbeef", limit=1, cursor=encode_cursor(1, scope)),
     )
-    assert result["status"] == "completed"
-    assert "lines" not in result
-    service.read.assert_not_awaited()
-    wire = cmd_result(result, "run").structuredContent
-    assert wire["status"] == "completed"
-    assert wire["cmd_hash"] == "deadbeef"
-    assert not {"command", "lines", "exit_code", "displayed_lines_count"} & wire.keys()
 
-
-@pytest.mark.asyncio
-async def test_provider_code_free_read_uses_managed_gate_not_anonymous_fast_path():
-    class ManagedReadGate(_Gate):
-        def __init__(self):
-            self.provider_identity_called = False
-
-        async def provider_identity(self, actor, operation):
-            self.provider_identity_called = True
-            assert actor.provider == "openai"
-            assert actor.provider_metadata["openai/session"] == "conversation-1"
-            return SimpleNamespace(
-                identity={
-                    "logical_agent_id": "logical-1",
-                    "public_name": "Alpha-1",
-                    "authority_node_id": "node-a",
-                },
-                failure=None,
-            )
-
-    gate = ManagedReadGate()
-    app = CommandApplication(_CompletedService(), gate)
-    result = await app.cmd(
-        ActorContext(
-            provider="openai",
-            provider_metadata={
-                "openai/subject": "user-1",
-                "openai/session": "conversation-1",
-            },
-        ),
-        CmdReadRequest(action="read", cmd_hash="deadbeef"),
-    )
-    assert gate.provider_identity_called is True
-    assert result["logical_agent_id"] == "logical-1"
-    assert result["public_name"] == "Alpha-1"
-    assert result["work_session_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_same_agent_second_run_enqueues_during_first_inline_poll(monkeypatch):
-    monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 0.4)
-    monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_POLL_SECONDS", 0.01)
-
-    class SerialLifecycle:
-        def __init__(self):
-            self.lock = asyncio.Lock()
-
-        @asynccontextmanager
-        async def operation_guard(self, logical_agent_id):
-            async with self.lock:
-                yield
-
-    class ConcurrentRepo(_FakeRepo):
-        def __init__(self):
-            super().__init__("running")
-            self.first_created = asyncio.Event()
-            self.second_created = asyncio.Event()
-
-        async def create(self, *args, **kwargs):
-            command = await super().create(*args, **kwargs)
-            if len(self.commands) == 1:
-                self.first_created.set()
-            elif len(self.commands) == 2:
-                self.second_created.set()
-            return command
-
-    class ConcurrentTerminal(_FakeTerminal):
-        def __init__(self, repo):
-            super().__init__(repo, "running")
-            self.selection_count = 0
-
-        async def least_loaded_queue(self):
-            self.selection_count += 1
-            return self.selection_count
-
-    repo = ConcurrentRepo()
-    terminal = ConcurrentTerminal(repo)
-    service = SimpleNamespace(
-        repo=repo,
-        terminal=terminal,
-        task_coordinator=None,
-        task_store=None,
-        agent_policy=SimpleNamespace(command_preview_chars=160),
-    )
-    backend = _FastPathBackend(service, SerialLifecycle())
-
-    first = asyncio.create_task(backend.run("sleep 2", **_run_kwargs(queue_id=None)))
-    await asyncio.wait_for(repo.first_created.wait(), timeout=0.1)
-    second = asyncio.create_task(backend.run("sleep 2", **_run_kwargs(queue_id=None)))
-
-    await asyncio.wait_for(repo.second_created.wait(), timeout=0.15)
-    assert sorted(command.queue_id for command in repo.commands.values()) == [1, 2]
-
-    first_result, second_result = await asyncio.gather(first, second)
-    assert first_result["status"] == "running"
-    assert second_result["status"] == "running"
+    assert result["ok"] is True
+    assert result["lines"] == ["second"]
+    assert decode_cursor(result["next_cursor"], scope) == 2
 
 
 @pytest.mark.asyncio

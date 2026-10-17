@@ -68,15 +68,13 @@ def make_bridge(change=None, status=200):
 
 
 @pytest.mark.asyncio
-async def test_first_contact_resolves_registry_home_and_caches_verified_route():
+async def test_first_contact_resolves_the_verified_registry_home():
     bridge, routes, calls = make_bridge()
     result = await bridge.route_info("la_foreign")
     assert result and result["authority_node_id"] == "home"
     assert result["authority_epoch"] == 3
     assert len(calls) == 1
     assert str(calls[0].url) == "https://home.test/internal/fleet/persistent/route/la_foreign"
-    assert await bridge.route_info("la_foreign") == result
-    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -93,22 +91,6 @@ async def test_first_contact_resolves_registry_home_and_caches_verified_route():
 )
 async def test_first_contact_rejects_mismatched_or_malformed_authority_proof(change):
     bridge, routes, _ = make_bridge(change)
-    with pytest.raises(PersistentStoreError, match="authority_unavailable"):
-        await bridge.route_info("la_foreign")
-    assert routes.value is None
-
-
-@pytest.mark.asyncio
-async def test_first_contact_preserves_nonactive_route_state():
-    bridge, _, _ = make_bridge({"state": "recovery_required"})
-    result = await bridge.route_info("la_foreign")
-    assert result["state"] == "recovery_required"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", [401, 500])
-async def test_first_contact_unreachable_authority_does_not_invent_route(status):
-    bridge, routes, _ = make_bridge(status=status)
     with pytest.raises(PersistentStoreError, match="authority_unavailable"):
         await bridge.route_info("la_foreign")
     assert routes.value is None

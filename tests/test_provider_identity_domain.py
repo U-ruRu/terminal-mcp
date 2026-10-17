@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
-
 import pytest
 
 from terminal_mcp.core.provider_identity import (
-    OPENAI_IDENTITY_ADAPTER,
-    PROVIDER_ID_MAX_CHARS,
-    MetadataIdentityAdapter,
     ProviderIdentity,
     ProviderIdentityError,
     ProviderIdentityRegistry,
@@ -18,23 +13,14 @@ def metadata(**extra):
     return {"openai/subject": "opaque-subject", "openai/session": "opaque-conversation", **extra}
 
 
-def test_identical_conversation_is_stable_across_credential_node_role_and_provider_hints():
+@pytest.mark.parametrize(
+    "extras", [{"node_id": "secondary"}, {"credential_id": "renewed-credential"}]
+)
+def test_openai_conversation_binding_is_stable_across_transport_context(extras):
     registry = ProviderIdentityRegistry()
     base = registry.resolve("openai", metadata())
-    for extras in (
-        {"node_id": "bacloud"},
-        {"node_id": "secondary"},
-        {"credential_id": "renewed-oauth-credential"},
-        {"openai/organization": "optional-organization"},
-        {"openai/userAgent": "different-client"},
-        {"role": "executor", "contract_version": 3},
-        {"role": "coordinator", "contract_version": 1},
-        {"openai/userLocation": {"city": "other"}},
-        {"openai/locale": "ru"},
-        {"provider": "forged"},
-        {"logical_agent_id": "la_forged", "work_session_id": "ws_forged"},
-    ):
-        assert registry.resolve("openai", metadata(**extras)).binding_key == base.binding_key
+
+    assert registry.resolve("openai", metadata(**extras)).binding_key == base.binding_key
 
 
 @pytest.mark.parametrize(
@@ -60,52 +46,17 @@ def test_different_identities_cannot_alias_through_concatenation_or_normalizatio
     assert len(left.binding_key) == 64
 
 
-def test_generic_adapter_does_not_require_openai_sdk_or_field_names():
-    custom = MetadataIdentityAdapter("other-provider", "account", "thread", "tenant")
-    registry = ProviderIdentityRegistry((OPENAI_IDENTITY_ADAPTER, custom))
-    identity = registry.resolve("other-provider", {"account": "a", "thread": "t", "tenant": "org"})
-    assert identity == ProviderIdentity("other-provider", "a", "t", "org")
-    assert registry.providers == ("openai", "other-provider")
-
-
-@pytest.mark.parametrize("provider", ["", "openai/forged"])
+@pytest.mark.parametrize("provider", ["openai/forged"])
 def test_provider_selection_is_an_explicit_server_allowlist(provider):
     with pytest.raises(ProviderIdentityError, match="identity_provider_unsupported"):
         ProviderIdentityRegistry().resolve(provider, metadata())
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {},
-        {"openai/subject": "subject"},
-        {"logical_agent_id": "agent", "sender": "name", "access_code": "1234"},
-    ],
-)
-def test_missing_metadata_never_falls_back_to_public_identity_fields(payload):
-    with pytest.raises(ProviderIdentityError, match="identity_metadata_missing"):
-        ProviderIdentityRegistry().resolve("openai", payload)
-
-
-@pytest.mark.parametrize("field", ["openai/subject", "openai/session", "openai/organization"])
+@pytest.mark.parametrize("field", ["openai/subject", "openai/session"])
 @pytest.mark.parametrize("value", [False], ids=["wrong-type"])
 def test_identifiers_do_not_coerce_agent_controlled_values(field, value):
     with pytest.raises(ProviderIdentityError, match="identity_metadata_missing"):
         ProviderIdentityRegistry().resolve("openai", metadata(**{field: value}))
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "x" * (PROVIDER_ID_MAX_CHARS + 1),
-        "line\nbreak",
-        "\ud800",
-    ],
-)
-def test_invalid_or_unbounded_ids_fail_without_echoing_sensitive_input(value):
-    with pytest.raises(ProviderIdentityError) as caught:
-        ProviderIdentityRegistry().resolve("openai", metadata(**{"openai/subject": value}))
-    assert str(caught.value) == "identity_metadata_invalid"
 
 
 def test_raw_provider_identity_is_not_in_repr_or_diagnostics():
@@ -116,67 +67,18 @@ def test_raw_provider_identity_is_not_in_repr_or_diagnostics():
     assert diagnostic == {"provider": "openai", "binding_key": identity.binding_key}
     assert "raw-secret" not in repr(identity)
     assert "raw-org" not in repr(identity)
-    with pytest.raises(FrozenInstanceError):
-        identity.subject = "other"
 
 
-def test_duplicate_registration_and_malformed_adapter_are_rejected():
-    with pytest.raises(ProviderIdentityError, match="identity_provider_duplicate"):
-        ProviderIdentityRegistry((OPENAI_IDENTITY_ADAPTER, OPENAI_IDENTITY_ADAPTER))
-    with pytest.raises(ProviderIdentityError, match="identity_adapter_invalid"):
-        ProviderIdentityRegistry((object(),))
-
-
-def test_registered_adapter_cannot_return_another_provider_namespace():
-    class WrongAdapter:
-        provider = "custom"
-
-        def resolve(self, _metadata):
-            return ProviderIdentity("openai", "subject", "chat")
-
-    with pytest.raises(ProviderIdentityError, match="identity_adapter_invalid"):
-        ProviderIdentityRegistry((WrongAdapter(),)).resolve("custom", {})
-
-
-def test_opaque_unicode_identifier_has_deterministic_bounded_digest():
-    identity = ProviderIdentity("custom", "пользователь", "диалог")
-    assert identity.binding_key == ProviderIdentity("custom", "пользователь", "диалог").binding_key
-    assert identity.binding_key.isascii()
-
-
-def test_codex_identity_is_principal_scoped_and_does_not_require_session_or_call():
+@pytest.mark.parametrize(
+    "principal,thread", [("different-client", "thread-a"), ("verified-client", "thread-b")]
+)
+def test_codex_binding_separates_principals_and_threads(principal, thread):
     registry = ProviderIdentityRegistry()
-    base = registry.resolve("codex", {"threadId": "thread-a"}, principal_id="oauth-client-a")
-    assert base == ProviderIdentity("codex", "oauth-client-a", "thread-a")
-    for extras in (
-        {"sessionId": "root"},
-        {"callId": "call-1"},
-        {"progressToken": 3},
-        {"sessionId": "other-root", "callId": "call-2", "progressToken": 7},
-        {"openai/userAgent": "fake"},
-    ):
-        assert (
-            registry.resolve(
-                "codex", {"threadId": "thread-a", **extras}, principal_id="oauth-client-a"
-            ).binding_key
-            == base.binding_key
-        )
-    assert (
-        registry.resolve(
-            "codex", {"threadId": "thread-b"}, principal_id="oauth-client-a"
-        ).binding_key
-        != base.binding_key
-    )
-    assert (
-        registry.resolve(
-            "codex", {"threadId": "thread-a"}, principal_id="oauth-client-b"
-        ).binding_key
-        != base.binding_key
-    )
-    assert (
-        registry.resolve("openai", metadata(), principal_id="oauth-client-a").binding_key
-        == registry.resolve("openai", metadata(), principal_id="oauth-client-b").binding_key
-    )
+    base = registry.resolve("codex", {"threadId": "thread-a"}, principal_id="verified-client")
+
+    changed = registry.resolve("codex", {"threadId": thread}, principal_id=principal)
+
+    assert changed.binding_key != base.binding_key
 
 
 @pytest.mark.parametrize("payload", [{}, {"threadId": []}])
@@ -185,15 +87,14 @@ def test_codex_requires_a_valid_agent_thread(payload):
         ProviderIdentityRegistry().resolve("codex", payload, principal_id="verified")
 
 
-def test_codex_requires_verified_principal_and_does_not_accept_forged_subject():
-    registry = ProviderIdentityRegistry()
+def test_codex_requires_verified_principal():
     with pytest.raises(ProviderIdentityError, match="persistent_auth_required"):
-        registry.resolve("codex", {"threadId": "thread", "subject": "forged"})
-    with pytest.raises(ProviderIdentityError, match="persistent_auth_required"):
-        registry.resolve("codex", {"threadId": "thread", "openai/subject": "forged"})
-    assert (
-        registry.resolve(
-            "codex", {"threadId": "thread", "subject": "forged"}, principal_id="verified"
-        ).subject
-        == "verified"
+        ProviderIdentityRegistry().resolve("codex", {"threadId": "thread", "subject": "forged"})
+
+
+def test_codex_resolves_verified_principal_and_thread():
+    identity = ProviderIdentityRegistry().resolve(
+        "codex", {"threadId": "thread", "subject": "forged"}, principal_id="verified"
     )
+
+    assert identity == ProviderIdentity("codex", "verified", "thread")

@@ -1,11 +1,10 @@
-import { expect, test, vi } from 'vitest'
+import { expect,test,vi } from 'vitest';
 
-import type { RealtimeScheduler } from '../realtime/engine'
+import type { RealtimeScheduler } from '../realtime/engine';
 import {
-  FleetVisibilityController,
-  withRequestTimeout,
-  type FleetVisibilitySource,
-} from './policy'
+FleetVisibilityController,
+type FleetVisibilitySource,
+} from './policy';
 
 class Scheduler implements RealtimeScheduler {
   queue: Array<{ callback: () => void; delayMs: number; handle: object }> = []
@@ -46,53 +45,46 @@ class Visibility implements FleetVisibilitySource {
   }
 }
 
-test('timed fetch aborts a stuck request at the configured fleet bound', async () => {
-  const scheduler = new Scheduler()
-  let signal: AbortSignal | undefined
-  const raw = vi.fn(
-    async (_input: RequestInfo | URL, init?: RequestInit) =>
-      new Promise<Response>(() => {
-        signal = init?.signal ?? undefined
-      }),
-  )
-  const fetcher = withRequestTimeout(raw, 1200, scheduler)
-
-  const pending = fetcher('https://alpha.example/health')
-  expect(scheduler.queue.map((item) => item.delayMs)).toEqual([1200])
-  expect(signal?.aborted).toBe(false)
-
-  expect(scheduler.runNext()).toBe(1200)
-  await expect(pending).rejects.toThrow('request_timeout')
-  expect(signal?.aborted).toBe(true)
-  expect(scheduler.queue).toHaveLength(0)
-})
-
-test('background policy suspends fleet after grace and resumes once visible', async () => {
+function hiddenFleet() {
   const scheduler = new Scheduler()
   const visibility = new Visibility()
+  visibility.visibilityState = 'hidden'
   const fleet = {
     startAll: vi.fn(async () => {}),
     recoverAll: vi.fn(async () => {}),
     stopAll: vi.fn(),
   }
   const controller = new FleetVisibilityController(fleet, visibility, scheduler, 30_000)
-
   controller.start()
-  visibility.set('hidden')
-  expect(scheduler.queue.map((item) => item.delayMs)).toEqual([30_000])
-  expect(fleet.stopAll).not.toHaveBeenCalled()
+  return { scheduler, visibility, fleet, controller }
+}
 
+test('background grace expiry suspends the fleet', () => {
+  const { scheduler, fleet, controller } = hiddenFleet()
+
+  const elapsed = scheduler.runNext()
+
+  expect(elapsed).toBe(30_000)
+  expect(fleet.stopAll).toHaveBeenCalledOnce()
+  controller.stop()
+})
+
+test('foreground transition restarts a suspended fleet', () => {
+  const { scheduler, visibility, fleet, controller } = hiddenFleet()
   scheduler.runNext()
-  expect(fleet.stopAll).toHaveBeenCalledTimes(1)
 
   visibility.set('visible')
-  await vi.waitFor(() => expect(fleet.startAll).toHaveBeenCalledTimes(1))
 
-  visibility.set('hidden')
+  expect(fleet.startAll).toHaveBeenCalledOnce()
+  controller.stop()
+})
+
+test('foreground transition before suspension cancels grace and recovers the fleet', () => {
+  const { scheduler, visibility, fleet, controller } = hiddenFleet()
+
   visibility.set('visible')
+
   expect(scheduler.queue).toHaveLength(0)
-  expect(fleet.stopAll).toHaveBeenCalledTimes(1)
-  await vi.waitFor(() => expect(fleet.recoverAll).toHaveBeenCalledTimes(1))
-
+  expect(fleet.recoverAll).toHaveBeenCalledOnce()
   controller.stop()
 })

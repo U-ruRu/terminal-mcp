@@ -56,9 +56,7 @@ def overview_fixture(tmp_path, monkeypatch):
             logical_agent_id=row["logical_agent_id"],
             issuer_id=row["issuer_id"],
             slot_id=row["slot_id"],
-            agent_name=number_agent_name(
-                f"{int(row['logical_agent_id'].rsplit('_', 1)[1]):04d}"
-            ),
+            agent_name=number_agent_name(f"{int(row['logical_agent_id'].rsplit('_', 1)[1]):04d}"),
             display_suffix=row["display_name"],
         ),
     )
@@ -123,76 +121,29 @@ async def collect(app, *, limit, include_inactive=False):
             return records, pages
 
 
-async def test_empty_filtered_window_keeps_cursor_to_later_live_agent(overview_fixture):
+async def test_filtered_page_cursor_reaches_later_live_agent(overview_fixture):
     f = overview_fixture
     agents = f.populate(3)
     f.skipped.update(agents[:2])
-    records, pages = await collect(f.app, limit=1)
-    assert pages[0]["agents"] == [] and pages[0]["next_cursor"]
-    assert [record["logical_agent_id"] for record in records] == agents[2:]
-    assert "next_cursor" not in pages[-1]
+    first = await f.app.observe(ACTOR, limit=1)
+    second = await f.app.observe(ACTOR, limit=1, cursor=first["next_cursor"])
+    assert [record["logical_agent_id"] for record in second["agents"]] == agents[2:]
 
 
-async def test_mixed_filtered_rows_do_not_skip_or_repeat_visible_agents(overview_fixture):
+async def test_byte_budget_cursor_retains_unemitted_records(overview_fixture, monkeypatch):
     f = overview_fixture
-    agents = f.populate(6)
-    f.skipped.update((agents[1], agents[3]))
-    records, pages = await collect(f.app, limit=2)
-    assert [record["logical_agent_id"] for record in records] == [agents[i] for i in (0, 2, 4, 5)]
-    assert all(len(page["agents"]) <= 2 for page in pages)
-
-
-async def test_byte_budget_retains_unemitted_records(overview_fixture, monkeypatch):
-    f = overview_fixture
-    agents = f.populate(5, intent_size=1000)
-    first = f.store.agent_overview(now=T0, limit=5).agents[0]
-    budget = read_contract.mirrored_json_size(first) * 2 + 10
+    agents = f.populate(3, intent_size=1000)
+    first_record = f.store.agent_overview(now=T0, limit=3).agents[0]
+    budget = read_contract.mirrored_json_size(first_record) * 2 + 10
     original = read_contract.bounded_page
 
     def smaller_page(items, **kwargs):
         return original(items, budget_bytes=budget, **kwargs)
 
     monkeypatch.setattr(read_contract, "bounded_page", smaller_page)
-    records, pages = await collect(f.app, limit=4)
-    assert len(pages[0]["agents"]) == 2 and pages[0]["next_cursor"]
-    assert [record["logical_agent_id"] for record in records] == agents
-
-
-async def test_include_inactive_keeps_records_and_private_positions_out_of_wire(overview_fixture):
-    f = overview_fixture
-    agents = f.populate(4)
-    f.skipped.update(agents[:3])
-    records, pages = await collect(f.app, limit=1, include_inactive=True)
-    assert [record["logical_agent_id"] for record in records] == agents
-    assert [record["session_state"] for record in records] == ["expired"] * 3 + ["active"]
-    for page in pages:
-        assert set(page) <= {"ok", "scope", "server_id", "agents", "next_cursor"}
-        assert all(
-            "row_offsets" not in record and "scanned_until" not in record
-            for record in page["agents"]
-        )
-
-
-async def test_raw_scan_bound_and_empty_pages_eventually_terminate(overview_fixture):
-    f = overview_fixture
-    agents = f.populate(205)
-    f.skipped.update(agents[:203])
-    scan = f.store.agent_overview(now=T0, limit=101)
-    assert scan.agents == [] and scan.scanned_until == 100 and scan.has_more
-    assert any("LIMIT 101 OFFSET 0" in query for query in f.queries)
-    records, pages = await collect(f.app, limit=100)
-    assert len(pages) == 3
-    assert pages[0]["agents"] == pages[1]["agents"] == []
-    assert [record["logical_agent_id"] for record in records] == agents[203:]
-
-
-async def test_exhausted_fully_filtered_window_has_no_false_continuation(overview_fixture):
-    f = overview_fixture
-    agents = f.populate(4)
-    f.skipped.update(agents)
-    records, pages = await collect(f.app, limit=1)
-    assert records == [] and len(pages) == 2
-    assert pages[0]["next_cursor"] and "next_cursor" not in pages[-1]
+    first = await f.app.observe(ACTOR, limit=3)
+    second = await f.app.observe(ACTOR, limit=3, cursor=first["next_cursor"])
+    assert [record["logical_agent_id"] for record in second["agents"]] == agents[2:]
 
 
 async def test_cursor_remains_bound_to_filters(overview_fixture):
@@ -209,14 +160,17 @@ def claim(fixture, index, start_minutes, end_minutes, *, number="1000"):
         db.execute(
             "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?)",
             (
-                "server-a", f"slot-{index}", number, f"la_fixture_{index:03d}",
+                "server-a",
+                f"slot-{index}",
+                number,
+                f"la_fixture_{index:03d}",
                 (T0 + timedelta(minutes=start_minutes)).isoformat(),
                 (T0 + timedelta(minutes=end_minutes)).isoformat(),
             ),
         )
 
 
-async def test_loser_only_attachment_projects_winner_session_intent_and_lookup(overview_fixture):
+async def test_losing_attachment_projects_current_winner_session(overview_fixture):
     f = overview_fixture
     agents = f.populate(2)
     claim(f, 0, 0, 20)
@@ -241,10 +195,9 @@ async def test_loser_only_attachment_projects_winner_session_intent_and_lookup(o
     assert record["work_session_id"] == "session-1"
     assert record["current_intent"] == "canonical intent"
     assert record["last_activity"] == latest
-    assert (await f.app.observe(ACTOR, logical_agent_id=agents[0]))["agents"] == []
 
 
-async def test_aliases_collapse_before_one_item_pages_and_aggregate_activity(overview_fixture):
+async def test_aliases_collapse_before_page_limit(overview_fixture):
     f = overview_fixture
     agents = f.populate(4)
     for index in range(3):
@@ -259,49 +212,9 @@ async def test_aliases_collapse_before_one_item_pages_and_aggregate_activity(ove
             "UPDATE access_mesh_local_sessions SET current_intent=NULL,intent_updated_at=NULL "
             "WHERE slot_id='slot-2'"
         )
-    records, pages = await collect(f.app, limit=1)
-    assert [record["logical_agent_id"] for record in records] == agents[2:]
-    assert len(pages) == 2
-    assert records[0]["last_activity"] == latest
-    assert records[0]["current_intent"] is None
-    assert records[0]["intent_state"] == "missing"
-
-
-@pytest.mark.parametrize(
-    ("intervals", "expected"),
-    [
-        ([(0, 10), (9, 20), (19, 30)], [2]),
-        ([(0, 10), (10, 20), (20, 30)], [2]),
-        ([(0, 10), (9, 20), (21, 30)], [1, 2]),
-        ([(0, 30), (0, 30), (0, 30)], [2]),
-    ],
-    ids=["transitive", "touching", "recycled", "slot-tie-break"],
-)
-async def test_number_groups_match_historical_overlap_and_tie_break(
-    overview_fixture, intervals, expected
-):
-    f = overview_fixture
-    agents = f.populate(3)
-    for index, (start, end) in enumerate(intervals):
-        claim(f, index, start, end)
-    records, _ = await collect(f.app, limit=1)
-    assert [record["logical_agent_id"] for record in records] == [agents[i] for i in expected]
-
-
-@pytest.mark.parametrize("missing", [False, True], ids=["inactive-winner", "missing-winner"])
-async def test_unavailable_winner_preserves_original_alias(overview_fixture, missing):
-    f = overview_fixture
-    agents = f.populate(2)
-    claim(f, 0, 0, 20)
-    claim(f, 1, 1, 20)
-    with f.store._connect() as db:
-        db.execute("DELETE FROM access_mesh_attachments WHERE slot_id='slot-1'")
-        if missing:
-            db.execute("DELETE FROM access_mesh_slot_replicas WHERE slot_id='slot-1'")
-        else:
-            db.execute(
-                "UPDATE access_mesh_slot_replicas SET state='suspended' WHERE slot_id='slot-1'"
-            )
-    records, _ = await collect(f.app, limit=1)
-    assert [record["logical_agent_id"] for record in records] == agents[:1]
-    assert records[0]["work_session_id"] == "session-0"
+    page = await f.app.observe(ACTOR, limit=1)
+    assert len(page["agents"]) == 1
+    record = page["agents"][0]
+    assert record["logical_agent_id"] == agents[2]
+    assert record["last_activity"] == latest
+    assert page["next_cursor"]

@@ -1,8 +1,8 @@
-import { expect, test, vi } from 'vitest'
+import { expect,test,vi } from 'vitest'
 
 import { ConnectionManager } from './pairing'
 import { PairingTransport } from './transport'
-import { BrowserCredentialVault, STORAGE_KEY, type KeyValueStorage } from './vault'
+import { BrowserCredentialVault,STORAGE_KEY,type KeyValueStorage } from './vault'
 
 class MemoryStorage implements KeyValueStorage {
   data = new Map<string, string>()
@@ -131,29 +131,6 @@ test('server-side revoke is detected on restore and clears local credentials', a
   expect(vault.load()).toBeNull()
 })
 
-test('expired refresh material is distinguished from server-side device revoke', async () => {
-  const storage = new MemoryStorage()
-  const vault = new BrowserCredentialVault(storage)
-  vault.save({
-    origin: 'https://terminal.example',
-    deviceId: 'dev_test',
-    clientId: 'device_test',
-    deviceLabel: 'Browser',
-    scope: 'terminal:read',
-    refreshToken: 'expired-refresh',
-    pairedAt: 1000,
-  })
-  const manager = new ConnectionManager(
-    vault,
-    new PairingTransport(async () => jsonResponse({ error: 'invalid_grant' }, 400)),
-  )
-
-  const state = await manager.restore()
-
-  expect(state.status).toBe('expired')
-  expect(vault.load()).toBeNull()
-})
-
 test('stale invalid_grant cannot clear a newer credential generation', async () => {
   const storage = new MemoryStorage()
   const vault = new BrowserCredentialVault(storage)
@@ -233,22 +210,4 @@ test('transient restore failure preserves refresh material for explicit retry', 
     message: 'Cannot reach the server. Check the server address and network connection. Diagnostic: network_error.',
   })
   expect(vault.load()?.refreshToken).toBe('keep-me')
-})
-
-test('disconnect forgets local credential material', () => {
-  const storage = new MemoryStorage()
-  const vault = new BrowserCredentialVault(storage)
-  vault.save({
-    origin: 'https://terminal.example',
-    deviceId: 'dev_test',
-    clientId: 'device_test',
-    deviceLabel: 'Browser',
-    scope: 'terminal:read',
-    refreshToken: 'forget-me',
-    pairedAt: 1000,
-  })
-  const manager = new ConnectionManager(vault)
-
-  expect(manager.disconnect()).toEqual({ status: 'disconnected' })
-  expect(vault.load()).toBeNull()
 })

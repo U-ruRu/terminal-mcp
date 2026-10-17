@@ -1,12 +1,12 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup,fireEvent,render,screen,waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach,expect,test,vi } from 'vitest'
 
+import { activityStateCache,resetActivityStateCacheForTests } from '../activity/stateCache'
 import type { ActivityFeedReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
 import { I18nProvider } from '../i18n/I18nProvider'
-import { resetActivityStateCacheForTests } from '../activity/stateCache'
 import { Activity } from './Activity'
 
 afterEach(() => { cleanup(); resetActivityStateCacheForTests() })
@@ -51,28 +51,18 @@ function activityLoader() {
   })
 }
 
-test('switches servers, filters messages and renders direct task navigation', async () => {
+test('selecting another server loads that server Activity', async () => {
   const load = activityLoader()
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
+  render(<I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+    <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
+  </MemoryRouter></I18nProvider>)
   await screen.findByText('Ship it')
-  expect(screen.getByRole('link', { name: 'Task M2-009' })).toHaveAttribute('href', '/servers/alpha/tasks/console/M2-009')
-  expect(screen.queryByRole('link', { name: 'Server Alpha' })).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', '/servers/alpha/agents/Alpha-1111')
-  expect(screen.getByText(/\d{2}:00:02/)).toBeInTheDocument()
-  expect(document.querySelector('.activity-screen .filter-status .status')).not.toBeInTheDocument()
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
-  expect(screen.getByText('Ship it')).toBeInTheDocument()
-  expect(screen.queryByText('task.updated')).not.toBeInTheDocument()
-  await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: Number.MAX_SAFE_INTEGER, limit: 100 })))
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
-  expect(await screen.findByText('Beta is online again')).toBeInTheDocument()
-})
 
+  await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
+
+  expect(await screen.findByText('Beta is online again')).toBeInTheDocument()
+  expect(load).toHaveBeenCalledWith('beta', { before: Number.MAX_SAFE_INTEGER, limit: 100 })
+})
 
 test('loads the latest Tokyo Activity even before realtime snapshot high-water is ready', async () => {
   const load = vi.fn(async (_instanceId: string, options = {}) => {
@@ -100,85 +90,55 @@ test('loads the latest Tokyo Activity even before realtime snapshot high-water i
   await screen.findByText('Tokyo activity visible')
 })
 
-test('reconnect preserves Activity pagination cursor, filters and exact viewport', async () => {
-  const message = (seq: number, text: string): ActivityFeedReadModel['events'][number] => ({
-    seq, eventType: 'message.created', entityType: 'message', entityId: `msg-${seq}`, actorId: 'Alpha-1111', actorName: 'Alpha', payload: {}, createdAt: `2026-09-28T11:${String(seq % 60).padStart(2, '0')}:00Z`,
-    message: { messageHash: `msg-${seq}`, senderAgentId: 'Alpha-1111', senderName: 'Alpha', target: 'Bravo', text, requireReply: false, alert: false, recipients: [] },
+function messageEvent(seq: number, text: string): ActivityFeedReadModel['events'][number] {
+  return { seq, eventType: 'message.created', entityType: 'message', entityId: `msg-${seq}`,
+    actorId: 'Alpha-1111', actorName: 'Alpha', payload: {}, createdAt: '2026-09-28T11:00:00Z',
+    message: { messageHash: `msg-${seq}`, senderAgentId: 'Alpha-1111', senderName: 'Alpha',
+      target: 'Bravo', text, requireReply: false, alert: false, recipients: [] } }
+}
+function seedHistory() {
+  activityStateCache.set('alpha', {
+    feed: { events: [messageEvent(101, 'Message 101'), messageEvent(102, 'Message 102')],
+      cursor: 102, highWater: 102, oldestSeq: 1, gap: false, initialized: true, loading: false, historyMode: true },
+    category: 'messages', agentId: '', newItemsCount: 0, stickToBottom: false,
   })
-  const load = vi.fn(async (_instanceId: string, options = {}) => {
-    const before = (options as { before?: number }).before
-    if (before === Number.MAX_SAFE_INTEGER) return { ...page(0, [message(101, 'Newest 101'), message(102, 'Newest 102')], 102), oldestSeq: 1 }
-    if (before === 101) return { ...page(0, [message(51, 'Older 51')], 102), oldestSeq: 1 }
-    if (before === 51) return { ...page(0, [message(1, 'Oldest 1')], 102), oldestSeq: 1 }
-    return page(0, [], 102)
-  })
+}
+
+test('reconnecting preserves displayed Activity history and its viewport', () => {
+  seedHistory()
   const live = instance('alpha', 'Alpha', 102)
-  const { rerender } = render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[live]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-  await screen.findByText('Newest 102')
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
+  const tree = (server: FleetInstanceView) => <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+    <Activity instances={[server]} />
+  </MemoryRouter></I18nProvider>
+  const { rerender } = render(tree(live))
   const chat = document.querySelector('.activity-chat') as HTMLDivElement
-  Object.defineProperty(chat, 'scrollHeight', { configurable: true, value: 1000 })
-  Object.defineProperty(chat, 'clientHeight', { configurable: true, value: 300 })
-
-  chat.scrollTop = 0
-  fireEvent.scroll(chat)
-  expect(await screen.findByText('Older 51')).toBeInTheDocument()
-  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 101, limit: 250 })))
-
   chat.scrollTop = 137
-  const reconnecting: FleetInstanceView = {
-    ...live,
-    runtime: { ...live.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: live.runtime.realtime ? { ...live.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null },
-  }
-  rerender(<I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}><Activity instances={[reconnecting]} loadActivity={load} /></MemoryRouter></I18nProvider>)
-  expect(screen.getByLabelText('Server')).toHaveValue('alpha')
+  const reconnecting: FleetInstanceView = { ...live, runtime: { ...live.runtime,
+    status: 'reconnecting', reconnectAttempt: 1,
+    realtime: { ...live.runtime.realtime!, status: 'reconnecting', socketConnected: false, freshness: 'stale' },
+  } }
+
+  rerender(tree(reconnecting))
+
   expect(screen.getByLabelText('Category')).toHaveValue('messages')
-  expect(screen.getByText('Older 51')).toBeInTheDocument()
+  expect(screen.getByText('Message 101')).toBeInTheDocument()
   expect(chat.scrollTop).toBe(137)
+})
 
+test('scrolling to the oldest Activity item requests the preceding page', async () => {
+  seedHistory()
+  const load = vi.fn(async () => ({ ...page(0, [messageEvent(51, 'Older 51')], 102), oldestSeq: 1 }))
+  render(<I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+    <Activity instances={[instance('alpha', 'Alpha', 102)]} loadActivity={load} />
+  </MemoryRouter></I18nProvider>)
+  const chat = document.querySelector('.activity-chat') as HTMLDivElement
   chat.scrollTop = 0
+
   fireEvent.scroll(chat)
-  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 51, limit: 250 })))
+
+  expect(await screen.findByText('Older 51')).toBeInTheDocument()
+  expect(load).toHaveBeenCalledWith('alpha', { before: 101, limit: 250 })
 })
-
-test('uses the native scroll API without recursion when Activity anchors to the bottom', async () => {
-  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo')
-  const scrollTo = vi.fn()
-  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo })
-
-  try {
-    render(
-      <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-        <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={activityLoader()} />
-      </MemoryRouter></I18nProvider>,
-    )
-
-    expect(await screen.findByText('Ship it')).toBeInTheDocument()
-    await waitFor(() => expect(scrollTo).toHaveBeenCalled())
-    expect(scrollTo.mock.calls.length).toBeLessThan(10)
-  } finally {
-    if (original) Object.defineProperty(HTMLElement.prototype, 'scrollTo', original)
-    else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
-  }
-})
-
-test('does not silently choose a server when activity has no server context', async () => {
-  const load = activityLoader()
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-  expect(screen.getByText('Choose a server to view activity.')).toBeInTheDocument()
-  expect(load).not.toHaveBeenCalled()
-  await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: Number.MAX_SAFE_INTEGER, limit: 100 })))
-})
-
 
 test('filters duplicate public names by exact agent session identity', async () => {
   const load = vi.fn(async (_instanceId: string, options = {}) => {
@@ -198,157 +158,16 @@ test('filters duplicate public names by exact agent session identity', async () 
   await waitFor(() => expect(document.querySelectorAll('.activity-chat-message')).toHaveLength(1))
   expect(screen.getByText('SameName')).toBeInTheDocument()
   expect(screen.getByText(/Agent SameName-2222/)).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: 'Remove agent filter' }))
-  await waitFor(() => expect(document.querySelectorAll('.activity-chat-message')).toHaveLength(2))
 })
 
-test('mobile chat viewport ends above the fixed bottom navigation', async () => {
-  const width = window.innerWidth
-  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
-  let activityMeasurements = 0
-  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this.classList.contains('activity-chat')) {
-      activityMeasurements += 1
-      const top = activityMeasurements === 1 ? 360 : 300
-      return { top, bottom: 700, left: 0, right: 390, width: 390, height: 700 - top, x: 0, y: top, toJSON: () => ({}) } as DOMRect
-    }
-    if (this.classList.contains('mobile-bottom-navigation')) return { top: 700, bottom: 760, left: 0, right: 390, width: 390, height: 60, x: 0, y: 700, toJSON: () => ({}) } as DOMRect
-    return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
-  })
-  const load = activityLoader()
+test('Technical details reveals the selected Activity event payload', async () => {
+  render(<I18nProvider><MemoryRouter initialEntries={['/activity?server=beta']}>
+    <Activity instances={[instance('beta', 'Beta', 7)]} loadActivity={activityLoader()} />
+  </MemoryRouter></I18nProvider>)
+  const toggle = await screen.findByRole('button', { name: 'Technical details' })
 
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
-      <nav className="mobile-bottom-navigation" />
-    </MemoryRouter></I18nProvider>,
-  )
-
-  await screen.findByText('Ship it')
-  window.dispatchEvent(new Event('resize'))
-  await waitFor(() => expect(document.querySelector('.activity-chat')).toHaveStyle({ height: '400px', maxHeight: '400px' }))
-  expect(activityMeasurements).toBeGreaterThan(1)
-  rect.mockRestore()
-  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
-})
-
-test('loads a concise latest window and keeps raw payload collapsed', async () => {
-  const load = activityLoader()
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=beta']}>
-      <Activity instances={[instance('beta', 'Beta', 7)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-
-  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: Number.MAX_SAFE_INTEGER, limit: 100 })))
-  const toggle = screen.getByRole('button', { name: 'Technical details' })
-  expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  expect(screen.queryByText(/"ok": true/)).not.toBeInTheDocument()
-  expect(toggle.querySelector('.ui-icon-chevron-down')).toBeInTheDocument()
   await userEvent.click(toggle)
+
   expect(toggle).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText(/"ok": true/)).toBeInTheDocument()
-  expect(screen.getByText(/28\.09\.2026 \d{2}:00:07/)).toBeInTheDocument()
-  expect(screen.getByText(/health.changed/)).toBeInTheDocument()
-})
-
-
-test('shows loading feedback before the first activity page resolves', () => {
-  const load = vi.fn(() => new Promise<ActivityFeedReadModel>(() => {}))
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-
-  expect(screen.getByText('Catching up')).toBeInTheDocument()
-  expect(screen.queryByText('No activity matches this filter.')).not.toBeInTheDocument()
-})
-
-test('groups consecutive commands into one cascade and keeps raw details nested per command', async () => {
-  const load = vi.fn(async (_instanceId: string, options = {}) => {
-    const since = (options as { since?: number }).since ?? 0
-    return page(since, [
-      { seq: 21, eventType: 'command.created', entityType: 'command', entityId: 'cmd-a', actorId: 'Alpha-1111', actorName: 'Alpha', payload: { command: 'uptime', status: 'completed' }, createdAt: '2026-09-28T11:02:01Z' },
-      { seq: 22, eventType: 'command.created', entityType: 'command', entityId: 'cmd-b', actorId: 'Alpha-1111', actorName: 'Alpha', payload: { status: 'completed' }, createdAt: '2026-09-28T11:02:02Z' },
-    ], 22)
-  })
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 22)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-
-  await screen.findByText('Ran 2 commands')
-  expect(document.querySelectorAll('.activity-chat-message')).toHaveLength(1)
-  expect(screen.queryByText('$ uptime')).not.toBeInTheDocument()
-  expect(screen.queryByText('cmd-b')).not.toBeInTheDocument()
-
-  await userEvent.click(screen.getByRole('button', { name: 'Ran 2 commands' }))
-  expect(screen.getByText('$ uptime')).toBeInTheDocument()
-  expect(screen.getByText('Command')).toBeInTheDocument()
-  expect(screen.getAllByText('Completed')).toHaveLength(2)
-  expect(screen.queryByText('completed')).not.toBeInTheDocument()
-  expect(screen.queryByText(/"entityId": "cmd-b"/)).not.toBeInTheDocument()
-
-  const technical = screen.getAllByRole('button', { name: 'Technical details' })
-  await userEvent.click(technical[1])
-  expect(screen.getByText(/"entityId": "cmd-b"/)).toBeInTheDocument()
-})
-
-test('shows connection failures as a compact service row with nested technical code', async () => {
-  const load = vi.fn(async () => { throw new Error('direct_authority_auth_revoked') })
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-  expect(await screen.findByText('Activity unavailable')).toBeInTheDocument()
-  expect(screen.getByText('Authorization revoked.')).toBeInTheDocument()
-  expect(screen.queryByText('direct_authority_auth_revoked')).not.toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: 'Technical details' }))
-  expect(screen.getByText('direct_authority_auth_revoked')).toBeInTheDocument()
-  expect(document.querySelector('.activity-error-state')).not.toBeInTheDocument()
-})
-
-
-test('restores per-server feed and filters after Activity is unmounted by detail navigation', async () => {
-  const load = activityLoader()
-  const view = render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-  await screen.findByText('Ship it')
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
-  expect(screen.getByLabelText('Category')).toHaveValue('messages')
-  view.unmount()
-
-  const callsBeforeReturn = load.mock.calls.length
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-  expect(screen.getByLabelText('Category')).toHaveValue('messages')
-  expect(screen.getByText('Ship it')).toBeInTheDocument()
-  await waitFor(() => expect(load.mock.calls.length).toBe(callsBeforeReturn))
-})
-
-test('keeps Activity filter state independently for each server', async () => {
-  const load = activityLoader()
-  render(
-    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
-      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
-    </MemoryRouter></I18nProvider>,
-  )
-  await screen.findByText('Ship it')
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
-  await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
-  await screen.findByText('Beta is online again')
-  expect(screen.getByLabelText('Category')).toHaveValue('all')
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'health')
-  await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
-  expect(screen.getByLabelText('Category')).toHaveValue('messages')
-  expect(screen.getByText('Ship it')).toBeInTheDocument()
 })

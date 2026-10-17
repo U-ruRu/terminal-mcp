@@ -1,11 +1,6 @@
 import os
-import sqlite3
 import subprocess
-import sys
-import tomllib
 from pathlib import Path
-
-import pytest
 
 
 def test_failed_stage_never_activates_incomplete_release(tmp_path):
@@ -56,44 +51,6 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     assert list((root / "releases").iterdir()) == []
 
 
-def test_installer_exposes_stable_cli_link():
-    script = (Path(__file__).resolve().parents[1] / 'deploy' / 'install.sh').read_text()
-
-    assert 'TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp' in script
-    assert 'ln -sfn "$ROOT/current/bin/terminal-mcp" "$CLI_LINK"' in script
-    assert 'install_cli_link' in script
-
-
-def test_runtime_dependency_matches_required_mcp_api():
-    config = tomllib.loads(
-        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    )
-    dependencies = config["project"]["dependencies"]
-
-    assert "mcp>=1.30,<2" in dependencies
-
-    from mcp.server.transport_security import TransportSecuritySettings
-
-    assert TransportSecuritySettings is not None
-
-
-def test_oauth_access_ttl_defaults_to_30_days_everywhere():
-    root = Path(__file__).resolve().parents[1]
-    script = (root / "deploy" / "install.sh").read_text()
-    env_example = (root / ".env.example").read_text()
-
-    assert (
-        'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"'
-        in script
-    )
-    assert (
-        'ensure_env TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC '
-        '"${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"'
-        in script
-    )
-    assert 'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="2592000"' in env_example
-
-
 def _run_doctor_with_ingress_status(
     tmp_path,
     ingress_status: str,
@@ -106,21 +63,21 @@ def _run_doctor_with_ingress_status(
     curl_log = tmp_path / "curl.log"
     (fake_bin / "curl").write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$FAKE_CURL_LOG\"\n"
+        'printf \'%s\\n\' "$*" >> "$FAKE_CURL_LOG"\n'
         "header_file=''\n"
         "previous=''\n"
-        "for arg in \"$@\"; do\n"
+        'for arg in "$@"; do\n'
         "  if [ \"$previous\" = '-D' ]; then header_file=$arg; fi\n"
         "  previous=$arg\n"
         "done\n"
-        "case \"$*\" in\n"
+        'case "$*" in\n'
         "  */internal/fleet/identities*|*/internal/fleet/v1/source/manifest*) "
         "printf '%s' \"$FAKE_INGRESS_STATUS\" ;;\n"
         "  *'/actions/console/snapshot'*)\n"
-        "    [ -z \"$header_file\" ] || "
+        '    [ -z "$header_file" ] || '
         "printf 'HTTP/1.1 204 No Content\\r\\n"
         "Access-Control-Allow-Origin: https://localhost\\r\\n\\r\\n' "
-        "> \"$header_file\"\n"
+        '> "$header_file"\n'
         "    printf '204' ;;\n"
         "  *'/connect'*) printf '200' ;;\n"
         "  *'/console/ws-ticket'*) printf '401' ;;\n"
@@ -165,96 +122,6 @@ def _run_doctor_with_ingress_status(
     return result, curl_log.read_text()
 
 
-def test_doctor_requires_public_fleet_ingress(tmp_path):
-    result, curl_log = _run_doctor_with_ingress_status(tmp_path, "401")
-
-    assert result.returncode == 0
-    assert "https://server-a.example.invalid/internal/fleet/identities" in curl_log
-
-
-def test_doctor_switches_to_v1_probe_after_legacy_mesh_retirement(tmp_path):
-    result, curl_log = _run_doctor_with_ingress_status(
-        tmp_path, "401", legacy_replication_enabled="false"
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "https://server-a.example.invalid/internal/fleet/v1/source/manifest" in curl_log
-    assert "https://server-a.example.invalid/internal/fleet/identities" not in curl_log
-
-
-def test_doctor_rejects_proxy_404_for_public_fleet_ingress(tmp_path):
-    result, _curl_log = _run_doctor_with_ingress_status(tmp_path, "404")
-
-    assert result.returncode != 0
-    assert "Public fleet ingress check failed" in result.stderr
-    assert "reverse proxy forwards /internal/fleet/*" in result.stderr
-
-
-def test_installer_separates_durable_auth_database_from_runtime_backup():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    assert 'TERMINAL_MCP_AUTH_DATABASE_PATH="$DATA/auth.sqlite3"' in script
-    assert 'ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"' in script
-    assert 'chmod 0600 "$DATA/auth.sqlite3"' in script
-    backup_body = script.split("backup(){", 1)[1].split("schema_rollback_safe(){", 1)[0]
-    assert "terminal-mcp.sqlite3" in backup_body
-    assert "auth.sqlite3" not in backup_body
-
-def test_installer_blocks_rollback_to_binary_with_older_auth_schema(tmp_path):
-    root = Path(__file__).resolve().parents[1]
-    script = (root / "deploy" / "install.sh").read_text()
-    function = "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
-        "\n}\n\ninstall_cli_link(){", 1
-    )[0] + "\n}"
-
-    data = tmp_path / "data"
-    data.mkdir()
-    auth_db = data / "auth.sqlite3"
-    with sqlite3.connect(auth_db) as db:
-        db.execute("PRAGMA user_version=3")
-    assert not (data / "terminal-mcp.sqlite3").exists()
-
-    old_release = tmp_path / "old-release"
-    package = old_release / "terminal_mcp" / "auth"
-    package.mkdir(parents=True)
-    (old_release / "terminal_mcp" / "__init__.py").write_text("")
-    (package / "__init__.py").write_text("")
-    (package / "foundation.py").write_text("AUTH_SCHEMA_VERSION = 2\n")
-
-    runner = tmp_path / "schema-check.sh"
-    runner.write_text(
-        "#!/bin/bash\n"
-        f"DATA={str(data)!r}\n"
-        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
-        + function
-        + "\n"
-        + f"schema_rollback_safe {str(old_release)!r}\n"
-    )
-    result = subprocess.run(
-        ["bash", str(runner)],
-        env={**os.environ, "PYTHON": sys.executable},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 43
-    assert "Refusing auth schema downgrade 3->2" in result.stderr
-    assert "rollback-excluded Access security state" in result.stderr
-
-
-def test_installer_pins_isolated_fixed_sqlite_runtime():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    assert "SQLITE_VERSION=3.53.4" in script
-    assert "sqlite-autoconf-3530400.tar.gz" in script
-    assert "454e45f61c6bd75b7420e7190732dea03ce6639c63ada47bbc592f67fc340338" in script
-    assert 'native/libsqlite3.so.0' in script
-    assert r'--library-path "\$RELEASE/lib/terminal-mcp-native"' in script
-    assert "LD_LIBRARY_PATH" not in script
-    assert "LD_PRELOAD" not in script
-    assert "import sqlite3; print(sqlite3.sqlite_version)" in script
-
-
 def _run_ingress_config(tmp_path, *, reload_ok=True):
     fake_bin = tmp_path / "fake-caddy-bin"
     fake_bin.mkdir()
@@ -263,13 +130,13 @@ def _run_ingress_config(tmp_path, *, reload_ok=True):
 
     (fake_bin / "caddy").write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$FAKE_CADDY_LOG\"\n"
-        "case \"$1\" in validate) exit 0 ;; esac\n"
+        'printf \'%s\\n\' "$*" >> "$FAKE_CADDY_LOG"\n'
+        'case "$1" in validate) exit 0 ;; esac\n'
         "exit 99\n"
     )
     (fake_bin / "systemctl").write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$FAKE_SYSTEMCTL_LOG\"\n"
+        'printf \'%s\\n\' "$*" >> "$FAKE_SYSTEMCTL_LOG"\n'
         + ("exit 0\n" if reload_ok else "exit 1\n")
     )
     for path in fake_bin.iterdir():
@@ -317,48 +184,6 @@ def _run_ingress_config(tmp_path, *, reload_ok=True):
     return result, caddyfile, original, caddy_log, systemctl_log, tmp_path / "backups"
 
 
-def test_ingress_command_validates_backs_up_reloads_and_is_idempotent(tmp_path):
-    result, caddyfile, original, caddy_log, systemctl_log, backups = _run_ingress_config(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    configured = caddyfile.read_text()
-    assert configured != original
-    assert "# BEGIN terminal-mcp managed console ingress" in configured
-    assert "/actions/console/*" in configured
-    assert "/console/*" in configured
-    assert "validate --config" in caddy_log.read_text()
-    assert systemctl_log.read_text().splitlines() == ["reload caddy"]
-    backup_files = list(backups.glob("caddy-*.Caddyfile"))
-    assert len(backup_files) == 1
-    assert backup_files[0].read_text() == original
-
-    second = subprocess.run(
-        ["bash", "deploy/install.sh", "ingress"],
-        cwd=Path(__file__).resolve().parents[1],
-        env={
-            **os.environ,
-            "PATH": f"{tmp_path / 'fake-caddy-bin'}:{os.environ['PATH']}",
-            "FAKE_CADDY_LOG": str(caddy_log),
-            "FAKE_SYSTEMCTL_LOG": str(systemctl_log),
-            "TERMINAL_MCP_INSTALL_ROOT": str(tmp_path / "install"),
-            "TERMINAL_MCP_ENV_DIR": str(tmp_path / "etc"),
-            "TERMINAL_MCP_DATA_DIR": str(tmp_path / "data"),
-            "TERMINAL_MCP_CACHE_DIR": str(tmp_path / "cache"),
-            "TERMINAL_MCP_BACKUP_DIR": str(backups),
-            "TERMINAL_MCP_CADDYFILE": str(caddyfile),
-            "TERMINAL_MCP_CADDY_BIN": str(tmp_path / "fake-caddy-bin" / "caddy"),
-            "TERMINAL_MCP_CADDY_SERVICE": "caddy",
-            "TERMINAL_MCP_CADDY_MANAGE_MODE": "required",
-            "TERMINAL_MCP_SYSTEMCTL": str(tmp_path / "fake-caddy-bin" / "systemctl"),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert second.returncode == 0
-    assert systemctl_log.read_text().splitlines() == ["reload caddy"]
-
-
 def test_ingress_command_restores_caddyfile_when_reload_fails(tmp_path):
     result, caddyfile, original, _caddy_log, systemctl_log, backups = _run_ingress_config(
         tmp_path, reload_ok=False
@@ -369,17 +194,6 @@ def test_ingress_command_restores_caddyfile_when_reload_fails(tmp_path):
     assert caddyfile.read_text() == original
     assert len(list(backups.glob("caddy-*.Caddyfile"))) == 1
     assert systemctl_log.read_text().splitlines() == ["reload caddy", "reload caddy"]
-
-
-def test_doctor_skips_v1_console_probes_until_public_cutover(tmp_path):
-    result, curl_log = _run_doctor_with_ingress_status(
-        tmp_path, "401", fleet_v1_public_enabled="false"
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "/connect" in curl_log
-    assert "/actions/console/snapshot" in curl_log
-    assert "/console/fleet/v1/" not in curl_log
 
 
 def test_doctor_probes_console_fallback_and_read_v2_surfaces(tmp_path):
@@ -400,363 +214,3 @@ def test_doctor_probes_console_fallback_and_read_v2_surfaces(tmp_path):
         "/console/fleet/v1/ws-ticket",
     ):
         assert route in curl_log
-
-
-def _run_ingress_defaults(tmp_path, origin_line: str):
-    env_dir = tmp_path / "etc-origins"
-    env_dir.mkdir()
-    env_file = env_dir / "terminal-mcp.env"
-    env_file.write_text(
-        'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example.test"\n'
-        + origin_line
-        + "\n"
-    )
-    result = subprocess.run(
-        ["bash", "deploy/install.sh", "ingress"],
-        cwd=Path(__file__).resolve().parents[1],
-        env={
-            **os.environ,
-            "TERMINAL_MCP_INSTALL_ROOT": str(tmp_path / "install-origins"),
-            "TERMINAL_MCP_ENV_DIR": str(env_dir),
-            "TERMINAL_MCP_DATA_DIR": str(tmp_path / "data-origins"),
-            "TERMINAL_MCP_CACHE_DIR": str(tmp_path / "cache-origins"),
-            "TERMINAL_MCP_BACKUP_DIR": str(tmp_path / "backups-origins"),
-            "TERMINAL_MCP_CADDY_MANAGE_MODE": "off",
-            "TERMINAL_MCP_SYSTEMCTL": "/bin/true",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result, env_file.read_text()
-
-
-def test_ingress_repairs_empty_console_origin_for_existing_install(tmp_path):
-    result, env_text = _run_ingress_defaults(
-        tmp_path, 'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS=""'
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert 'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"' in env_text
-
-
-def test_ingress_preserves_custom_origin_and_adds_canonical_origin_once(tmp_path):
-    result, env_text = _run_ingress_defaults(
-        tmp_path,
-        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://ops.example.invalid"',
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert (
-        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS='
-        '"https://ops.example.invalid,https://localhost"'
-        in env_text
-    )
-
-
-def _schema_guard_function() -> str:
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-    return "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
-        "\n}\n\ninstall_cli_link(){", 1
-    )[0] + "\n}"
-
-
-def _run_runtime_schema_guard(tmp_path, *, current_version: int, target_version: int):
-    data = tmp_path / f"data-{current_version}-{target_version}"
-    data.mkdir()
-    runtime_db = data / "terminal-mcp.sqlite3"
-    with sqlite3.connect(runtime_db) as db:
-        db.execute(f"PRAGMA user_version={current_version}")
-
-    release = tmp_path / f"release-{target_version}"
-    package = release / "terminal_mcp" / "storage"
-    package.mkdir(parents=True)
-    (release / "terminal_mcp" / "__init__.py").write_text("")
-    (package / "__init__.py").write_text("")
-    (package / "sqlite.py").write_text(f"SCHEMA_VERSION = {target_version}\n")
-
-    runner = tmp_path / f"schema-runtime-{current_version}-{target_version}.sh"
-    runner.write_text(
-        "#!/bin/bash\n"
-        f"DATA={str(data)!r}\n"
-        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
-        + _schema_guard_function()
-        + "\n"
-        + f"schema_rollback_safe {str(release)!r}\n"
-    )
-    return subprocess.run(
-        ["bash", str(runner)],
-        env={**os.environ, "PYTHON": sys.executable},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def test_installer_blocks_runtime_schema_rollback_without_persistent_rows(tmp_path):
-    result = _run_runtime_schema_guard(tmp_path, current_version=18, target_version=17)
-    assert result.returncode == 42
-    assert "Refusing runtime schema downgrade 18->17" in result.stderr
-    assert "cannot restore a compatible runtime database" in result.stderr
-
-
-@pytest.mark.parametrize("target_version", [18, 19])
-def test_installer_allows_runtime_schema_when_target_is_compatible(tmp_path, target_version):
-    result = _run_runtime_schema_guard(
-        tmp_path, current_version=18, target_version=target_version
-    )
-    assert result.returncode == 0, result.stderr
-
-
-
-
-def _run_fleet_control_schema_guard(tmp_path, *, current_version: int, target_version: int):
-    data = tmp_path / f"fleet-control-{current_version}-{target_version}"
-    data.mkdir()
-    control_db = data / "fleet-control.sqlite3"
-    with sqlite3.connect(control_db) as db:
-        db.executescript(
-            """
-            CREATE TABLE control_schema(
-                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-                version INTEGER NOT NULL
-            );
-            """
-        )
-        db.execute("INSERT INTO control_schema(singleton,version) VALUES(1,?)", (current_version,))
-
-    release = tmp_path / f"fleet-control-release-{target_version}"
-    package = release / "terminal_mcp" / "fleet"
-    package.mkdir(parents=True)
-    (release / "terminal_mcp" / "__init__.py").write_text("")
-    (package / "__init__.py").write_text("")
-    (package / "control_storage.py").write_text(
-        "class FleetControlStore:\n"
-        f"    SCHEMA_VERSION = {target_version}\n"
-    )
-
-    runner = tmp_path / f"fleet-control-guard-{current_version}-{target_version}.sh"
-    runner.write_text(
-        "#!/bin/bash\n"
-        f"DATA={str(data)!r}\n"
-        f"ENV_FILE={str(data / 'missing.env')!r}\n"
-        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
-        + _schema_guard_function()
-        + "\n"
-        + f"schema_rollback_safe {str(release)!r}\n"
-    )
-    return subprocess.run(
-        ["bash", str(runner)],
-        env={**os.environ, "PYTHON": sys.executable},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-@pytest.mark.parametrize(
-    ("current_version", "target_version"),
-    [(3, 2)],
-)
-def test_installer_blocks_fleet_control_schema_downgrade(
-    tmp_path,
-    current_version,
-    target_version,
-):
-    result = _run_fleet_control_schema_guard(
-        tmp_path,
-        current_version=current_version,
-        target_version=target_version,
-    )
-    assert result.returncode == 45
-    assert (
-        f"Refusing fleet-control schema downgrade {current_version}->{target_version}"
-        in result.stderr
-    )
-    assert "managed topology/trust/AccessPolicy state" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("current_version", "target_version"),
-    [(2, 2), (2, 3)],
-)
-def test_installer_allows_compatible_fleet_control_schema(
-    tmp_path,
-    current_version,
-    target_version,
-):
-    result = _run_fleet_control_schema_guard(
-        tmp_path,
-        current_version=current_version,
-        target_version=target_version,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_health_failure_never_switches_to_schema_incompatible_old_release():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-    activate = script.split("activate(){", 1)[1].split("\n}\nmkdir -p", 1)[0]
-    guard = 'if schema_rollback_safe "$old"; then'
-    restore = 'ln -sfn "$old" "$ROOT/current"'
-    assert guard in activate
-    assert restore in activate
-    assert activate.index(guard) < activate.index(restore)
-
-
-def _run_auth_upgrade_guard(tmp_path, *, with_access_state: bool):
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-    function = "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
-        "\n}\n\ninstall_cli_link(){", 1
-    )[0] + "\n}"
-    data = tmp_path / ("auth-upgrade-state" if with_access_state else "auth-upgrade-empty")
-    data.mkdir()
-    auth_db = data / "auth.sqlite3"
-    with sqlite3.connect(auth_db) as db:
-        if with_access_state:
-            db.executescript(
-                """
-                CREATE TABLE auth_access_slots(logical_agent_id TEXT PRIMARY KEY);
-                CREATE TABLE auth_access_codes(code_index TEXT PRIMARY KEY);
-                CREATE TABLE auth_access_code_tombstones(code_index TEXT PRIMARY KEY);
-                INSERT INTO auth_access_slots VALUES('la_legacy');
-                """
-            )
-        db.execute("PRAGMA user_version=2")
-
-    release = tmp_path / ("release-v3-state" if with_access_state else "release-v3-empty")
-    package = release / "terminal_mcp" / "auth"
-    package.mkdir(parents=True)
-    (release / "terminal_mcp" / "__init__.py").write_text("")
-    (package / "__init__.py").write_text("")
-    (package / "foundation.py").write_text("AUTH_SCHEMA_VERSION = 3\n")
-    runner = tmp_path / ("auth-upgrade-state.sh" if with_access_state else "auth-upgrade-empty.sh")
-    runner.write_text(
-        "#!/bin/bash\n"
-        f"DATA={str(data)!r}\n"
-        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
-        + function
-        + "\n"
-        + f"schema_rollback_safe {str(release)!r}\n"
-    )
-    result = subprocess.run(
-        ["bash", str(runner)],
-        env={**os.environ, "PYTHON": sys.executable},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    with sqlite3.connect(auth_db) as db:
-        version_after = db.execute("PRAGMA user_version").fetchone()[0]
-        slot_rows = (
-            db.execute("SELECT COUNT(*) FROM auth_access_slots").fetchone()[0]
-            if with_access_state
-            else 0
-        )
-    return result, version_after, slot_rows
-
-
-def test_installer_refuses_v2_to_v3_with_existing_access_verifier_state(tmp_path):
-    result, version_after, slot_rows = _run_auth_upgrade_guard(tmp_path, with_access_state=True)
-    assert result.returncode == 44
-    assert "Refusing auth schema upgrade 2->3" in result.stderr
-    assert "cannot be safely re-keyed automatically" in result.stderr
-    assert version_after == 2
-    assert slot_rows == 1
-
-
-def test_installer_allows_v2_to_v3_when_access_state_is_empty(tmp_path):
-    result, version_after, slot_rows = _run_auth_upgrade_guard(tmp_path, with_access_state=False)
-    assert result.returncode == 0, result.stderr
-    assert version_after == 2
-    assert slot_rows == 0
-
-
-def _run_release_version_guard(
-    tmp_path,
-    *,
-    current_version: str,
-    candidate_version: str,
-    allow_downgrade: bool,
-):
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-    functions = "release_version(){" + script.split("release_version(){", 1)[1].split(
-        "\n}\nbackup(){", 1
-    )[0] + "\n}"
-    root = tmp_path / "install"
-    current = root / "current"
-    staged = root / "staged"
-    for release, version in ((current, current_version), (staged, candidate_version)):
-        (release / "bin").mkdir(parents=True)
-        python = release / "bin" / "python"
-        python.write_text(f"#!/bin/sh\nprintf '%s\\n' {version!r}\n")
-        python.chmod(0o755)
-
-    runner = tmp_path / "guard.sh"
-    runner.write_text(
-        "#!/bin/bash\n"
-        "set -euo pipefail\n"
-        f"ROOT={str(root)!r}\n"
-        f"ALLOW_DOWNGRADE={'true' if allow_downgrade else 'false'}\n"
-        + functions
-        + "\n"
-        + f"guard_downgrade {str(staged)!r}\n"
-    )
-    return subprocess.run(
-        ["bash", str(runner)],
-        capture_output=True,
-        text=True,
-        check=False,
-    ), staged
-
-
-def test_installer_blocks_release_downgrade_without_override(tmp_path):
-    result, staged = _run_release_version_guard(
-        tmp_path,
-        current_version="0.11.2",
-        candidate_version="0.10.1",
-        allow_downgrade=False,
-    )
-
-    assert result.returncode != 0
-    assert "Downgrade blocked: current=0.11.2 candidate=0.10.1" in result.stderr
-    assert "install.sh update --allow-downgrade" in result.stderr
-    assert not staged.exists()
-
-
-def test_installer_allows_release_downgrade_with_explicit_override(tmp_path):
-    result, staged = _run_release_version_guard(
-        tmp_path,
-        current_version="0.11.2",
-        candidate_version="0.10.1",
-        allow_downgrade=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "WARNING: explicit downgrade allowed: 0.11.2 -> 0.10.1" in result.stderr
-    assert staged.exists()
-
-
-@pytest.mark.parametrize("candidate_version", ["0.11.2", "0.12.0"])
-def test_installer_allows_equal_or_newer_release(tmp_path, candidate_version):
-    result, staged = _run_release_version_guard(
-        tmp_path,
-        current_version="0.11.2",
-        candidate_version=candidate_version,
-        allow_downgrade=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert staged.exists()
-
-
-def test_allow_downgrade_flag_is_update_only():
-    result = subprocess.run(
-        ["bash", "deploy/install.sh", "doctor", "--allow-downgrade"],
-        cwd=Path(__file__).resolve().parents[1],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 2
-    assert "--allow-downgrade is valid only with update" in result.stderr

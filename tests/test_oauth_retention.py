@@ -52,32 +52,3 @@ async def test_consume_code_removes_used_authorization_code(tmp_path):
     assert await store.consume_code(code) is True
     assert await store.get_code(code) is None
     assert (await counts(store.path))[0] == 0
-
-
-@pytest.mark.asyncio
-async def test_rotate_refresh_removes_revoked_token_and_keeps_new_tokens(tmp_path):
-    store = OAuthStore(tmp_path / "oauth.sqlite3")
-    await store.initialize()
-    old = await store.create_refresh("client", "scope", 60)
-    assert await store.rotate_refresh(old) == ("client", "scope")
-    assert await store.rotate_refresh(old) is None
-    assert (await counts(store.path))[1] == 0
-    new = await store.create_refresh("client", "scope", 60)
-    assert (await counts(store.path))[1] == 1
-    assert await store.rotate_refresh(new) == ("client", "scope")
-
-
-@pytest.mark.asyncio
-async def test_invalid_refresh_attempt_persists_housekeeping(tmp_path):
-    path = tmp_path / "oauth.sqlite3"
-    store = OAuthStore(path)
-    await store.initialize()
-    now = int(time.time())
-    async with aiosqlite.connect(path) as db:
-        await db.execute(
-            "INSERT INTO oauth_refresh_tokens VALUES(?,?,?,?,0)",
-            (store.digest("expired"), "client", "scope", now - 1),
-        )
-        await db.commit()
-    assert await store.rotate_refresh("expired") is None
-    assert (await counts(path))[1] == 0

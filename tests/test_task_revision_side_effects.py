@@ -5,9 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
-from terminal_mcp.application.task_requests import TaskCommentRequest
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
@@ -45,7 +44,12 @@ async def test_coordinator_classifies_stale_revision_before_action_handler():
     # Project actual domain fields; the double does not manufacture a conflict.
     coordinator._result = AsyncMock(side_effect=lambda *args, **fields: fields)
     receipt = await coordinator.mutate(
-        "agent", action="claim", namespace="test", task_id="one", expected_revision=1
+        "agent",
+        action="claim",
+        namespace="test",
+        task_id="one",
+        expected_revision=1,
+        _claim_owner=ClaimOwner.logical_agent("agent"),
     )
     assert (receipt["ok"], receipt["code"], receipt["details"]) == (
         False,
@@ -55,26 +59,12 @@ async def test_coordinator_classifies_stale_revision_before_action_handler():
     coordinator._action_claim.assert_not_awaited()
 
 
-def test_comments_use_append_semantics_and_reject_revision_argument():
-    with pytest.raises(ValidationError) as exc:
-        TaskCommentRequest.model_validate(
-            {
-                "action": "comment",
-                "namespace": "test",
-                "task_id": "one",
-                "comment_text": "append",
-                "expected_revision": 1,
-            }
-        )
-    assert exc.value.errors()[0]["type"] == "extra_forbidden"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "action,method",
     [
-        ("claim", "claim"),
-        ("release", "release_claim_mutation"),
+        ("claim", "claim_owner"),
+        ("release", "release_owner_claim_mutation"),
         ("review", "upsert_reviews"),
         ("relate", "add_relation"),
         ("unrelate", "remove_relation"),
@@ -87,7 +77,9 @@ async def test_revision_race_between_preflight_and_storage_is_fenced(
     coordinator = TaskCoordinator(store)
     original = getattr(store, method)
     if action == "release":
-        await store.claim("test", "one", "agent", claim_intent="setup")
+        await store.claim_owner(
+            "test", "one", ClaimOwner.logical_agent("agent"), claim_intent="setup"
+        )
     if action == "unrelate":
         await store.add_relation(
             "test",
@@ -129,6 +121,7 @@ async def test_revision_race_between_preflight_and_storage_is_fenced(
         related_namespace="test",
         related_task_id="two",
         relation_kind="related_to",
+        _claim_owner=ClaimOwner.logical_agent("agent"),
     )
     assert result["ok"] is False
     assert result["code"] == "revision_conflict"

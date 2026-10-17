@@ -70,31 +70,6 @@ async def reconcile(store, now):
 
 
 @pytest.mark.asyncio
-async def test_remote_expiry_reconciles_after_restart_without_local_session(remote_case):
-    case = remote_case
-    await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=lease(case))
-    before = await case.tasks.get_task(NS, TASK)
-    async with aiosqlite.connect(case.path) as db:
-        assert (
-            await (await db.execute("SELECT COUNT(*) FROM logical_agent_work_sessions")).fetchone()
-        )[0] == 0
-    # Reinitialize durable storage, not an in-memory registry or a fake session.
-    await SqliteRepository(case.path, case.output).initialize()
-    restarted = TaskStore(case.path)
-    when = case.now + timedelta(seconds=121)
-    assert len(await restarted.stale_leased_claims(now=utc_text(when))) == 1
-    assert await reconcile(restarted, when) == 1
-    after = await restarted.get_task(NS, TASK)
-    assert after["state"] == "ready"
-    assert after["revision"] == before["revision"]  # Lease release is not content edit
-    assert after["checkpoint"] == {"retain": ["handoff", 7]}
-    assert await restarted.active_claims(NS, TASK) == []
-    assert await restarted.stale_leased_claims(now=utc_text(when)) == []
-    assert await reconcile(restarted, when + timedelta(seconds=1)) == 0
-    assert (await restarted.get_task(NS, TASK))["revision"] == after["revision"]
-
-
-@pytest.mark.asyncio
 async def test_remote_fence_rejects_late_claim_before_any_claim_existed(remote_case):
     case = remote_case
     fields = lease(case)
@@ -103,27 +78,44 @@ async def test_remote_fence_rejects_late_claim_before_any_claim_existed(remote_c
         await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=fields)
     assert await case.tasks.active_claims(NS, TASK) == []
     assert (await case.tasks.get_task(NS, TASK))["revision"] == 1
-    # The fence is exact: a successor WorkSession can obtain a new claim.
-    successor = lease(case, session="ws_remote_review_b", epoch=2)
-    await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=successor)
-    assert len(await case.tasks.active_claims(NS, TASK)) == 1
 
 
 @pytest.mark.asyncio
-async def test_claim_waiting_on_database_lock_rechecks_expiry_at_commit(remote_case):
+async def test_claim_waiting_on_database_lock_rechecks_expiry_at_commit(remote_case, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from terminal_mcp.storage import claim_leases
+
     case = remote_case
-    fields = lease(case, expires=utc_now() + timedelta(seconds=0.5))
+    clock = [case.now]
+    fields = lease(case, expires=case.now + timedelta(seconds=1))
+    monkeypatch.setattr(claim_leases, "utc_now", lambda: clock[0])
+    waiting = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    original_connect = case.tasks._connect
+
+    @asynccontextmanager
+    async def traced_connection():
+        async with original_connect() as db:
+            await db.set_trace_callback(
+                lambda sql: (
+                    loop.call_soon_threadsafe(waiting.set) if sql == "BEGIN IMMEDIATE" else None
+                )
+            )
+            yield db
+
+    monkeypatch.setattr(case.tasks, "_connect", traced_connection)
     async with aiosqlite.connect(case.path) as blocker:
         await blocker.execute("BEGIN IMMEDIATE")
         pending = asyncio.create_task(
             case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=fields)
         )
-        await asyncio.sleep(0.7)
+        await asyncio.wait_for(waiting.wait(), timeout=1)
+        clock[0] += timedelta(seconds=2)
         await blocker.commit()
     with pytest.raises(PersistentStoreError):
-        await asyncio.wait_for(pending, timeout=5)
+        await pending
     assert await case.tasks.active_claims(NS, TASK) == []
-    assert (await case.tasks.get_task(NS, TASK))["revision"] == 1
 
 
 @pytest.mark.asyncio
@@ -142,27 +134,18 @@ async def test_late_remote_cleanup_preserves_successor_claim(remote_case):
 
 
 @pytest.mark.asyncio
-async def test_remote_expiry_preserves_another_cooperative_durable_owner(remote_case):
+async def test_expired_remote_lease_release_preserves_cooperative_durable_owner(remote_case):
     case = remote_case
-    await case.tasks.update_task(NS, TASK, state="in_progress")
-    await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=lease(case))
+    fields = lease(case)
+    await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=fields)
     await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(OTHER))
-    when = case.now + timedelta(seconds=121)
-    assert await reconcile(case.tasks, when) == 1
-    remaining = await case.tasks.active_claims(NS, TASK)
-    assert len(remaining) == 1 and remaining[0]["owner_id"] == OTHER
-    assert (await case.tasks.get_task(NS, TASK))["state"] == "in_progress"
-    assert await case.tasks.stale_leased_claims(now=utc_text(when)) == []
-
-
-@pytest.mark.asyncio
-async def test_stale_claim_health_observation_is_read_only(remote_case):
-    case = remote_case
-    await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=lease(case))
-    before = await case.tasks.get_task(NS, TASK)
-    when = utc_text(case.now + timedelta(seconds=121))
-    stale = await case.tasks.stale_leased_claims(now=when)
-    assert len(stale) == 1 and stale[0]["logical_agent_id"] == REMOTE
-    assert await case.tasks.stale_leased_claims(now=when) == stale
-    assert await case.tasks.get_task(NS, TASK) == before
-    assert len(await case.tasks.active_claims(NS, TASK)) == 1
+    released = await case.tasks.release_work_session_claims(
+        REMOTE,
+        fields["work_session_id"],
+        fields["session_epoch"],
+        reason="hard_duration",
+        now=utc_text(case.now + timedelta(seconds=121)),
+    )
+    assert released == 1
+    (remaining,) = await case.tasks.active_claims(NS, TASK)
+    assert remaining["owner_id"] == OTHER

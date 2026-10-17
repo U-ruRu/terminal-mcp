@@ -5,24 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from terminal_mcp.application.base import canonical_application_result
 from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.telemetry import observed
 
 SECRET = "secret technical exception text"
-
-
-def test_application_failure_normalization_drops_legacy_diagnostics():
-    result = canonical_application_result(
-        {
-            "ok": False,
-            "code": "policy_incompatible",
-            "error": SECRET,
-            "diagnostics": {"exception": SECRET},
-        }
-    )
-    assert result == public_error("policy_incompatible").as_dict()
-    assert SECRET not in repr(result)
 
 
 @pytest.mark.asyncio

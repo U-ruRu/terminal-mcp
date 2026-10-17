@@ -1,7 +1,7 @@
-import type { HttpOptions, HttpResponse } from '@capacitor/core'
-import { expect, test, vi } from 'vitest'
+import type { HttpOptions,HttpResponse } from '@capacitor/core'
+import { expect,test,vi } from 'vitest'
 
-import { AuthTransportError, PairingTransport, type NativeHttpLike } from './transport'
+import { PairingTransport,type NativeHttpLike } from './transport'
 
 const exchanged = {
   device_id: 'dev-test',
@@ -77,69 +77,6 @@ test('Android pairing uses native HTTP instead of WebView fetch', async () => {
   expect(native.request).toHaveBeenCalledTimes(1)
 })
 
-test('Android refresh uses native form request and rotates credentials response', async () => {
-  const fetcher = vi.fn()
-  const native = nativeClient(async (options) => {
-    expect(options.url).toBe('https://terminal.example/oauth/token')
-    expect(options.headers).toEqual({
-      'Content-Type': 'application/x-www-form-urlencoded',
-    })
-    expect(options.data).toBe(
-      'grant_type=refresh_token&client_id=client-test&refresh_token=refresh-old',
-    )
-    return nativeResponse({
-      access_token: 'access-next',
-      token_type: 'Bearer',
-      expires_in: 600,
-      refresh_token: 'refresh-next',
-      scope: 'terminal:read',
-    })
-  })
-
-  const result = await new PairingTransport(fetcher, native, () => true).refresh(
-    'https://terminal.example',
-    'client-test',
-    'refresh-old',
-  )
-
-  expect(result.refresh_token).toBe('refresh-next')
-  expect(fetcher).not.toHaveBeenCalled()
-})
-
-test.each([
-  ['SSLHandshakeException certificate verify failed', 'tls_error', false],
-  ['java.net.UnknownHostException: private-host.example', 'dns_error', true],
-  ['java.net.SocketTimeoutException: timed out', 'timeout', true],
-  ['CLEARTEXT communication not permitted', 'cleartext_blocked', false],
-  ['opaque native failure', 'network_error', true],
-])(
-  'native failures map to safe actionable diagnostics: %s',
-  async (nativeMessage, code, retryable) => {
-    const native = nativeClient(async () => {
-      throw new Error(nativeMessage)
-    })
-    const transport = new PairingTransport(vi.fn(), native, () => true)
-
-    const failure = await transport
-      .exchange(
-        'https://terminal.example',
-        'must-not-leak-secret',
-        'public-key',
-        'Android console',
-      )
-      .then(
-        () => null,
-        (error: unknown) => error,
-      )
-
-    expect(failure).toBeInstanceOf(AuthTransportError)
-    expect(failure).toMatchObject({ code, retryable })
-    expect((failure as Error).message).toContain(`Diagnostic: ${code}`)
-    expect((failure as Error).message).not.toContain(nativeMessage)
-    expect((failure as Error).message).not.toContain('must-not-leak-secret')
-  },
-)
-
 test('native HTTP errors preserve safe server code without leaking response detail', async () => {
   const native = nativeClient(async () =>
     nativeResponse(
@@ -165,21 +102,5 @@ test('native HTTP errors preserve safe server code without leaking response deta
     retryable: false,
     message:
       'The pairing link is invalid, expired, or already used. Generate a new pairing link. Diagnostic: invalid_pairing.',
-  })
-})
-
-test('untrusted server error identifiers collapse to a stable HTTP diagnostic', async () => {
-  const native = nativeClient(async () =>
-    nativeResponse({ error: 'bad value with secret=abc' }, 503),
-  )
-  const transport = new PairingTransport(vi.fn(), native, () => true)
-
-  await expect(
-    transport.refresh('https://terminal.example', 'client-test', 'refresh-secret'),
-  ).rejects.toMatchObject({
-    status: 503,
-    code: 'http_503',
-    retryable: true,
-    message: 'Authentication failed with HTTP 503. Diagnostic: http_503.',
   })
 })

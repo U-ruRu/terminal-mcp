@@ -1,6 +1,5 @@
 """Independent compact/chunk acceptance; isolated stores and public wire only."""
 
-
 import pytest
 from test_access_mesh_messages_v2 import _public_name, actor
 from test_access_mesh_messages_v2 import mesh_pair as mesh_pair

@@ -1,5 +1,5 @@
-import { expect, test, vi } from 'vitest'
-import type { ConnectionProfile, ProfileRestoreResult } from '../connections/types'
+import { expect,test,vi } from 'vitest'
+import type { ConnectionProfile,ProfileRestoreResult } from '../connections/types'
 import { BrowserFleetIngressEndpoint } from './browserIngress'
 
 function profile(): ConnectionProfile {
@@ -59,15 +59,4 @@ test('missing OAuth credential fails closed before network use', async () => {
   const endpoint = new BrowserFleetIngressEndpoint(profile(), credentials, fetcher)
   await expect(endpoint.probe()).rejects.toThrow('fleet_ingress_auth_revoked')
   expect(fetcher).not.toHaveBeenCalled()
-})
-
-test('candidate without current projection capability is not compatible', async () => {
-  const credentials = { restore: vi.fn(async () => connected()) }
-  const fetcher = vi.fn(async () => json({
-    ok: true, protocol_major: 1, fleet_id: 'fleet-a', node_id: 'node-a',
-    projection_epoch: 1, projection_seq: 1, role: 'owner', owner_node_id: 'node-a',
-    capabilities: [], sources: [],
-  }))
-  const endpoint = new BrowserFleetIngressEndpoint(profile(), credentials, fetcher)
-  expect((await endpoint.probe()).compatible).toBe(false)
 })

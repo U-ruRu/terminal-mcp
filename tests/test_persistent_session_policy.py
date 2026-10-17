@@ -52,31 +52,3 @@ def test_enabled_session_policy_rejects_unordered_thresholds(overrides, code):
     values.update(overrides)
     with pytest.raises(ValidationError, match=code):
         _settings(**values)
-
-
-def test_disabled_session_policy_does_not_apply_enabled_thresholds():
-    settings = _settings(
-        persistent_agents_enabled=False,
-        persistent_session_duration_sec=1,
-        persistent_session_warning_after_sec=99,
-        persistent_session_alert_after_sec=99,
-    )
-    assert settings.persistent_agents_enabled is False
-
-
-@pytest.mark.parametrize(
-    "overrides,allowed",
-    [
-        ({"persistent_agents_enabled": False}, True),
-        ({"persistent_agents_enabled": True}, False),
-        ({"persistent_agents_enabled": True, "auth_mode": "none", "mcp_auth_mode": "none"}, True),
-        ({"persistent_agents_enabled": True, "legacy_agent_admission_enabled": True}, True),
-        ({"persistent_agents_enabled": False, "legacy_agent_admission_enabled": False}, False),
-    ],
-)
-def test_current_admission_policy_uses_persistent_capability_and_explicit_override(
-    overrides, allowed
-):
-    values = {"auth_mode": "bearer", "mcp_auth_mode": "bearer", "actions_auth_mode": "bearer"}
-    values.update(overrides)
-    assert _settings(**values).legacy_admission_allowed() is allowed

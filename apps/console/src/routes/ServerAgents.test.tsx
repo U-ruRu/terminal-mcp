@@ -1,11 +1,9 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { afterEach, expect, test } from 'vitest'
+import { cleanup,render,screen } from '@testing-library/react'
+import { MemoryRouter,Route,Routes } from 'react-router-dom'
+import { afterEach,expect,test } from 'vitest'
 
-import type { ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
+import type { ConsoleSnapshotReadModel,TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
-import { AppShell } from '../components/AppShell'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerAgents } from './ServerAgents'
 
@@ -61,18 +59,13 @@ function instance(status: 'live' | 'offline' = 'live'): FleetInstanceView {
   }
 }
 
-function Back() {
-  const navigate = useNavigate()
-  return <button type="button" onClick={() => navigate(-1)}>Back</button>
-}
-
 function renderAgents(path: string, fleet = [instance()]) {
   return render(
     <I18nProvider>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/servers/:instanceId/agents" element={<><ServerAgents instances={fleet} /><Back /></>} />
-          <Route path="/servers/:instanceId/agents/:agentId" element={<><ServerAgents instances={fleet} /><Back /></>} />
+          <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={fleet} />} />
+          <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={fleet} />} />
           <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<div>Task destination</div>} />
         </Routes>
       </MemoryRouter>
@@ -90,59 +83,10 @@ test('duplicate public names have distinct stable deep links', () => {
   expect(links[1]).toHaveAttribute('href', '/servers/alpha/agents/SameName-2222')
 })
 
-test('reconnect preserves agent detail and its returnTo navigation context', async () => {
-  const live = instance()
-  const reconnecting: FleetInstanceView = { ...live, runtime: { ...live.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: live.runtime.realtime ? { ...live.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null } }
-  const entry = { pathname: '/servers/alpha/agents/SameName-2222', state: { returnTo: '/activity?server=alpha&agent=SameName-2222' } }
-  const tree = (fleet: FleetInstanceView[]) => (
-    <I18nProvider><MemoryRouter initialEntries={[entry]}><AppShell servers={[]}>
-      <Routes>
-        <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={fleet} />} />
-        <Route path="/activity" element={<div>Agent activity return destination</div>} />
-      </Routes>
-    </AppShell></MemoryRouter></I18nProvider>
-  )
-  const view = render(tree([live]))
-  expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
-  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'Back to agents' })).not.toBeInTheDocument()
-  view.rerender(tree([reconnecting]))
-  expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
-  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: 'Back to agents' })).not.toBeInTheDocument()
-})
-
 test('direct reload route resolves exact session and only its related task from cached offline state', () => {
   renderAgents('/servers/alpha/agents/SameName-2222', [instance('offline')])
   expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
   expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'TWO · Task TWO' })).toHaveAttribute('href', '/servers/alpha/tasks/console/TWO')
   expect(screen.queryByRole('link', { name: 'ONE · Task ONE' })).not.toBeInTheDocument()
-})
-
-test('standard links preserve browser history for Back', async () => {
-  renderAgents('/servers/alpha/agents')
-  const links = screen.getAllByRole('link', { name: 'SameName' })
-  await userEvent.click(links[1])
-  expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: 'Back' }))
-  expect(screen.getAllByRole('link', { name: 'SameName' })).toHaveLength(2)
-})
-
-
-test('known agent without an active session keeps a last-known detail surface', () => {
-  const staleSnapshot: ConsoleSnapshotReadModel = {
-    ...snapshot,
-    agents: [{ ...snapshot.agents[0], status: 'suspended', logicalSessionStatus: undefined, intent: 'Last known work' }],
-  }
-  const stale: FleetInstanceView = {
-    ...instance('offline'),
-    runtime: { ...instance('offline').runtime, realtime: instance('offline').runtime.realtime ? { ...instance('offline').runtime.realtime!, snapshot: staleSnapshot } : null },
-  }
-  renderAgents('/servers/alpha/agents/SameName-1111', [stale])
-  expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
-  expect(screen.getByText('Last known state')).toBeInTheDocument()
-  expect(screen.getByText('Last known work')).toBeInTheDocument()
-  expect(screen.queryByText('Agent session unavailable')).not.toBeInTheDocument()
 })

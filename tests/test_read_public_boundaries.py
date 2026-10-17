@@ -1,251 +1,94 @@
+"""Current local message reads commit only a successfully encoded response page."""
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
 import pytest
+import pytest_asyncio
 
-from terminal_mcp.core.read_contract import (
-    CALL_TOOL_RESULT_BUDGET_BYTES,
-    READ_RESPONSE_BUDGET_BYTES,
-)
-from terminal_mcp.mcp.output_contracts import (
-    cmd_result,
-    serialized_call_tool_result_size,
-)
-from terminal_mcp.mcp.server import build_mcp
+from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
+from terminal_mcp.storage.agents import AgentStore
+from terminal_mcp.storage.sqlite import SqliteRepository
+
+NOW = datetime(2026, 10, 17, 12, tzinfo=UTC)
+IDENTITY = {"logical_agent_id": "receiver", "public_name": "Receiver"}
 
 
-class _CursorOnlyService:
-    # A truthy backend is enough for message to reach cursor validation.
-    persistent = object()
-
-    async def context(self, *args, **kwargs):
-        raise AssertionError("invalid public cursor must be rejected before context backend access")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("tool_name", "arguments"),
-    [
-        ("observe", {"subject": "sessions", "cursor": "7"}),
-        ("message", {"sender": "Alpha", "cursor": "7"}),
-        (
-            "context",
-            {"request": {"action": "list", "cursor": "7"}},
-        ),
-        (
-            "cmd",
-            {
-                "request": {
-                    "action": "read",
-                    "cmd_hash": "command-1",
-                    "cursor": "7",
-                }
-            },
-        ),
-    ],
-)
-async def test_public_reads_reject_decimal_cursor_bypass(tool_name, arguments):
-    tools = {tool.name: tool for tool in build_mcp(_CursorOnlyService())._tool_manager.list_tools()}
-    result = await tools[tool_name].run(arguments, convert_result=True)
-
-    assert result.structuredContent["ok"] is False
-    assert result.structuredContent["code"] == "invalid_cursor"
-    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
-
-
-class _LargeSessionBackend:
-    def __init__(self):
-        self.rows = [
-            {
-                "public_name": f"Agent-{index:03d}",
-                "mode": "persistent",
-                "display_suffix": "x" * 1200,
-                "authority_node_id": "secondary",
-                "access_generation": index + 1,
-                "session_state": "inactive",
-            }
-            for index in range(100)
-        ]
-
-    async def access_observe_slots(self, *, limit=None, offset=0):
-        end = None if limit is None else offset + limit
-        return {"ok": True, "sessions": self.rows[offset:end]}
-
-
-class _LargeSessionService:
-    def __init__(self):
-        self.persistent = _LargeSessionBackend()
-
-
-@pytest.mark.asyncio
-async def test_public_observe_final_mcp_result_stays_within_serialized_budget():
-    tools = {
-        tool.name: tool for tool in build_mcp(_LargeSessionService())._tool_manager.list_tools()
+@pytest_asyncio.fixture
+async def inbox(tmp_path):
+    path = tmp_path / "inbox.sqlite3"
+    await SqliteRepository(path).initialize()
+    mesh = SimpleNamespace(store=SimpleNamespace(local_node_id="node"), clock=lambda: NOW)
+    messages = AccessMeshMessaging(mesh, AgentStore(path))
+    wire = {
+        "origin_node_id": "node",
+        "created_at": NOW.isoformat(),
+        "sender_id": "sender",
+        "sender_name": "Sender",
+        "text": "Current message",
+        "target": "Receiver",
+        "mode": "notify",
+        "scope": "local",
+        "require_reply": False,
+        "alert": False,
+        "namespace": None,
+        "task_id": None,
+        "reply_to": None,
     }
-    result = await tools["observe"].run(
-        {
-            "subject": "sessions",
-            "detail": "full",
-            "limit": 100,
-        },
-        convert_result=True,
+    messages.store.accept({**wire, "message_hash": "node:localmsg:first"}, [IDENTITY])
+    messages.store.accept({**wire, "message_hash": "node:localmsg:second"}, [IDENTITY])
+    return messages
+
+
+async def read(messages, preflight):
+    return await messages.read(
+        IDENTITY,
+        history=False,
+        limit=1,
+        cursor=None,
+        detail="full",
+        namespace=None,
+        task_id=None,
+        response_preflight=preflight,
     )
-
-    assert result.structuredContent["ok"] is True
-    assert result.structuredContent["next_cursor"] is not None
-    assert len(result.structuredContent["sessions"]) < 100
-    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
-
-
-def test_final_mcp_budget_compacts_large_coordination_metadata():
-    result = cmd_result(
-        {
-            "ok": True,
-            "cmd_hash": "command-1",
-            "status": "completed",
-            "exit_code": 0,
-            "lines": [],
-            "pending_messages": [
-                {
-                    "message_hash": "message-1",
-                    "sender": "Alpha",
-                    "text": "x" * (READ_RESPONSE_BUDGET_BYTES * 2),
-                }
-            ],
-            "messages": [],
-            "ack_required_pending": False,
-            "alert_pending": False,
-        },
-        "read",
-    )
-
-    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
-    assert result.structuredContent["ok"] is True
-    data = result.structuredContent
-    assert "coordination" not in data and "pending_messages" not in data
-    assert data["command"]["cmd_hash"] == "command-1"
-    assert data["command"]["status"] == "completed"
-    assert data["command"]["exit_code"] == 0
-    assert data["lines"] == []
-    assert len(data["messages"]) == 1
-    assert set(data["messages"][0]) == {"id", "sender", "text"}
-    assert data["messages"][0]["id"] == "message-1"
-    assert data["messages"][0]["sender"] == "Alpha"
-    assert len(data["messages"][0]["text"]) < READ_RESPONSE_BUDGET_BYTES
-    assert "messages_remaining" not in data
-    assert [warning["code"] for warning in data["warnings"]] == ["incoming_messages_truncated"]
-
-
-class _LargeCmdService:
-    async def read(self, cmd_hash=None, lines_count=100, offset=None, agent_id=None):
-        start = int(offset or 0)
-        all_lines = [f"{index:03d}:" + ("y" * 1200) for index in range(100)]
-        lines = all_lines[start : start + int(lines_count)]
-        return {
-            "ok": True,
-            "lines": lines,
-            "next_offset": start + len(lines),
-            "overall_lines_count": len(all_lines),
-            "displayed_lines_count": len(lines),
-            "cmd_hash": cmd_hash,
-            "status": "completed",
-            "exit_code": 0,
-            "output_truncated": False,
-            "output_retained": True,
-            "output_pruned_at": None,
-            "output_bytes": sum(len(line.encode("utf-8")) for line in all_lines),
-            "error": None,
-        }
 
 
 @pytest.mark.asyncio
-async def test_public_cmd_read_final_envelope_is_bounded_with_large_lines():
-    tools = {tool.name: tool for tool in build_mcp(_LargeCmdService())._tool_manager.list_tools()}
-    result = await tools["cmd"].run(
-        {
-            "request": {
-                "action": "read",
-                "cmd_hash": "command-1",
-                "limit": 100,
-            }
-        },
-        convert_result=True,
-    )
+async def test_message_final_envelope_failure_preserves_the_unread_inbox(inbox):
+    failure = {"ok": False, "code": "output_item_too_large"}
 
-    assert result.structuredContent["ok"] is True
-    assert result.structuredContent["has_more"] is True
-    assert result.structuredContent["next_cursor"] is not None
-    assert len(result.structuredContent["lines"]) < 100
-    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+    result = await read(inbox, lambda _page: failure)
 
-
-class _FinalEnvelopeMessageBackend:
-    def __init__(self):
-        self.surfaced = []
-        self.oversized = True
-        self.resolved = []
-
-    async def access_sender_identity(self, sender):
-        self.resolved.append(sender)
-        return {
-            "ok": True,
-            "logical_agent_id": "la-envelope",
-            "work_session_id": "ws-envelope",
-            "session_epoch": 1,
-        }
-
-    async def access_message(self, sender, **kwargs):
-        rows = [
-            {
-                "message_hash": f"m-{index:02d}",
-                "sender": "Sender",
-                "target": sender,
-                "mode": "notify",
-                "state": "delivered",
-                "text": "\\" * 512,
-                "created_at": "2026-10-06T00:00:00.000Z",
-                "seen_count": 0,
-            }
-            for index in range(30)
-        ]
-        return {
-            "ok": True,
-            "messages": rows[: kwargs.get("limit", 20)],
-            "oversized_meta": "x" * (READ_RESPONSE_BUDGET_BYTES * 2) if self.oversized else "",
-        }
-
-    async def surface_message_page(
-        self, sender, *, access_code=None, message_hashes, _resolved_identity=None
-    ):
-        self.surfaced.extend(message_hashes)
-        return {"ok": True, "seen_at": "2026-10-06T00:00:00.000Z"}
-
-
-class _FinalEnvelopeMessageService:
-    def __init__(self):
-        self.persistent = _FinalEnvelopeMessageBackend()
+    assert result == failure
+    with inbox.store.connect() as db:
+        rows = db.execute(
+            "SELECT message_hash,seen_count,read_at FROM coordination_mes"
+            "sage_recipients ORDER BY message_hash"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("node:localmsg:first", 0, None),
+        ("node:localmsg:second", 0, None),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_message_final_envelope_failure_does_not_surface_inbox():
-    service = _FinalEnvelopeMessageService()
-    tools = {tool.name: tool for tool in build_mcp(service)._tool_manager.list_tools()}
-    result = await tools["message"].run({"limit": 100, "detail": "summary"}, convert_result=True)
-    assert result.structuredContent["ok"] is False
-    assert result.structuredContent["code"] == "output_item_too_large"
-    assert service.persistent.surfaced == []
-    assert service.persistent.resolved == [""]
-    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+async def test_message_read_surfaces_only_the_returned_page_after_preflight(inbox):
+    preflight_pages = []
 
+    def accept(page):
+        preflight_pages.append([row["message_hash"] for row in page["messages"]])
+        return None
 
-@pytest.mark.asyncio
-async def test_message_success_surfaces_only_returned_page_once_after_preflight():
-    service = _FinalEnvelopeMessageService()
-    service.persistent.oversized = False
-    tools = {tool.name: tool for tool in build_mcp(service)._tool_manager.list_tools()}
-    result = await tools["message"].run({"limit": 100, "detail": "summary"}, convert_result=True)
-    data = result.structuredContent
-    assert data["ok"] is True
-    assert service.persistent.resolved == [""]
-    assert service.persistent.surfaced == [row["message_hash"] for row in data["messages"]]
-    assert data["messages"]
-    assert all(row["state"] == "read" for row in data["messages"])
-    assert len(service.persistent.surfaced) == len(set(service.persistent.surfaced))
-    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+    result = await read(inbox, accept)
+
+    assert result["ok"] is True
+    assert preflight_pages == [["node:localmsg:second"]]
+    with inbox.store.connect() as db:
+        rows = db.execute(
+            "SELECT message_hash,seen_count,read_at IS NOT NULL FROM coor"
+            "dination_message_recipients ORDER BY message_hash"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("node:localmsg:first", 0, 0),
+        ("node:localmsg:second", 1, 1),
+    ]

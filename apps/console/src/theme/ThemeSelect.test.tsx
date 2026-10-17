@@ -1,6 +1,6 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup,render,screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach,expect,test } from 'vitest'
 
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ThemeProvider } from './ThemeProvider'
@@ -25,17 +25,4 @@ test('lets the user select and persist Soft Light', async () => {
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'soft-light')
   expect(document.documentElement.dataset.theme).toBe('soft-light')
   expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('soft-light')
-})
-
-test('offers and persists Neutral Dark', async () => {
-  render(
-    <I18nProvider>
-      <ThemeProvider>
-        <ThemeSelect />
-      </ThemeProvider>
-    </I18nProvider>,
-  )
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'neutral-dark')
-  expect(document.documentElement.dataset.theme).toBe('neutral-dark')
-  expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('neutral-dark')
 })

@@ -24,50 +24,33 @@ from preparation import (
 # These files test behavior over unchanged schema metadata, not schema generation itself.
 SCHEMA_PREPARATION_MODULES = frozenset(
     {
-        "test_access_mesh_mcp_runtime.py",
-        "test_access_mesh_operator_http.py",
-        "test_access_mesh_session_restart_contract.py",
         "test_access_slot_inheritance_http.py",
         "test_android_slot_public_paths.py",
         "test_console_events.py",
         "test_http_auth.py",
-        "test_http_auth_native.py",
-        "test_mcp_events_session_number.py",
-        "test_mcp_events_recipient_holds.py",
         "test_mcp_events_fleet_lifecycle.py",
-        "test_mcp_events_global_held_recipients.py",
-        "test_mcp_events_message_binding.py",
+        "test_mcp_events_session_number.py",
         "test_task_qa_public_state.py",
-        "test_v010.py",
-        "test_v010_workflow_model.py",
     }
 )
 # Empty tables only. No existing database, migration fixture or user row is replaced.
 EMPTY_DB_PREPARATION_MODULES = frozenset(
     {
-        "test_agents.py",
-        "test_agents_native.py",
         "test_agent_intent_freshness.py",
-        "test_task_coordination.py",
+        "test_compact_close_independent.py",
+        "test_compact_response_independent.py",
         "test_task_atomic_ownership_v2.py",
-        "test_task_checkpoint_append_boundary.py",
+        "test_task_committed_receipts_v2.py",
         "test_task_create_request_receipt.py",
         "test_task_create_signature_immutable.py",
-        "test_task_committed_receipts_v2.py",
         "test_task_history_cursor_stability.py",
         "test_task_mesh_policy_receipts_v2.py",
-        "test_task_mcp_contract.py",
         "test_task_ops_simple_contract.py",
         "test_task_ownership_state_v2.py",
         "test_task_projection_core.py",
         "test_task_qa_public_state.py",
-        "test_task_refs.py",
-        "test_task_replay_scope_v2.py",
         "test_task_revision_side_effects.py",
-        "test_task_snapshot_contract.py",
         "test_task_text_validation.py",
-        "test_compact_close_independent.py",
-        "test_compact_response_independent.py",
     }
 )
 

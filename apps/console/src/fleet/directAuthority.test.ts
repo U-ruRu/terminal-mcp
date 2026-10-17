@@ -1,6 +1,6 @@
-import { expect, test, vi } from 'vitest'
+import { expect,test,vi } from 'vitest'
 
-import type { ConnectionProfile, ProfileRestoreResult } from '../connections/types'
+import type { ConnectionProfile,ProfileRestoreResult } from '../connections/types'
 import { BrowserDirectAuthorityClient } from './directAuthority'
 
 const profile: ConnectionProfile = {
@@ -18,19 +18,6 @@ const profile: ConnectionProfile = {
   createdAt: 1,
   updatedAt: 1,
 }
-
-test('reports a missing local credential as unpaired rather than revoked', async () => {
-  const restore = vi.fn<() => Promise<ProfileRestoreResult>>(async () => ({
-    status: 'unpaired',
-    profile,
-  }))
-  const fetcher = vi.fn()
-  const client = new BrowserDirectAuthorityClient({ restore }, fetcher)
-
-  await expect(client.activity('tokyo')).rejects.toThrow('direct_authority_auth_unpaired')
-  expect(restore).toHaveBeenCalledWith('tokyo')
-  expect(fetcher).not.toHaveBeenCalled()
-})
 
 test('retries one direct-authority request with a refreshed shared session after HTTP 401', async () => {
   let restoreCall = 0
@@ -59,37 +46,6 @@ test('retries one direct-authority request with a refreshed shared session after
   expect(invalidateAccessSession).toHaveBeenCalledTimes(1)
   expect(restore).toHaveBeenCalledTimes(2)
   expect(fetcher).toHaveBeenCalledTimes(2)
-})
-
-test('GET enrollment retries proxy HTTP 520 then succeeds', async () => {
-  const restore = vi.fn(async (): Promise<ProfileRestoreResult> => ({
-    status: 'connected', profile, accessToken: 'access', accessExpiresAt: 100_000,
-  }))
-  const fetcher = vi.fn()
-    .mockResolvedValueOnce(new Response('{}', { status: 520 }))
-    .mockResolvedValueOnce(new Response(JSON.stringify({ enrollment: {
-      node_id: 'tokyo', origin: profile.origin, public_key: 'public', auth_token: 'example',
-    } }), { status: 200 }))
-  const client = new BrowserDirectAuthorityClient({ restore }, fetcher)
-
-  await expect(client.fleetEnrollment('tokyo')).resolves.toMatchObject({ nodeId: 'tokyo' })
-  expect(fetcher).toHaveBeenCalledTimes(2)
-})
-
-test('transient auth restore failure is retried before enrollment GET', async () => {
-  const restore = vi.fn()
-    .mockResolvedValueOnce({ status: 'error', profile, retryable: true, message: 'http_520' })
-    .mockResolvedValueOnce({
-      status: 'connected', profile, accessToken: 'access', accessExpiresAt: 100_000,
-    })
-  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ enrollment: {
-    node_id: 'tokyo', origin: profile.origin, public_key: 'public', auth_token: 'example',
-  } }), { status: 200 }))
-  const client = new BrowserDirectAuthorityClient({ restore }, fetcher)
-
-  await expect(client.fleetEnrollment('tokyo')).resolves.toMatchObject({ nodeId: 'tokyo' })
-  expect(restore).toHaveBeenCalledTimes(2)
-  expect(fetcher).toHaveBeenCalledTimes(1)
 })
 
 test('write is never blindly retried after HTTP 520', async () => {

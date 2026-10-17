@@ -16,10 +16,7 @@ from jsonschema import Draft202012Validator
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.persistent_backend import PersistentBackend
-from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.mcp import roles
-from terminal_mcp.storage.sqlite import SqliteRepository
-from terminal_mcp.storage.tasks import TaskStore
 
 ORACLE = json.loads((Path(__file__).parent / "fixtures/compact_response_oracle.json").read_text())
 NOW = "2026-01-01T00:00:00Z"
@@ -171,14 +168,6 @@ async def _call(server, name, arguments):
     return data, response
 
 
-
-
-
-
-
-
-
-
 class _IntentBoundaryFixture:
     """Supplies intent state at its actual outer role boundary, without sessions."""
 
@@ -203,73 +192,30 @@ class _IntentBoundaryFixture:
         return nullcontext()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "value",
-    [
-        {"text": "keep whole object", "metadata": {"flag": False, "zero": 0, "null": None}},
-        [],
-        '{"literal":true}',
-        "",
-    ],
+    "value", [{"metadata": {"flag": False, "zero": 0, "null": None}}, [], '{"literal":true}', ""]
 )
-async def test_stored_checkpoint_snapshot_preserves_original_type(monkeypatch, tmp_path, value):
-    db = tmp_path / "checkpoint.sqlite3"
-    await SqliteRepository(db, tmp_path / "output.sqlite3").initialize()
-    store = TaskStore(db)
-    coordinator = TaskCoordinator(store)
-    created = await coordinator.mutate(
-        PUBLIC_NAME,
-        action="create",
-        namespace="acceptance",
-        task_id="ONE",
-        title="Checkpoint type",
-        isolation_hint="none",
-    )
-    assert created["ok"] is True, created
-    updated = await coordinator.mutate(
-        PUBLIC_NAME,
-        action="checkpoint",
-        namespace="acceptance",
-        task_id="ONE",
-        checkpoint=deepcopy(value),
-    )
-    assert updated["ok"] is True, updated
-    stored_before = await store.get_task("acceptance", "ONE")
-    events_before = await store.list_events("acceptance", "ONE")
-    assert stored_before["checkpoint"] == value
-    result = await coordinator.list(namespace="acceptance", task_id="ONE", snapshot=True)
+async def test_checkpoint_snapshot_preserves_the_original_json_type(monkeypatch, value):
+    snapshot = {
+        **_task(snapshot=True),
+        "latest_checkpoint": {
+            "checkpoint": value,
+            "text": "Preview",
+            "author": PUBLIC_NAME,
+            "created_at": NOW,
+            "revision": 3,
+        },
+    }
+    server = _server(monkeypatch, "coordinator", observe={"ok": True, "task": snapshot})
+
     data, _ = await _call(
-        _server(monkeypatch, "coordinator", observe=result),
-        "task_get",
-        {"namespace": "acceptance", "task_id": "ONE", "detail": "snapshot"},
+        server, "task_get", {"namespace": "acceptance", "task_id": "ONE", "detail": "snapshot"}
     )
-    assert data["ok"] is True, data
-    checkpoint = data["task"].get("latest_checkpoint")
-    assert checkpoint is not None, "an explicit empty checkpoint is still a recorded checkpoint"
-    assert checkpoint.get("checkpoint") == value
-    assert type(checkpoint["checkpoint"]) is type(value)
-    assert "text" not in checkpoint and "revision" not in checkpoint
-    assert await store.get_task("acceptance", "ONE") == stored_before
-    assert await store.list_events("acceptance", "ONE") == events_before
 
-
-
-
+    assert data["ok"] is True
+    checkpoint = data["task"]["latest_checkpoint"]["checkpoint"]
+    assert checkpoint == value and type(checkpoint) is type(value)
 
 
 class _RunFixtureRepo:

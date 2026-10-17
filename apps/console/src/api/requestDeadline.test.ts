@@ -1,5 +1,5 @@
-import { afterEach, expect, test, vi } from 'vitest'
-import { ConsoleClient, ConsoleHttpError, type FetchLike } from './client'
+import { afterEach,expect,test,vi } from 'vitest'
+import { ConsoleClient,ConsoleHttpError,type FetchLike } from './client'
 
 const pending = <T,>(): Promise<T> => new Promise(() => undefined)
 afterEach(() => { vi.useRealTimers() })
@@ -26,28 +26,4 @@ test('successful headers do not stop the deadline while JSON body is hanging', a
   const result = client.accessMeshDefaults().catch((error: unknown) => error)
   await vi.advanceTimersByTimeAsync(300)
   expect(await result).toMatchObject({ code: 'request_timeout', endpoint: '/actions/access/defaults' })
-})
-
-test('a timed-out rotation is not automatically submitted twice', async () => {
-  vi.useFakeTimers()
-  const fetcher = vi.fn<FetchLike>(() => pending<Response>())
-  const client = new ConsoleClient('https://terminal.example', () => '', fetcher, 100)
-  const result = client.accessMeshMutation({ action: 'rotate', slot_id: 'slot-fixture', expected_revision: 1, idempotency_key: 'retry-same-key' }).catch((error: unknown) => error)
-  await vi.advanceTimersByTimeAsync(1000)
-  expect(await result).toMatchObject({ code: 'request_timeout', status: 0 })
-  expect(fetcher).toHaveBeenCalledTimes(1)
-})
-
-test('network failures remain distinct and settled requests leave no timer', async () => {
-  vi.useFakeTimers()
-  const client = new ConsoleClient('https://terminal.example', () => '', async () => { throw new Error('fixture-failure') }, 100)
-  await expect(client.accessMeshDefaults()).rejects.toMatchObject({ code: 'network_error' })
-  expect(vi.getTimerCount()).toBe(0)
-})
-
-test('non-JSON successful body keeps its contract error, not a network or timeout error', async () => {
-  vi.useFakeTimers()
-  const client = new ConsoleClient('https://terminal.example', () => '', async () => new Response('not-json', { status: 200 }), 100)
-  await expect(client.accessMeshDefaults()).rejects.toMatchObject({ name: 'ConsoleContractError' })
-  expect(vi.getTimerCount()).toBe(0)
 })

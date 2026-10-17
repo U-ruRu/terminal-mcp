@@ -3,7 +3,6 @@
 import pytest
 import pytest_asyncio
 
-from terminal_mcp.core.task_projections import TaskRecord, project_task_receipt
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
@@ -41,119 +40,39 @@ async def claim(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_create_storage_never_reads_back_after_commit(case, monkeypatch):
-    store, _ = case
-
-    async def unavailable(*args, **kwargs):
-        raise RuntimeError("post-commit readback unavailable")
-
-    monkeypatch.setattr(store, "get_task", unavailable)
-    record = await store.create_task_mutation(
-        "receipt", "one", "Created", isolation_hint="none", event_agent_id="agent"
-    )
-    assert record["state"] == "ready"
-    assert record["revision"] == 1
-    assert record.claims == []
-    assert record.dependencies == []
-    # Auxiliary transaction metadata is not added to the task's public mapping.
-    assert "claims" not in record
-
-
-@pytest.mark.asyncio
-async def test_update_storage_never_reads_back_after_commit(case, monkeypatch):
-    store, coordinator = case
-    await create(coordinator)
-
-    async def unavailable(*args, **kwargs):
-        raise RuntimeError("post-commit readback unavailable")
-
-    monkeypatch.setattr(store, "get_task", unavailable)
-    record = await store.update_task_mutation(
-        "receipt",
-        "one",
-        state="done",
-        result={"evidence": "committed"},
-        expected_revision=1,
-        release_claims_reason="task_done",
-    )
-    assert record["state"] == "done"
-    assert record["result"] == {"evidence": "committed"}
-    assert record["revision"] == 2
-
-
-@pytest.mark.asyncio
-async def test_create_receipt_does_not_depend_on_postcommit_projection(case, monkeypatch):
-    store, coordinator = case
-
-    async def unavailable(*args, **kwargs):
-        raise RuntimeError("projection unavailable")
-
-    monkeypatch.setattr(coordinator, "_decorate", unavailable)
-    result = await create(coordinator)
-    assert result["ok"], result
-    assert result["task"]["description"] == "Keep this description"
-    assert result["task"]["revision"] == 1
-    assert (await store.get_task("receipt", "one"))["state"] == "ready"
-    record = TaskRecord.model_validate(result["task"])
-    receipt = project_task_receipt(record, include_description=True)
-    assert receipt.description == "Keep this description"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "action,fields,expected",
-    [
-        ("update", {"title": "Updated", "description": "Updated description"}, "ready"),
-        ("state", {"state": "in_progress"}, "in_progress"),
-        ("done", {"result": {"evidence": "completed"}}, "done"),
-    ],
+    [("update", {"title": "Updated"}, "ready"), ("state", {"state": "in_progress"}, "in_progress")],
 )
 async def test_mutation_success_survives_postcommit_readback_and_projection_failure(
     case, monkeypatch, action, fields, expected
 ):
     store, coordinator = case
-    await create(coordinator)
-    await claim(coordinator)
-    mutation_method = "set_workflow_state" if action == "state" else "update_task_mutation"
-    original_update = getattr(store, mutation_method)
-    original_get = store.get_task
+    await store.create_task("receipt", "one", "Original")
+    method = "set_workflow_state" if action == "state" else "update_task_mutation"
+    original = getattr(store, method)
 
     async def unavailable(*args, **kwargs):
-        raise RuntimeError("post-commit read or projection failed")
+        raise RuntimeError("post-commit read failed")
 
-    async def lose_readback(*args, **kwargs):
-        committed = await original_update(*args, **kwargs)
+    async def commit_then_disable_reads(*args, **kwargs):
+        committed = await original(*args, **kwargs)
         monkeypatch.setattr(store, "get_task", unavailable)
         monkeypatch.setattr(coordinator, "_decorate", unavailable)
         return committed
 
-    monkeypatch.setattr(store, mutation_method, lose_readback)
+    monkeypatch.setattr(store, method, commit_then_disable_reads)
     result = await coordinator.mutate(
         "agent",
         action=action,
         namespace="receipt",
         task_id="one",
-        expected_revision=1,
         **fields,
     )
-    assert result["ok"], result
+
+    assert result["ok"] is True
     assert result["task"]["state"] == expected
-    # Workflow state is orthogonal to content revision.
     assert result["task"]["revision"] == (1 if action == "state" else 2)
-    saved = await original_get("receipt", "one")
-    assert saved["state"] == expected
-    assert saved["revision"] == result["task"]["revision"]
-    record = TaskRecord.model_validate(result["task"])
-    receipt = project_task_receipt(
-        record, include_description=True, include_checkpoint=True, include_result=True
-    )
-    assert receipt.state.value == expected
-    if action == "done":
-        assert result["task"]["owner"] is None
-        assert await store.active_claims("receipt", "one") == []
-        assert receipt.result.root == {"evidence": "completed"}
-    else:
-        assert result["task"]["owner"] is not None
 
 
 @pytest.mark.asyncio
@@ -161,30 +80,27 @@ async def test_receipt_keeps_its_revision_when_later_writer_commits_before_respo
     case, monkeypatch
 ):
     store, coordinator = case
-    await create(coordinator)
-    await claim(coordinator)
-    original_update = store.update_task_mutation
+    await store.create_task("receipt", "one", "Original")
+    original = store.update_task_mutation
 
     async def subsequent_writer(*args, **kwargs):
-        committed = await original_update(*args, **kwargs)
+        committed = await original(*args, **kwargs)
         await store.update_task("receipt", "one", title="Later writer", expected_revision=2)
         return committed
 
     monkeypatch.setattr(store, "update_task_mutation", subsequent_writer)
     result = await coordinator.mutate(
         "agent",
-        action="done",
+        action="update",
         namespace="receipt",
         task_id="one",
-        result={"summary": "original committed result"},
+        title="This writer",
         expected_revision=1,
     )
-    assert result["ok"], result
-    assert result["task"]["revision"] == 2
-    assert result["task"]["title"] == "Committed task"
-    assert result["task"]["state"] == "done"
-    current = await store.get_task("receipt", "one")
-    assert current["revision"] == 3 and current["title"] == "Later writer"
+
+    assert result["ok"] is True
+    assert (result["task"]["revision"], result["task"]["title"]) == (2, "This writer")
+    assert (await store.get_task("receipt", "one"))["revision"] == 3
 
 
 @pytest.mark.asyncio

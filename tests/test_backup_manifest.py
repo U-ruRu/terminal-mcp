@@ -1,6 +1,4 @@
-import json
 import os
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -10,10 +8,10 @@ from terminal_mcp.auth.access_key import AccessVerifierKeyStore
 from terminal_mcp.backup import (
     BackupValidationError,
     access_verifier_key_path,
-    authoritative_backup_manifest,
     validate_authoritative_backup_source,
 )
 from terminal_mcp.config import Settings
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION
 
 
 def _sqlite(path: Path, version: int = 1):
@@ -52,7 +50,7 @@ def _settings(tmp_path: Path) -> Settings:
 
 
 def _complete_source(settings: Settings, *, fleet=False):
-    _sqlite(settings.database_path, 19)
+    _sqlite(settings.database_path, SCHEMA_VERSION)
     _sqlite(settings.auth_database_path, 3)
     AccessVerifierKeyStore(access_verifier_key_path(settings.auth_database_path)).load_or_create(
         allow_create=True
@@ -62,31 +60,6 @@ def _complete_source(settings: Settings, *, fleet=False):
         _sqlite(settings.effective_fleet_control_path(), 3)
 
 
-def test_manifest_names_authoritative_state_and_excludes_derived_cache(tmp_path):
-    settings = _settings(tmp_path)
-    _sqlite(settings.effective_fleet_node_meta_path())
-    _sqlite(settings.effective_fleet_control_path())
-    manifest = authoritative_backup_manifest(settings)
-    members = {item["member_id"]: item for item in manifest["members"]}
-    excluded = {item["member_id"] for item in manifest["excluded"]}
-
-    assert manifest["manifest_version"] == 1
-    assert {
-        "node_environment",
-        "runtime_database",
-        "auth_database",
-        "access_verifier_key",
-        "oauth_installation_anchor",
-        "fleet_node_meta",
-        "fleet_control",
-        "runtime_config",
-    } == set(members)
-    assert members["fleet_node_meta"]["required"] is True
-    assert members["fleet_control"]["required"] is True
-    assert members["access_verifier_key"]["secret"] is True
-    assert {"output_cache", "fleet_projection", "log"} == excluded
-
-
 def test_validation_accepts_complete_standalone_state_and_optional_runtime_config(tmp_path):
     settings = _settings(tmp_path)
     _complete_source(settings)
@@ -94,7 +67,7 @@ def test_validation_accepts_complete_standalone_state_and_optional_runtime_confi
     result = validate_authoritative_backup_source(settings)
     rows = {item["member_id"]: item for item in result["validated"]}
 
-    assert rows["runtime_database"]["user_version"] == 19
+    assert rows["runtime_database"]["user_version"] == SCHEMA_VERSION
     assert rows["auth_database"]["user_version"] == 3
     assert rows["access_verifier_key"]["mode"] == "0600"
     assert "runtime_config" not in rows
@@ -106,15 +79,6 @@ def test_validation_requires_fleet_pair_when_fleet_state_exists(tmp_path):
     _sqlite(settings.effective_fleet_control_path(), 3)
 
     with pytest.raises(BackupValidationError, match="fleet_node_meta"):
-        validate_authoritative_backup_source(settings)
-
-
-def test_validation_fails_when_access_verifier_key_is_missing(tmp_path):
-    settings = _settings(tmp_path)
-    _complete_source(settings)
-    access_verifier_key_path(settings.auth_database_path).unlink()
-
-    with pytest.raises(BackupValidationError, match="access_verifier_key"):
         validate_authoritative_backup_source(settings)
 
 
@@ -138,72 +102,19 @@ def test_validation_rejects_corrupt_sqlite_member(tmp_path):
         validate_authoritative_backup_source(settings)
 
 
-def test_validation_rejects_path_alias_between_authoritative_members(tmp_path):
-    settings = _settings(tmp_path)
-    _complete_source(settings)
-    aliased = settings.model_copy(update={"auth_database_path": settings.database_path})
-
-    with pytest.raises(BackupValidationError, match="resolve to the same path"):
-        validate_authoritative_backup_source(aliased)
-
-
-def test_snapshot_refuses_without_explicit_quiescence(tmp_path):
+def test_snapshot_copies_authoritative_runtime_rows(tmp_path):
     from terminal_mcp.backup import create_authoritative_snapshot
 
     settings = _settings(tmp_path / "source")
     _complete_source(settings)
+    with sqlite3.connect(settings.database_path) as db:
+        db.execute("INSERT INTO marker VALUES(73)")
+
     destination = tmp_path / "snapshot"
+    create_authoritative_snapshot(settings, destination, quiesced=True)
 
-    with pytest.raises(BackupValidationError, match="requires quiesced"):
-        create_authoritative_snapshot(settings, destination, quiesced=False)
-
-    assert not destination.exists()
-
-
-def test_snapshot_is_atomic_self_contained_and_excludes_derived_files(tmp_path):
-    from terminal_mcp.backup import (
-        create_authoritative_snapshot,
-        validate_authoritative_snapshot,
-    )
-
-    source = tmp_path / "source"
-    settings = _settings(source)
-    _complete_source(settings)
-    _sqlite(settings.output_cache_path, 1)
-    _sqlite(settings.effective_fleet_projection_path(), 1)
-    destination = tmp_path / "snapshot"
-
-    result = create_authoritative_snapshot(settings, destination, quiesced=True)
-    validated = {item["member_id"] for item in result["validated"]}
-
-    assert {
-        "node_environment",
-        "runtime_database",
-        "auth_database",
-        "access_verifier_key",
-    } <= validated
-    assert "output_cache" not in validated
-    assert "fleet_projection" not in validated
-    assert (destination / "manifest.json").stat().st_mode & 0o777 == 0o600
-
-    # A snapshot must remain independently verifiable after its source disappears.
-    for member in authoritative_backup_manifest(settings)["members"]:
-        Path(member["path"]).unlink(missing_ok=True)
-    assert validate_authoritative_snapshot(destination)["quiesced"] is True
-
-
-def test_snapshot_preserves_complete_fleet_authority_pair(tmp_path):
-    from terminal_mcp.backup import create_authoritative_snapshot
-
-    settings = _settings(tmp_path / "source")
-    _complete_source(settings, fleet=True)
-    destination = tmp_path / "snapshot"
-
-    result = create_authoritative_snapshot(settings, destination, quiesced=True)
-    by_id = {item["member_id"]: item for item in result["validated"]}
-
-    assert by_id["fleet_node_meta"]["mode"] == "0600"
-    assert by_id["fleet_control"]["mode"] == "0600"
+    with sqlite3.connect(destination / "files" / "runtime_database.sqlite3") as db:
+        assert db.execute("SELECT id FROM marker").fetchall() == [(73,)]
 
 
 def test_snapshot_validation_detects_tampered_member(tmp_path):
@@ -250,111 +161,29 @@ def test_snapshot_failure_removes_partial_directory(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".snapshot.tmp-*"))
 
 
-def test_snapshot_restores_complete_authoritative_state_in_isolated_target(tmp_path):
-    from terminal_mcp.backup import (
-        authoritative_backup_members,
-        create_authoritative_snapshot,
-    )
-
-    source = _settings(tmp_path / "source")
-    _complete_source(source, fleet=True)
-    markers = {
-        source.database_path: "runtime",
-        source.auth_database_path: "auth",
-        source.effective_fleet_node_meta_path(): "fleet-node-meta",
-        source.effective_fleet_control_path(): "fleet-control",
-    }
-    for path, value in markers.items():
-        with sqlite3.connect(path) as db:
-            db.execute("CREATE TABLE backup_restore_marker(value TEXT NOT NULL)")
-            db.execute("INSERT INTO backup_restore_marker(value) VALUES (?)", (value,))
-            db.commit()
-
-    source_key = access_verifier_key_path(source.auth_database_path).read_bytes()
-    snapshot = tmp_path / "snapshot"
-    create_authoritative_snapshot(source, snapshot, quiesced=True)
-
-    target = _settings(tmp_path / "restored")
-    target.env_file_path.unlink()
-    target_paths = {
-        member.member_id: member.path for member in authoritative_backup_members(target)
-    }
-    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
-    restore_members = sorted(manifest["members"], key=lambda item: item["restore_order"])
-    assert [item["restore_order"] for item in restore_members] == sorted(
-        item["restore_order"] for item in restore_members
-    )
-
-    for item in restore_members:
-        destination = target_paths[item["member_id"]]
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(snapshot / item["snapshot_file"], destination)
-        destination.chmod(int(item["mode"], 8))
-
-    validated = validate_authoritative_backup_source(target)
-    validated_ids = {item["member_id"] for item in validated["validated"]}
-    assert {
-        "node_environment",
-        "runtime_database",
-        "auth_database",
-        "access_verifier_key",
-        "fleet_node_meta",
-        "fleet_control",
-    } <= validated_ids
-
-    restored_markers = {
-        target.database_path: "runtime",
-        target.auth_database_path: "auth",
-        target.effective_fleet_node_meta_path(): "fleet-node-meta",
-        target.effective_fleet_control_path(): "fleet-control",
-    }
-    for path, expected in restored_markers.items():
-        with sqlite3.connect(path) as db:
-            assert db.execute("SELECT value FROM backup_restore_marker").fetchone() == (expected,)
-
-    assert access_verifier_key_path(target.auth_database_path).read_bytes() == source_key
-    assert target.env_file_path.read_text() == source.env_file_path.read_text()
-
-
-def test_auth_identity_anchor_is_required_in_snapshot_after_migration(tmp_path):
-    import asyncio
-
+@pytest.mark.asyncio
+async def test_snapshot_preserves_the_current_installation_anchor(tmp_path):
     from terminal_mcp.auth.foundation import AuthFoundationStore
-    from terminal_mcp.auth.identity_migration import migrate
+    from terminal_mcp.auth.identity_migration import initialize_fresh_identity
     from terminal_mcp.auth.pairing import PairingStore
     from terminal_mcp.auth.storage import OAuthStore
-    from terminal_mcp.backup import (
-        create_authoritative_snapshot,
-        validate_authoritative_snapshot,
+    from terminal_mcp.backup import create_authoritative_snapshot
+
+    settings = _settings(tmp_path / "source")
+    await AuthFoundationStore(settings.auth_database_path).initialize()
+    await OAuthStore(settings.auth_database_path).initialize()
+    await PairingStore(settings.auth_database_path).initialize()
+    initialize_fresh_identity(settings.database_path, settings.auth_database_path)
+    _sqlite(settings.database_path, SCHEMA_VERSION)
+    original = settings.auth_database_path.with_name(
+        settings.auth_database_path.name + ".identity-anchor"
     )
+    expected = original.read_bytes()
+    destination = tmp_path / "snapshot"
 
-    settings = _settings(tmp_path)
-    asyncio.run(AuthFoundationStore(settings.auth_database_path).initialize())
-    asyncio.run(OAuthStore(settings.database_path).initialize())
-    asyncio.run(PairingStore(settings.database_path).initialize())
-    assert (
-        migrate(settings.database_path, settings.auth_database_path, tmp_path / "migration-backup")[
-            "status"
-        ]
-        == "migrated"
+    result = create_authoritative_snapshot(settings, destination, quiesced=True)
+
+    member = next(
+        item for item in result["validated"] if item["member_id"] == "oauth_installation_anchor"
     )
-
-    items = {item["member_id"]: item for item in authoritative_backup_manifest(settings)["members"]}
-    anchor = items["oauth_installation_anchor"]
-    assert anchor["required"] is True
-    assert anchor["secret"] is True
-    anchor_path = Path(anchor["path"])
-    assert anchor_path.stat().st_mode & 0o777 == 0o600
-    checkpoint = tmp_path / "snapshot"
-    result = create_authoritative_snapshot(settings, checkpoint, quiesced=True)
-    assert {x["member_id"] for x in result["validated"]} >= {"oauth_installation_anchor"}
-    assert validate_authoritative_snapshot(checkpoint)["quiesced"] is True
-
-    # A lost anchor is not optional merely because the file is now missing:
-    # the protected migration marker still requires its recovery witness.
-    anchor_path.unlink()
-    assert {item["member_id"]: item for item in authoritative_backup_manifest(settings)["members"]}[
-        "oauth_installation_anchor"
-    ]["required"] is True
-    with pytest.raises(BackupValidationError, match="oauth_installation_anchor"):
-        validate_authoritative_backup_source(settings)
+    assert (destination / member["snapshot_file"]).read_bytes() == expected

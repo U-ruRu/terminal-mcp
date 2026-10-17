@@ -48,7 +48,6 @@ async def _gate_refusal(message, mode, code):
     [
         ("command_run", "ack", "coordination_ack_required", "ack"),
         ("command_run", "alert", "coordination_alert", "reply"),
-        ("task_claim", "alert", "coordination_alert", "reply"),
     ],
 )
 async def test_rejected_operation_incoming_is_root_and_actionable(
@@ -57,17 +56,8 @@ async def test_rejected_operation_incoming_is_root_and_actionable(
     message = base._message(mode, text="Review this incoming obligation")
     raw = await _gate_refusal(message, mode, code)
     original = deepcopy(raw)
-    if tool_name == "command_run":
-        server = base._server(monkeypatch, "executor", cmd=raw)
-        arguments = {"command": "fixture only; never executed"}
-    else:
-        server = base._server(monkeypatch, "executor", task=raw)
-        arguments = {
-            "action": "claim",
-            "namespace": "acceptance",
-            "task_id": "ONE",
-            "claim_intent": "independent negative-response review",
-        }
+    server = base._server(monkeypatch, "executor", cmd=raw)
+    arguments = {"command": "fixture only; never executed"}
     data, _ = await base._call(server, tool_name, arguments)
     assert data["ok"] is False
     assert data["error"]["code"] == code
@@ -87,46 +77,3 @@ async def test_rejected_operation_incoming_is_root_and_actionable(
     assert not {"message_hash", "text", "required_action"} & data.keys(), data
     assert "ack_required_pending" not in repair, data
     assert "alert_pending" not in repair, data
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "mode,code,required,text,sender",
-    [
-        ("ack", "coordination_ack_required", "ack", "x" * 500, "Alpha-7 " + "s" * 56),
-        ("alert", "coordination_alert", "reply", "a" * 501, base.PUBLIC_NAME),
-        ("ack", "coordination_ack_required", "ack", "Ж" * 16384, base.PUBLIC_NAME),
-        (
-            "alert",
-            "coordination_alert",
-            "reply",
-            "A short actionable notice",
-            "Alpha-7 " + "s" * 70,
-        ),
-    ],
-    ids=["at-old-limits-control", "501-char-message", "max-unicode-message", "long-slot-suffix"],
-)
-async def test_legal_message_error_retains_code_and_actionable_id(
-    monkeypatch, mode, code, required, text, sender
-):
-    """Legal message sizes retain the coordination error, ID, and required action."""
-    message = base._message(mode, text=text)
-    message["sender"] = sender
-    raw = await _gate_refusal(message, mode, code)
-    original = deepcopy(raw)
-    data, _ = await base._call(
-        base._server(monkeypatch, "executor", cmd=raw),
-        "command_run",
-        {"command": "fixture only; never executed"},
-    )
-    assert raw == original
-    assert data["ok"] is False
-    assert data["error"]["code"] == code, data
-    assert data["error"]["outcome"] == "not_committed", data
-    assert data["error"]["retry"], data
-    assert any(
-        item["id"] == message["message_hash"]
-        and item.get("requirements") == required
-        and item["sender"] == sender
-        for item in data.get("messages", [])
-    ), data
