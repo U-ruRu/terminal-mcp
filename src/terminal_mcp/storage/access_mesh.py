@@ -1192,36 +1192,15 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             effective = self.slot(winner["issuer_id"], winner["slot_id"])
             if effective is not None:
                 slot = effective
-        latest_start = self.numbers.start_for_slot(slot.issuer_id, slot.slot_id)
-        start = _parse(winner["started_at"])
-        expiry = _parse(winner["hard_expires_at"])
-        active_from = start
-        if latest_start is not None and _parse(latest_start["active_from"]) >= start:
-            active_from = _parse(latest_start["active_from"])
-            start = _parse(latest_start["started_at"])
-            # The start event seals its *initial* deadline. Subsequent
-            # SessionUpdated extensions increase the durable group max;
-            # choosing only the start snapshot would expire the live
-            # merged cycle early on every node after a valid extension.
-            started_deadline = _parse(latest_start["hard_expires_at"])
-            if started_deadline is not None:
-                expiry = max(expiry, started_deadline) if expiry else started_deadline
-        if start is None or expiry is None:
-            return local_cycle(slot, now)
-        # The regular SlotPolicy's rearm_enabled flag is an authorization to
-        # request another window, not permission for implicit MCP writes.
-        effective_slot = replace(
+        from terminal_mcp.core.access_policy_windows import merged_slot_cycle
+
+        return merged_slot_cycle(
             slot,
-            anchor=start,
-            deadline_at=expiry,
-            policy=replace(slot.effective(start).policy, rearm_enabled=False),
-            policy_window=None,
+            now,
+            winner=winner,
+            latest_start=self.numbers.start_for_slot(slot.issuer_id, slot.slot_id),
+            latest_end=self.numbers.end_for_slot(slot.issuer_id, slot.slot_id),
         )
-        cycle = local_cycle(effective_slot, now)
-        latest_end = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
-        if latest_end is not None and _parse(latest_end["ended_at"]) >= active_from:
-            return {**cycle, "state": "expired", "remaining_seconds": 0}
-        return cycle
 
     def number_cycle(self, slot: SlotSnapshot, now: datetime) -> dict | None:
         """Stable per-cycle key prevents a late end fencing a newer cycle."""

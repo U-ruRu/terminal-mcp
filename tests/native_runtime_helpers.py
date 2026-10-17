@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from terminal_mcp.core.access_mesh_grants import AccessSlotEvent, SlotPolicy
 from terminal_mcp.core.human_names import number_agent_name
 from terminal_mcp.storage.access_mesh import AccessMeshStore
+from terminal_mcp.storage.access_mesh_registry_upgrade import complete_upgrade
 
 
 def native_agent(
@@ -26,6 +27,7 @@ def native_agent(
         proof_key=b"native-runtime-unit-tests-proof-only",
         clock=lambda: now,
     )
+    complete_upgrade(store)
     slot_id = "test-slot-" + agent_id
     store.apply_event(
         AccessSlotEvent(

@@ -104,6 +104,37 @@ def slot_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     return {**base, "state": phase, "remaining_seconds": max(0, int(remaining))}
 
 
+
+def merged_slot_cycle(slot, now, *, winner=None, latest_start=None, latest_end=None) -> dict:
+    """Project one explicit Mesh window from an immutable set of registry rows.
+
+    Callers resolve the overlapping number group and its effective slot before
+    invoking this pure function. Transactional admission can therefore use the
+    same lifecycle calculation without opening another database connection.
+    """
+    if winner is None:
+        return slot_cycle(slot, now)
+    start = datetime.fromisoformat(winner["started_at"])
+    expiry = datetime.fromisoformat(winner["hard_expires_at"])
+    active_from = start
+    if latest_start is not None and datetime.fromisoformat(latest_start["active_from"]) >= start:
+        active_from = datetime.fromisoformat(latest_start["active_from"])
+        start = datetime.fromisoformat(latest_start["started_at"])
+        started_deadline = datetime.fromisoformat(latest_start["hard_expires_at"])
+        expiry = max(expiry, started_deadline)
+    effective = replace(
+        slot,
+        anchor=start,
+        deadline_at=expiry,
+        policy=replace(slot.effective(start).policy, rearm_enabled=False),
+        policy_window=None,
+    )
+    cycle = slot_cycle(effective, now)
+    if latest_end is not None and datetime.fromisoformat(latest_end["ended_at"]) >= active_from:
+        return {**cycle, "state": "expired", "remaining_seconds": 0}
+    return cycle
+
+
 def capture_window(slot: SlotSnapshot, now: datetime) -> CapturedAccessWindow:
     """Capture the actual cycle rather than the original, possibly old anchor."""
     from terminal_mcp.core.access_mesh_grants import CapturedAccessWindow
