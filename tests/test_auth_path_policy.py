@@ -36,7 +36,7 @@ def test_paired_console_fleet_enrollment_requires_execute_scope():
     ]
 
 
-def test_paired_console_code_rotation_requires_execute_scope():
+def test_paired_console_slot_mutation_requires_execute_scope():
     assert AuthMiddleware._paired_console_scopes(
-        "/actions/persistent/slots/rotate-access-code", "POST"
+        "/actions/access/mutate", "POST"
     ) == ["terminal:read", "terminal:execute"]

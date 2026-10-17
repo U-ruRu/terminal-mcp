@@ -81,7 +81,32 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(autouse=True)
-def activate_preparation(request):
+def isolate_runner_fallbacks(monkeypatch, tmp_path_factory):
+    """Keep runner defaults private to one test, including durable node metadata.
+
+    Only paths inside the runner's explicit fallback root are rebased. Test-owned
+    configuration and deliberate inherited-environment checks retain their values.
+    """
+    root = os.environ.get("TMCP_TEST_STATE_ROOT")
+    if not root:
+        return
+    root = Path(root)
+    paths = {
+        key: Path(value).relative_to(root)
+        for key, value in os.environ.items()
+        if key.startswith("TERMINAL_MCP_") and Path(value).is_relative_to(root)
+    }
+    if not paths:
+        return
+    # Short names preserve the real Unix socket path limit in native tests.
+    fallback = tmp_path_factory.mktemp("state")
+    (fallback / "cwd").mkdir()
+    for key, relative in paths.items():
+        monkeypatch.setenv(key, str(fallback / relative))
+
+
+@pytest.fixture(autouse=True)
+def activate_preparation(request, isolate_runner_fallbacks):
     """Resolve function-scoped preparation before ordinary test fixtures.
 
     Adding a usefixtures marker after collection does not rebuild pytest's fixture

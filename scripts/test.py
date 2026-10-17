@@ -94,6 +94,8 @@ def isolate(root: Path, data: Path, output: Path) -> dict[str, str]:
             "TMCP_PREPARATION_STATS_PATH": str(output / "preparation.json"),
             # conftest retains these sanitized, external paths through collection.
             "TMCP_TEST_INHERIT_SERVER_ENV": "1",
+            # Each test rebases these fallbacks before constructing its own nodes.
+            "TMCP_TEST_STATE_ROOT": str(fallback),
         }
     )
     return env
