@@ -68,8 +68,35 @@ class StrictRoleInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class SessionInput(StrictRoleInput):
-    action: Literal["start", "end", "interrupt"]
+class AttachInput(StrictRoleInput):
+    action: Literal["attach", "intent"] = "attach"
+    session_number: Annotated[
+        str | None,
+        Field(
+            pattern=r"^[0-9]{4}$",
+            description="Required for attach only. Four digits, including leading zeros.",
+        ),
+    ] = None
+    intent: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=1000,
+            description="Required for action=intent; optional initial intent on attach.",
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def action_fields(self):
+        if self.action == "attach" and self.session_number is None:
+            raise ValueError("session_number is required for attach")
+        if self.action == "intent" and (self.intent is None or not self.intent.strip()):
+            raise ValueError("intent is required for refresh")
+        if self.action == "intent" and self.session_number is not None:
+            raise ValueError("intent refresh uses the existing connector binding")
+        if self.intent is not None and not self.intent.strip():
+            raise ValueError("intent must contain text")
+        return self
 
 
 class TaskListInput(StrictRoleInput):
@@ -87,8 +114,8 @@ class CommandRunInput(StrictRoleInput):
     task_scope: Annotated[str, Field(min_length=1, max_length=MAX_TASK_SCOPE_CHARS)] = "none"
 
 
-class CommandReadInput(StrictRoleInput):
-    cmd_hash: Hash
+class MeshCommandReadInput(StrictRoleInput):
+    cmd_hash: Hash | None = None
     limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
     cursor: Cursor | None = None
 
@@ -129,13 +156,34 @@ class TaskStateInput(StrictRoleInput):
     state: TaskState
 
 
-class TaskCommentInput(StrictRoleInput):
+class MeshTaskCommentInput(StrictRoleInput):
+    action: Literal["comment", "checkpoint"] = "comment"
     namespace: Namespace
     task_id: TaskId
-    comment_text: Annotated[str, Field(min_length=1, max_length=4000)]
+    comment_text: Annotated[
+        str | None, Field(min_length=1, max_length=4000, description="Required for action=comment.")
+    ] = None
+    checkpoint: Annotated[
+        ResultValue | None,
+        Field(
+            description="Required for action=checkpoint; saves progress and preserves task state."
+        ),
+    ] = None
+
+    def to_request(self):
+        from terminal_mcp.application.task_requests import TaskCheckpointRequest, TaskCommentRequest
+
+        model = TaskCheckpointRequest if self.action == "checkpoint" else TaskCommentRequest
+        return model.model_validate({"action": self.action, **self.model_dump(exclude_unset=True)})
+
+    @model_validator(mode="after")
+    def action_fields(self):
+        self.to_request()
+        return self
 
 
 class MessageInput(StrictRoleInput):
+    scope: Literal["local", "fleet"] = "local"
     model_config = ConfigDict(
         extra="forbid",
         strict=True,
@@ -405,8 +453,11 @@ class TaskGraphInput(StrictRoleInput):
     cursor: Cursor | None = None
 
 
-class AgentObserveInput(StrictRoleInput):
-    pass
+class MeshAgentObserveInput(StrictRoleInput):
+    limit: Annotated[int, Field(ge=1, le=100)] = 20
+    cursor: Cursor | None = None
+    include_inactive: bool = False
+    logical_agent_id: Annotated[str | None, Field(min_length=1, max_length=160)] = None
 
 
 class HealthInput(StrictRoleInput):
@@ -435,22 +486,22 @@ class RuntimeBoundary(ArgModelBase):
 
 
 ROLE_TOOL_MODELS: dict[tuple[str, str], type[StrictRoleInput]] = {
-    ("executor", "session"): SessionInput,
+    ("executor", "session"): AttachInput,
     ("executor", "task_list"): TaskListInput,
     ("executor", "command_run"): CommandRunInput,
-    ("executor", "command_read"): CommandReadInput,
+    ("executor", "command_read"): MeshCommandReadInput,
     ("executor", "command_cancel"): CommandCancelInput,
     ("executor", "command_recovery"): CommandRecoveryInput,
     ("executor", "task_claim"): TaskClaimInput,
     ("executor", "task_state"): TaskStateInput,
-    ("executor", "task_comment"): TaskCommentInput,
+    ("executor", "task_comment"): MeshTaskCommentInput,
     ("executor", "message"): MessageInput,
-    ("coordinator", "session"): SessionInput,
+    ("coordinator", "session"): AttachInput,
     ("coordinator", "task_get"): TaskGetInput,
     ("coordinator", "task_list"): TaskListInput,
     ("coordinator", "task_manage"): TaskManageInput,
     ("coordinator", "task_graph"): TaskGraphInput,
-    ("coordinator", "agent_observe"): AgentObserveInput,
+    ("coordinator", "agent_observe"): MeshAgentObserveInput,
     ("coordinator", "message"): MessageInput,
     ("coordinator", "health"): HealthInput,
 }
@@ -458,7 +509,7 @@ ROLE_TOOL_MODELS: dict[tuple[str, str], type[StrictRoleInput]] = {
 
 ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("executor", "session"): (
-        "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
+        "Attach this connector to an Access slot or refresh its current intent."
     ),
     ("executor", "task_list"): (
         "Read bounded TaskListItem records for work orientation. By default excludes "
@@ -495,7 +546,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "reading does not satisfy ACK/reply."
     ),
     ("coordinator", "session"): (
-        "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
+        "Attach this connector to an Access slot or refresh its current intent."
     ),
     ("coordinator", "task_get"): (
         "Read one task inside task without detail/kind response wrappers. Snapshot "
@@ -536,30 +587,6 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
 }
 
 
-_SESSION_BOUND_ROLE_TOOLS = frozenset(
-    {
-        ("executor", "task_list"),
-        ("executor", "command_run"),
-        ("executor", "command_cancel"),
-        ("executor", "command_recovery"),
-        ("executor", "task_claim"),
-        ("executor", "task_state"),
-        ("executor", "task_comment"),
-        ("executor", "message"),
-        ("coordinator", "task_get"),
-        ("coordinator", "task_list"),
-        ("coordinator", "task_manage"),
-        ("coordinator", "task_graph"),
-        ("coordinator", "agent_observe"),
-        ("coordinator", "message"),
-    }
-)
-for _key in _SESSION_BOUND_ROLE_TOOLS:
-    ROLE_TOOL_DESCRIPTIONS[_key] += (
-        " Requires an active managed session; call session(action='start') first."
-    )
-
-
 def _planning_hint(schema: dict, definitions: dict) -> str:
     if "$ref" in schema:
         return _planning_hint(definitions.get(schema["$ref"].rsplit("/", 1)[-1], {}), definitions)
@@ -580,8 +607,6 @@ def _planning_hint(schema: dict, definitions: dict) -> str:
 
 def planning_schema(model: type[StrictRoleInput]) -> dict:
     """Publish bounded argument hints, with an explicit Mesh attachment boundary."""
-    from terminal_mcp.mcp.access_contracts import AttachInput
-
     if model is AttachInput:
         return {
             "type": "object",

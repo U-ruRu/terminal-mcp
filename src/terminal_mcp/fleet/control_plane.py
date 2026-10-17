@@ -13,10 +13,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer, select_peer_transport
 from terminal_mcp.fleet.control_storage import FleetControlError
+from terminal_mcp.fleet.topology_control import TopologyControl
 from terminal_mcp.mesh_vpn import prune_detached_peers
 
 
-class ManagedFleetControl:
+class ManagedFleetControl(TopologyControl):
     """Managed topology and AccessPolicy on top of the existing Fleet v1 control store."""
 
     DEFAULT_POLICY = {
@@ -24,7 +25,6 @@ class ManagedFleetControl:
         "warning_after_seconds": 20 * 60,
         "alert_after_seconds": 22 * 60,
         "rearm_after_seconds": 3 * 60,
-        "legacy_admission_enabled": False,
     }
 
     def __init__(
@@ -53,6 +53,7 @@ class ManagedFleetControl:
         self.namespace_sync = namespace_sync
         self._namespace_lock = asyncio.Lock()
         self._replica_lock = asyncio.Lock()
+        self._topology_lock = asyncio.Lock()
 
     async def _complete_namespace(self) -> None:
         async with self._namespace_lock:
@@ -121,6 +122,7 @@ class ManagedFleetControl:
 
     async def reconcile_pending(self) -> dict:
         await self._complete_namespace()
+        await self._recover_membership_changes()
         state = await self.snapshot()
         if state.get("managed"):
             # Durable managed state is also the source of truth for the live
@@ -214,10 +216,6 @@ class ManagedFleetControl:
             if first_apply_control_node_id and peer_instance_id == first_apply_control_node_id:
                 return peer_instance_id
 
-        # Rolling-upgrade fallback for nodes that still rely on bootstrap peer tokens.
-        peer = self.bootstrap_config.peers_by_id.get(peer_instance_id)
-        if peer is not None and secrets.compare_digest(token, peer.auth_token):
-            return peer_instance_id
         return None
 
     async def _management_peer(self, node_id: str) -> FleetPeer | None:
@@ -238,10 +236,7 @@ class ManagedFleetControl:
                 ),
                 self.bootstrap_config.peer_transports_path,
             )
-        peer = self.bootstrap_config.peers_by_id.get(node_id)
-        if peer is None:
-            return None
-        return select_peer_transport(peer, self.bootstrap_config.peer_transports_path)
+        return None
 
     async def _forward_mutation_response(
         self, node_id: str, operation: str, payload: dict | None = None
@@ -302,7 +297,7 @@ class ManagedFleetControl:
         if operation == "adopt":
             return await self.adopt(
                 mesh_id=payload.get("mesh_id"),
-                display_name=str(payload.get("display_name") or "Fleet"),
+                display_name=str(payload.get("display_name") or "Mesh"),
                 control_node_id=payload.get("control_node_id"),
             )
         if not self.is_control_node:
@@ -346,7 +341,6 @@ class ManagedFleetControl:
                 warning_after_seconds=int(payload["warning_after_seconds"]),
                 alert_after_seconds=int(payload["alert_after_seconds"]),
                 rearm_after_seconds=int(payload["rearm_after_seconds"]),
-                legacy_admission_enabled=bool(payload["legacy_admission_enabled"]),
                 expected_revision=payload.get("expected_revision"),
             )
         if operation == "reset-policy":
@@ -473,7 +467,7 @@ class ManagedFleetControl:
         self,
         *,
         mesh_id: str | None = None,
-        display_name: str = "Fleet",
+        display_name: str = "Mesh",
         control_node_id: str | None = None,
     ) -> dict:
         await self._ensure_local_identity()
@@ -499,12 +493,14 @@ class ManagedFleetControl:
             await self.store.claim_local_control_authority()
             await self._complete_namespace()
             self._sync_control_node(self.store.control_node_id)
-        state = await self.store.adopt_managed(
-            mesh_id=mesh_id or f"mesh-{secrets.token_hex(8)}",
-            display_name=display_name,
-            nodes=self._initial_control_node(),
-            policy=self.policy_controller.snapshot(),
-            attach_local_control=True,
+        selected_mesh = mesh_id or f"mesh-{secrets.token_hex(8)}"
+        state = await self._membership_change(
+            node_id=self.store.node_id, target_mesh_id=selected_mesh,
+            mutate=lambda: self.store.adopt_managed(
+                mesh_id=selected_mesh, display_name=display_name,
+                nodes=self._initial_control_node(), policy=self.policy_controller.snapshot(),
+                attach_local_control=True,
+            ),
         )
         await self._apply_local(state)
         await self.replicate()
@@ -583,14 +579,17 @@ class ManagedFleetControl:
                     "expected_topology_revision": expected_topology_revision,
                 },
             )
-        bootstrap = self.bootstrap_config.peers_by_id.get(node_id)
-        state = await self.store.upsert_managed_node(
-            node_id=node_id,
-            mesh_id=mesh_id,
-            origin=origin or (bootstrap.origin if bootstrap else None),
-            public_key=public_key or (bootstrap.public_key if bootstrap else None),
-            auth_token=auth_token or (bootstrap.auth_token if bootstrap else None),
-            expected_topology_revision=expected_topology_revision,
+        peer = (
+            FleetPeer(node_id, origin, public_key, auth_token)
+            if node_id != self.store.node_id and all((origin, public_key, auth_token)) else None
+        )
+        state = await self._membership_change(
+            node_id=node_id, target_mesh_id=mesh_id, peer=peer,
+            mutate=lambda: self.store.upsert_managed_node(
+                node_id=node_id, mesh_id=mesh_id, origin=origin,
+                public_key=public_key, auth_token=auth_token,
+                expected_topology_revision=expected_topology_revision,
+            ),
         )
         await self._apply_local(state)
         await self.replicate()
@@ -611,10 +610,16 @@ class ManagedFleetControl:
     async def _commit_detach_node(
         self, node_id: str, *, expected_topology_revision: int | None = None
     ) -> dict:
-        state = await self.store.detach_managed_node(
-            node_id,
-            expected_topology_revision=expected_topology_revision,
+        state = await self._membership_change(
+            node_id=node_id, target_mesh_id=None,
+            mutate=lambda: self.store.detach_managed_node(
+                node_id, expected_topology_revision=expected_topology_revision,
+            ),
         )
+        if node_id == self.store.node_id:
+            await self.store.claim_local_control_authority()
+            await self._complete_namespace()
+            state = await self.snapshot()
         await self._apply_local(state)
         return await self.snapshot()
 
@@ -691,10 +696,12 @@ class ManagedFleetControl:
                     "expected_topology_revision": expected_topology_revision,
                 },
             )
-        state = await self.store.move_managed_node(
-            node_id,
-            target_mesh_id,
-            expected_topology_revision=expected_topology_revision,
+        state = await self._membership_change(
+            node_id=node_id, target_mesh_id=target_mesh_id,
+            mutate=lambda: self.store.move_managed_node(
+                node_id, target_mesh_id,
+                expected_topology_revision=expected_topology_revision,
+            ),
         )
         await self._apply_local(state)
         await self.replicate()
@@ -707,7 +714,6 @@ class ManagedFleetControl:
         warning_after_seconds: int,
         alert_after_seconds: int,
         rearm_after_seconds: int,
-        legacy_admission_enabled: bool,
         expected_revision: int | None = None,
     ) -> dict:
         if not self.is_control_node:
@@ -718,7 +724,6 @@ class ManagedFleetControl:
                     "warning_after_seconds": warning_after_seconds,
                     "alert_after_seconds": alert_after_seconds,
                     "rearm_after_seconds": rearm_after_seconds,
-                    "legacy_admission_enabled": legacy_admission_enabled,
                     "expected_revision": expected_revision,
                 },
             )
@@ -747,7 +752,6 @@ class ManagedFleetControl:
                 warning_after_seconds=warning_after_seconds,
                 alert_after_seconds=alert_after_seconds,
                 rearm_after_seconds=rearm_after_seconds,
-                legacy_admission_enabled=legacy_admission_enabled,
             )
 
         await self.store.update_access_policy(
@@ -755,7 +759,6 @@ class ManagedFleetControl:
             warning_after_seconds=warning_after_seconds,
             alert_after_seconds=alert_after_seconds,
             rearm_after_seconds=rearm_after_seconds,
-            legacy_admission_enabled=legacy_admission_enabled,
             expected_revision=expected_revision,
         )
         state = await self.snapshot()
@@ -825,6 +828,7 @@ class ManagedFleetControl:
         await self._ensure_local_identity()
         state = await self.snapshot()
         self._sync_control_node(str(state["control_node_id"]))
+        await self._finish_local_membership(state)
         if not state["managed"]:
             await self._restore_local_policy()
             return state
@@ -848,7 +852,7 @@ class ManagedFleetControl:
         }
         bootstrap_tokens.update(managed_tokens)
 
-        if self.is_control_node and incoming_control and incoming_control != self.store.node_id:
+        if incoming_control != self.store.control_node_id:
             identity = await self._ensure_local_identity()
             presented_local_token = managed_tokens.get(self.store.node_id)
             if not presented_local_token or not secrets.compare_digest(
@@ -856,20 +860,19 @@ class ManagedFleetControl:
                 str(identity.get("ingress_token") or ""),
             ):
                 raise FleetControlError("control_rejoin_credential_required")
-            current = await self.snapshot()
-            if any(
-                node.get("state") != "detached"
-                and (node.get("node_id") != self.store.node_id or node.get("mesh_id") is not None)
-                for node in current.get("nodes") or []
-            ) or current.get("meshes"):
-                raise FleetControlError("control_authority_rehome_requires_standalone")
-
-        namespace_changed = str(snapshot.get("fleet_id") or "") != self.store.fleet_id
-        if namespace_changed and (
-            source_node_id != incoming_control
-            or (incoming_control != self.store.control_node_id and not self.is_control_node)
-        ):
-            raise FleetControlError("control_authority_required")
+        current = await self.snapshot()
+        next_mesh = self._member_mesh(public_snapshot, self.store.node_id)
+        if self._member_mesh(current, self.store.node_id) != next_mesh:
+            transition = await self.store.topology_transition(self.store.node_id)
+            operation_id = (
+                transition["operation_id"] if transition and transition["phase"] == "prepared"
+                else f"replica-{incoming_control}-{snapshot['revisions']['topology']}"
+            )
+            await self.prepare_local_transition(
+                operation_id=operation_id, target_mesh_id=next_mesh,
+                target_authority_id=incoming_control if next_mesh else self.store.node_id,
+                coordinator_id=source_node_id,
+            )
 
         state = await self.store.apply_managed_replica(
             public_snapshot,
@@ -878,6 +881,7 @@ class ManagedFleetControl:
             # A new controller must additionally present the local enrollment
             # credential above; a public namespace value grants no trust.
             namespace_authorized=source_node_id == incoming_control,
+            authority_authorized=True,
         )
         await self._complete_namespace()
         return state
@@ -888,9 +892,6 @@ class ManagedFleetControl:
         # lock across peer I/O would deadlock that legitimate callback.
         async with self._replica_lock:
             state = await self._accept_replica(snapshot, source_node_id=source_node_id)
-        self._sync_control_node(self.store.control_node_id)
-        await self._apply_local(state)
-
         local = next(
             (
                 node
@@ -907,24 +908,13 @@ class ManagedFleetControl:
         )
         if should_split_standalone:
             acknowledgement = state
-            previous_control = self.store.control_node_id
-            try:
-                await self._forward_mutation_to(
-                    previous_control,
-                    "release-node",
-                    {"node_id": self.store.node_id},
-                )
-            except httpx.ReadTimeout:
-                # The detach is already authoritatively committed before this cleanup.
-                # A read timeout is ambiguous: the authority may have completed the
-                # idempotent release after our client stopped waiting. Do not turn
-                # that post-commit acknowledgement race into a false detach failure.
-                pass
-            await self.store.claim_local_control_authority(policy=self.policy_controller.snapshot())
+            await self.store.claim_local_control_authority()
             await self._complete_namespace()
             self._sync_control_node(self.store.control_node_id)
+            await self._apply_local(await self.snapshot())
             return acknowledgement
-
+        self._sync_control_node(self.store.control_node_id)
+        await self._apply_local(state)
         return await self.snapshot()
 
     async def _restore_local_policy(self) -> None:
@@ -947,6 +937,8 @@ class ManagedFleetControl:
         self._replace_runtime_config(config)
 
     async def _apply_local(self, state: dict) -> None:
+        if hasattr(self.store, "topology_transition"):
+            await self._finish_local_membership(state)
         if self.native_access is not None:
             await self.native_access.apply_fleet_policy(state)
         if not state.get("managed"):
@@ -961,13 +953,10 @@ class ManagedFleetControl:
                     prune_detached_peers,
                     Path(self.bootstrap_config.mesh_vpn_state_dir),
                     Path(self.bootstrap_config.peer_transports_path),
-                    # Standalone peers are explicitly pinned by the Fleet
-                    # bootstrap config. Never erase their signed WireGuard
-                    # enrollment just because managed topology is disabled.
-                    set(self.bootstrap_config.peers_by_id),
+                    set(),
                 )
             await self._restore_local_policy()
-            self._restore_bootstrap_runtime(use_peers=state.get("mesh") is None)
+            self._restore_bootstrap_runtime(use_peers=False)
             return
 
         all_nodes = state.get("nodes") or []
@@ -995,7 +984,6 @@ class ManagedFleetControl:
                 warning_after_seconds=int(policy["warning_after_seconds"]),
                 alert_after_seconds=int(policy["alert_after_seconds"]),
                 rearm_after_seconds=int(policy["rearm_after_seconds"]),
-                legacy_admission_enabled=bool(policy["legacy_admission_enabled"]),
             )
         active_nodes = [
             node
@@ -1194,6 +1182,22 @@ class ManagedFleetControl:
                         self._topology_signature(acknowledged) != self._topology_signature(state)
                     ):
                         raise RuntimeError("control_apply_not_converged")
+                    transitioned = next((
+                        row for row in state.get("nodes", [])
+                        if row.get("node_id") == peer.instance_id
+                    ), None)
+                    if transitioned and transitioned.get("state") == "draining" \
+                            and transitioned.get("mesh_id") is None:
+                        await self.store.release_managed_node(peer.instance_id)
+                    transition = await self.store.topology_transition(peer.instance_id)
+                    if transition and transition["phase"] == "committed":
+                        if self.native_access is not None:
+                            await self.native_access.abort_topology_transition(
+                                transition["operation_id"]
+                            )
+                        await self.store.complete_topology_transition(
+                            peer.instance_id, transition["operation_id"]
+                        )
                     await self.store.mark_managed_applied(
                         peer.instance_id,
                         topology_revision=int(revisions.get("topology") or 0),

@@ -29,13 +29,6 @@
             "openWorldHint": false,
             "readOnlyHint": false,
             "x-openai-isConsequential": true
-          },
-          "status": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": false,
-            "readOnlyHint": true,
-            "x-openai-isConsequential": false
           }
         }
       },

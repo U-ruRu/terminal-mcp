@@ -10,7 +10,6 @@ import json
 import logging
 import secrets
 from dataclasses import replace
-from functools import partial
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -217,6 +216,12 @@ class AccessMeshReplication:
                 )
         if old_transport_state != new_transport_state:
             self._wake.set()
+        if self.peers and (self._task is None or self._task.done()):
+            try:
+                asyncio.get_running_loop().create_task(self.start())
+            except RuntimeError:
+                # Synchronous construction is followed by the explicit start.
+                pass
 
     def reset_proof_evidence(self) -> None:
         """A changed authority proof cannot retain a previous ready receipt."""
@@ -285,6 +290,8 @@ class AccessMeshReplication:
 
     @property
     def peers(self):
+        if not getattr(self.store, "registry_mesh_id", None):
+            return ()
         return tuple(
             peer for peer in self.config.peers if peer.instance_id in self.store.trusted_issuers
         )
@@ -298,29 +305,6 @@ class AccessMeshReplication:
             pass
         except Exception:
             _LOG.debug("Late Mesh peer reply ignored after budget", exc_info=True)
-
-    def _record_late_reservation_reply(
-        self, task: asyncio.Task, *, number: str, attempt_id: str, peer_id: str
-    ) -> None:
-        """Persist a late conflict without letting it change the issued number."""
-        try:
-            response = task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            _LOG.debug("Mesh peer timed out without late reply", exc_info=True)
-            return
-        if not isinstance(response, dict) or response.get("code") != "number_conflict":
-            return
-        try:
-            self.store.numbers.record_late_conflict(
-                number=number,
-                attempt_id=attempt_id,
-                peer_id=peer_id,
-                suggested_number=response.get("suggested_number"),
-            )
-        except Exception:
-            _LOG.exception("Unable to persist delayed number conflict")
 
     @classmethod
     async def _hard_bounded_fanout(cls, requests, *, budget: float) -> None:
@@ -336,185 +320,6 @@ class AccessMeshReplication:
         for task in pending:
             task.add_done_callback(cls._consume_abandoned)
             task.cancel()
-
-    async def negotiate_number(
-        self, *, preferred: str | None = None, exact=False, _budget_seconds: float = 30.0
-    ):
-        """Reserve only after every configured peer confirms the same number.
-
-        Missing or timed-out peer proof never means globally free, even for a
-        number this node has never seen. The original 30-second bound remains.
-        """
-        loop = asyncio.get_running_loop()
-        end = loop.time() + min(30.0, max(0.0, _budget_seconds))
-        negotiation_end = max(loop.time(), end - min(3.0, _budget_seconds * 0.1))
-        peers = self.peers
-        if (
-            getattr(self.mesh, "managed_trust_enabled", False)
-            and not self.native_trust_status()["ready"]
-        ):
-            # An acknowledged managed membership is not yet Native Access
-            # enrollment. Retain locally issued Legacy/Persistent sessions
-            # while peers are being authenticated. These claims are explicitly
-            # LOCAL-ONLY until the full proof gate converges; UI reports pending.
-            # Once fully ready, every configured peer must reserve the number.
-            peers = ()
-        elif len(peers) != len(self.config.peers):
-            raise AccessMeshError("session_number_unconfirmed")
-        peer_keys = tuple((p.instance_id, p.origin, p.transport) for p in peers)
-        attempt_id = "nr_" + secrets.token_urlsafe(16)
-        number = preferred or f"{secrets.randbelow(10000):04d}"
-
-        async def abandon(code):
-            # Local cleanup is authoritative; unavailable peers retain only
-            # their existing three-minute reservation lease, never a new slot.
-            await asyncio.to_thread(self.store.numbers.release, attempt_id)
-            await self._hard_bounded_fanout(
-                (self.request(p, "numbers/release", {"attempt_id": attempt_id}) for p in peers),
-                budget=max(0, end - loop.time()),
-            )
-            raise AccessMeshError(code)
-
-        while True:
-            local = await asyncio.to_thread(
-                self.store.numbers.reserve, number=number, attempt_id=attempt_id
-            )
-            if not local["ok"]:
-                if exact:
-                    await abandon("access_mesh_code_in_use")
-                number = local["suggested_number"]
-                if loop.time() < negotiation_end:
-                    continue
-                if not peers:
-                    return number, attempt_id, end
-                await abandon("session_number_unconfirmed")
-            if not peers:
-                return number, attempt_id, end
-            if loop.time() >= negotiation_end:
-                await abandon("session_number_unconfirmed")
-
-            tasks = {
-                asyncio.create_task(
-                    self.request(
-                        peer, "numbers/reserve", {"number": number, "attempt_id": attempt_id}
-                    )
-                ): peer.instance_id
-                for peer in peers
-            }
-            pending = set(tasks)
-            suggested = None
-            confirmed = 0
-            try:
-                while pending and loop.time() < negotiation_end:
-                    done, pending = await asyncio.wait(
-                        pending,
-                        timeout=max(0, negotiation_end - loop.time()),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if not done:
-                        break
-                    for task in done:
-                        try:
-                            response = task.result()
-                        except (asyncio.CancelledError, Exception):
-                            continue
-                        if (
-                            isinstance(response, dict)
-                            and response.get("code") == "number_conflict"
-                            and isinstance(response.get("suggested_number"), str)
-                        ):
-                            suggested = response["suggested_number"]
-                            break
-                        if (
-                            isinstance(response, dict)
-                            and response.get("ok") is True
-                            and response.get("number") == number
-                        ):
-                            confirmed += 1
-                    if suggested is not None:
-                        break
-            finally:
-                # Cancellation acknowledgements cannot extend the public cap.
-                for task, peer_id in tasks.items():
-                    if not task.done():
-                        task.add_done_callback(
-                            partial(
-                                self._record_late_reservation_reply,
-                                number=number,
-                                attempt_id=attempt_id,
-                                peer_id=peer_id,
-                            )
-                        )
-                        task.cancel()
-
-            if suggested is not None:
-                if exact:
-                    await abandon("access_mesh_code_in_use")
-                if loop.time() < negotiation_end:
-                    number = suggested
-                    continue
-            if confirmed == len(tasks):
-                current = tuple((p.instance_id, p.origin, p.transport) for p in self.peers)
-                if current != peer_keys:
-                    await abandon("session_number_unconfirmed")
-                return number, attempt_id, end
-            if loop.time() < negotiation_end:
-                await asyncio.sleep(max(0, negotiation_end - loop.time()))
-            await abandon("session_number_unconfirmed")
-
-    async def announce_number(
-        self,
-        *,
-        number,
-        issuer_id,
-        slot_id,
-        logical_agent_id,
-        started_at,
-        hard_expires_at,
-        attempt_id,
-        deadline,
-    ):
-        """Deliver the identity *and the actual SlotIssued event* before return.
-
-        Publishing a claim alone is insufficient for immediate attach on peers.
-        Any failed delivery stays in the existing durable event outbox.
-        """
-        payload = dict(
-            number=number,
-            issuer_id=issuer_id,
-            slot_id=slot_id,
-            logical_agent_id=logical_agent_id,
-            started_at=started_at,
-            hard_expires_at=hard_expires_at,
-            attempt_id=attempt_id,
-        )
-        budget = deadline - asyncio.get_running_loop().time()
-        if (
-            budget <= 0
-            or not self.peers
-            or (
-                getattr(self.mesh, "managed_trust_enabled", False)
-                and not self.native_trust_status()["ready"]
-            )
-        ):
-            return
-
-        async def publish(peer):
-            try:
-                await self.request(peer, "numbers/commit", payload)
-            finally:
-                # Release alternative peer reservations even when commit
-                # succeeds only partially. The selected number is already
-                # committed as a durable claim on successful peers.
-                try:
-                    await self.request(peer, "numbers/release", {"attempt_id": attempt_id})
-                finally:
-                    await self._deliver(peer)
-
-        await self._hard_bounded_fanout(
-            (publish(peer) for peer in self.peers),
-            budget=budget,
-        )
 
     async def announce_start(self, **event):
         """Propagate an explicit Access.start, including its actual timestamp."""
@@ -545,41 +350,6 @@ class AccessMeshReplication:
             cursor = response.get("next_cursor")
             if not cursor:
                 return
-
-    async def announce_code_rotation(self, *, event_id, attempt_id, deadline):
-        """Publish the existing durable tag event; preserve immutable number identities.
-
-        A peer reservation is released only after that peer has acknowledged the
-        rotation event. Otherwise its original bounded lease remains in effect.
-        No code, claim rewrite or additional replication registry is introduced.
-        """
-        if not self.peers or deadline is None:
-            return
-
-        def unacknowledged(peer):
-            with self.store._connect() as db:
-                return (
-                    db.execute(
-                        "SELECT 1 FROM access_mesh_event_outbox "
-                        "WHERE peer_node_id=? AND event_id=? AND acked_at IS NULL",
-                        (peer.instance_id, event_id),
-                    ).fetchone()
-                    is not None
-                )
-
-        async def publish(peer):
-            while asyncio.get_running_loop().time() < deadline:
-                await self._deliver(peer)
-                if not await asyncio.to_thread(unacknowledged, peer):
-                    await self.request(peer, "numbers/release", {"attempt_id": attempt_id})
-                    return
-                # Do not busy-loop while another consumer is still catching up.
-                await asyncio.sleep(0.025)
-
-        await self._hard_bounded_fanout(
-            (publish(peer) for peer in self.peers),
-            budget=max(0.0, deadline - asyncio.get_running_loop().time()),
-        )
 
     async def announce_end(self, **event):
         # The durable local event remains authoritative when peers are offline.
@@ -699,6 +469,10 @@ class AccessMeshReplication:
             return result
 
     async def _snapshot(self, peer) -> None:
+        if self.store.registry_mesh_id and peer.instance_id != self.store.registry_authority_id:
+            self._snapshot_after[peer.instance_id] = ""
+            self._last_snapshot_pass[peer.instance_id] = asyncio.get_running_loop().time()
+            return
         result = await self.request(
             peer, "snapshot", {"after": self._snapshot_after[peer.instance_id], "limit": 20}
         )
@@ -827,6 +601,8 @@ class AccessMeshReplication:
             loop.call_soon_threadsafe(self._wake.set)
 
     async def start(self) -> None:
+        if not self.peers:
+            return
         if self._task and not self._task.done():
             return
         self._stop.clear()
@@ -849,7 +625,7 @@ class AccessMeshReplication:
             self._owned_client = False
 
     async def _loop(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop.is_set() and self.peers:
             self._wake.clear()
             await self.tick()
             if self._stop.is_set():
@@ -1072,58 +848,6 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         }
         bounded(result)
         return result
-
-    @router.post("/internal/fleet/access-mesh/numbers/reserve", include_in_schema=False)
-    async def number_reserve(
-        payload: dict,
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
-    ):
-        authenticated(x_terminal_mcp_peer, authorization)
-        bounded(payload)
-        if set(payload) != {"number", "attempt_id"}:
-            raise HTTPException(400, "invalid reservation")
-        try:
-            return await asyncio.to_thread(mesh.store.numbers.reserve, **payload)
-        except AccessMeshError as exc:
-            return {"ok": False, "code": exc.code}
-
-    @router.post("/internal/fleet/access-mesh/numbers/release", include_in_schema=False)
-    async def number_release(
-        payload: dict,
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
-    ):
-        authenticated(x_terminal_mcp_peer, authorization)
-        bounded(payload)
-        if set(payload) != {"attempt_id"}:
-            raise HTTPException(400, "invalid reservation release")
-        attempt_id = payload["attempt_id"]
-        if (
-            not isinstance(attempt_id, str)
-            or not attempt_id.startswith("nr_")
-            or len(attempt_id) > 128
-        ):
-            raise HTTPException(400, "invalid reservation release")
-        await asyncio.to_thread(mesh.store.numbers.release, attempt_id)
-        return {"ok": True}
-
-    @router.post("/internal/fleet/access-mesh/numbers/commit", include_in_schema=False)
-    async def number_commit(
-        payload: dict,
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
-    ):
-        peer_id = authenticated(x_terminal_mcp_peer, authorization)
-        bounded(payload)
-        if payload.get("issuer_id") != peer_id:
-            raise HTTPException(400, "issuer does not match authenticated peer")
-        try:
-            return await asyncio.to_thread(
-                mesh.store.numbers.register, **payload, source_peer_id=peer_id
-            )
-        except (AccessMeshError, TypeError, ValueError) as exc:
-            return {"ok": False, "code": getattr(exc, "code", "invalid_session_registration")}
 
     @router.post("/internal/fleet/access-mesh/numbers/snapshot", include_in_schema=False)
     async def number_snapshot(

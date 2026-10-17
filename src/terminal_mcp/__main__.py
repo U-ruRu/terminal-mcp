@@ -101,7 +101,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run_server() -> None:
     settings = Settings()
-    uvicorn.run("terminal_mcp.app:app", host=settings.host, port=settings.port, reload=False)
+    uvicorn.run(
+        "terminal_mcp.app:create_app", factory=True,
+        host=settings.host, port=settings.port, reload=False
+    )
 
 
 def main(argv: list[str] | None = None):

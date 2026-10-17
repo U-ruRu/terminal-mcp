@@ -349,7 +349,7 @@ class AccessSlotEvent:
 class PendingDelivery:
     peer_node_id: str
     event: AccessSlotEvent
-    issued_kind: Literal["legacy", "persistent"] | None
+    issued_kind: Literal["temporary", "persistent"] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,7 +364,7 @@ class SlotSnapshot:
     issuer_id: str
     slot_id: str
     logical_agent_id: str
-    kind: Literal["legacy", "persistent"]
+    kind: Literal["temporary", "persistent"]
     state: Literal["active", "suspended", "deleted"]
     revision: int
     policy: SlotPolicy
@@ -437,6 +437,10 @@ class LocalAccessMesh:
 
     def _initialize(self) -> None:
         with self._connect() as db:
+            # SQLite cannot replace a CHECK constraint in place. Rebuild the
+            # old slot-kind table in one transaction while retaining every FK
+            # dependant and rechecking them before committing the migration.
+            db.execute("PRAGMA foreign_keys=OFF")
             # DDL otherwise autocommits one statement at a time. The version
             # fence must become durable with the first incompatible Access DDL,
             # before later store constructors or asynchronous startup can fail.
@@ -496,7 +500,7 @@ class LocalAccessMesh:
                   issuer_id TEXT NOT NULL,
                   slot_id TEXT NOT NULL,
                   logical_agent_id TEXT NOT NULL,
-                  kind TEXT NOT NULL CHECK(kind IN ('legacy','persistent')),
+                  kind TEXT NOT NULL CHECK(kind IN ('temporary','persistent')),
                   state TEXT NOT NULL CHECK(state IN ('active','suspended','deleted')),
                   revision INTEGER NOT NULL,
                   event_id TEXT NOT NULL,
@@ -573,11 +577,51 @@ class LocalAccessMesh:
                     "ALTER TABLE access_mesh_slot_replicas "
                     "ADD COLUMN fence_revision INTEGER NOT NULL DEFAULT 1"
                 )
+            self._migrate_temporary_slot_kind(db)
             db.execute(
                 "CREATE INDEX IF NOT EXISTS access_mesh_slots_agent "
                 "ON access_mesh_slot_replicas(logical_agent_id)"
             )
             db.execute(f"PRAGMA user_version={ACCESS_MESH_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _migrate_temporary_slot_kind(db):
+        schema = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='access_mesh_slot_replicas'"
+        ).fetchone()[0]
+        if "'legacy'" not in schema:
+            return
+        objects = [
+            row[0]
+            for row in db.execute(
+                "SELECT sql FROM sqlite_master WHERE tbl_name='access_mesh_slot_replicas' "
+                "AND type IN ('index','trigger') AND sql IS NOT NULL"
+            )
+        ]
+        columns = [row[1] for row in db.execute("PRAGMA table_info(access_mesh_slot_replicas)")]
+        new_schema = re.sub(
+            r"\baccess_mesh_slot_replicas\b", "access_mesh_slot_kind_upgrade", schema, count=1
+        )
+        db.execute(new_schema.replace("'legacy'", "'temporary'"))
+        projection = [
+            "CASE kind WHEN 'legacy' THEN 'temporary' ELSE kind END" if c == "kind" else c
+            for c in columns
+        ]
+        db.execute(
+            "INSERT INTO access_mesh_slot_kind_upgrade (" + ",".join(columns) + ") "
+            "SELECT " + ",".join(projection) + " FROM access_mesh_slot_replicas"
+        )
+        db.execute("DROP TABLE access_mesh_slot_replicas")
+        db.execute("ALTER TABLE access_mesh_slot_kind_upgrade RENAME TO access_mesh_slot_replicas")
+        for sql in objects:
+            db.execute(sql)
+        db.execute(
+            "UPDATE access_mesh_event_outbox "
+            "SET payload_json=json_set(payload_json,'$.issued_kind','temporary') "
+            "WHERE json_extract(payload_json,'$.issued_kind')='legacy'"
+        )
+        if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise RuntimeError("Access slot-kind migration violates existing foreign keys")
 
     def _after_apply(self, db, event: AccessSlotEvent, *, release_claims: bool = False) -> None:
         """Runtime stores extend this transactional hook; domain replicas stay standalone."""
@@ -666,7 +710,7 @@ class LocalAccessMesh:
         self,
         db: sqlite3.Connection,
         event: AccessSlotEvent,
-        issued_kind: Literal["legacy", "persistent"] | None,
+        issued_kind: Literal["temporary", "persistent"] | None,
         recipients: tuple[str, ...],
     ) -> None:
         """Durably queue all peer deliveries in the same transaction as the event."""
@@ -760,7 +804,7 @@ class LocalAccessMesh:
         event: AccessSlotEvent,
         *,
         authenticated_peer_id: str,
-        issued_kind: Literal["legacy", "persistent"] | None = None,
+        issued_kind: Literal["temporary", "persistent"] | None = None,
         broadcast_to: tuple[str, ...] = (),
         _connection=None,
     ) -> ApplyResult:
@@ -807,7 +851,7 @@ class LocalAccessMesh:
             if old is None:
                 if event.kind == "SlotIssued":
                     self._prepare_new_slot(db, event)
-                if event.kind != "SlotIssued" or issued_kind not in {"legacy", "persistent"}:
+                if event.kind != "SlotIssued" or issued_kind not in {"temporary", "persistent"}:
                     raise AccessMeshError("access_mesh_unknown_slot")
                 if event.revision != 1:
                     raise AccessMeshError("access_mesh_event_gap")
@@ -933,10 +977,10 @@ class LocalAccessMesh:
             self._before_slot_update(db, old, state=state, code_tag=tag)
             release_claims = (
                 event.kind == "SlotDeleted"
-                or (old["kind"] == "legacy" and event.kind == "SlotSuspended")
+                or (old["kind"] == "temporary" and event.kind == "SlotSuspended")
                 or (
                     event.kind == "SessionEnded"
-                    and (old["kind"] == "legacy" or ended_policy.release_on_end is True)
+                    and (old["kind"] == "temporary" or ended_policy.release_on_end is True)
                 )
             )
             db.execute(

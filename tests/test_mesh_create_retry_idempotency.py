@@ -23,7 +23,6 @@ async def test_repeated_mesh_create_preserves_committed_revision(tmp_path):
             "warning_after_seconds": 1200,
             "alert_after_seconds": 1320,
             "rearm_after_seconds": 180,
-            "legacy_admission_enabled": False,
         },
         attach_local_control=True,
     )

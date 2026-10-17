@@ -66,7 +66,7 @@ async def fixture(tmp_path):
     )
 
 
-async def issued(f, kind="legacy", **policy):
+async def issued(f, kind="temporary", **policy):
     return await f.app.issue(
         actor("access"), kind=kind, code="1234", policy=SlotPolicy(10, 5, **policy)
     )

@@ -115,8 +115,6 @@ class TerminalService:
         metrics=None,
         agent_policy: AgentPolicy | None = None,
         fleet_replication=None,
-        legacy_agent_admission_enabled=True,
-        persistent_agents_enabled=False,
     ):
         self.repo = repo
         self.terminal = terminal
@@ -128,8 +126,6 @@ class TerminalService:
         self.metrics = metrics
         self.agent_policy = agent_policy or AgentPolicy()
         self.fleet_replication = fleet_replication
-        self.legacy_agent_admission_enabled = bool(legacy_agent_admission_enabled)
-        self.persistent_agents_enabled = bool(persistent_agents_enabled)
         self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
         self.context_store = ContextStore(repo.path) if hasattr(repo, "path") else None
         self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
@@ -1118,43 +1114,6 @@ class TerminalService:
             "persistent": persistent,
             "error": None,
         }
-
-    async def agent_start(
-        self,
-        task_summary=None,
-        intent=None,
-        details=None,
-        work_scope=None,
-        agent_id=None,
-    ):
-        if not self.legacy_agent_admission_enabled:
-            return {
-                "ok": False,
-                "code": "legacy_admission_disabled",
-                "legacy_admission_disabled": True,
-                "persistent_agents_enabled": self.persistent_agents_enabled,
-                "error": "legacy_admission_disabled",
-            }
-        if not self.agent_coordinator:
-            return {"ok": False, "error": "agent coordination unavailable"}
-        result = await self.agent_coordinator.start(
-            task_summary=task_summary,
-            intent=intent,
-            work_scope=work_scope,
-            details=details,
-            agent_id=agent_id,
-        )
-        self_payload = result.get("self") or {}
-        scope_agent_id = self_payload.get("agent_id") or agent_id
-        if scope_agent_id:
-            _, result["task_scope_options"] = await self._task_scope_state(scope_agent_id)
-        if result.get("ok") and self.context_store:
-            result["primary_context"] = [
-                entry for entry in await self.context_store.list() if entry["primary"]
-            ]
-        if result.get("ok") and scope_agent_id and self.fleet_replication:
-            self.fleet_replication.schedule_local_sync(scope_agent_id)
-        return result
 
     async def coordinate(self, agent_id, step=None, intent=None, show_details=False):
         if not self.agent_coordinator:

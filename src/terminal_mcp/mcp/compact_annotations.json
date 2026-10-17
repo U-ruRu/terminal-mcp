@@ -9,14 +9,14 @@
   "executor.session": [
     {
       "text": "attach-only work session lifecycle: action=attach requires a four-digit session_number (leading zeros allowed) and optionally nonblank intent; action=intent requires nonblank intent and forbids session_number; intent refresh keeps the existing attachment",
-      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "def action_fields(self):"
     }
   ],
   "coordinator.session": [
     {
       "text": "attach-only work session lifecycle: action=attach requires a four-digit session_number (leading zeros allowed) and optionally nonblank intent; action=intent requires nonblank intent and forbids session_number; intent refresh keeps the existing attachment",
-      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "def action_fields(self):"
     }
   ],
@@ -59,7 +59,7 @@
   "executor.task_comment": [
     {
       "text": "comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision.",
-      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "def to_request(self):"
     }
   ],

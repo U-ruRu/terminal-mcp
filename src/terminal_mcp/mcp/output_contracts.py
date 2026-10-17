@@ -186,65 +186,6 @@ def _success_schema(annotation: Any) -> dict[str, Any]:
     return schema
 
 
-class SessionInfo(_Strict):
-    public_name: str
-    mode: SessionMode
-    session_state: SessionState | Literal["warning", "draining", "expired", "cooldown"]
-    display_suffix: str | None = None
-    authority_node_id: str | None = None
-    access_generation: int | None = None
-    session_ref: str | None = None
-    work_session_id: str | None = None
-    session_epoch: int | None = None
-    role: Literal["legacy", "executor", "coordinator"] | None = None
-    contract_version: int | None = Field(default=None, ge=1)
-    state: SessionState | Literal["warning", "draining", "expired", "cooldown"] | None = None
-    started_at: str | None = None
-    hard_expires_at: str | None = None
-    remaining_seconds: int | None = Field(default=None, ge=0)
-
-
-class SessionStartResult(_Strict):
-    ok: Literal[True]
-    action: Literal["start"]
-    session: SessionInfo
-    session_number: SessionNumber | None = None
-
-
-class SessionEndResult(_Strict):
-    ok: Literal[True]
-    action: Literal["end"]
-    session_state: Literal["inactive"]
-    session_ref: str | None = None
-    public_name: str | None = None
-    mode: SessionMode | None = None
-    stopping: bool | None = None
-
-
-class SessionInterruptResult(_Strict):
-    ok: Literal[True]
-    action: Literal["interrupt"]
-    session_state: Literal["interrupted"]
-    session_ref: str | None = None
-    public_name: str | None = None
-    mode: SessionMode | None = None
-    stopping: bool | None = None
-
-
-SessionSuccess = Annotated[
-    SessionStartResult | SessionEndResult | SessionInterruptResult,
-    Field(discriminator="action"),
-]
-
-
-class SessionOutput(RootModel[SessionSuccess | AccessError]):
-    __success_type__: ClassVar[Any] = SessionSuccess
-
-    @classmethod
-    def success_schema(cls) -> dict[str, Any]:
-        return _success_schema(cls.__success_type__)
-
-
 class SessionSummary(_Strict):
     public_name: str
     mode: SessionMode | None = None
@@ -1038,29 +979,6 @@ def _task_record(raw: dict[str, Any]) -> dict[str, Any]:
     if "reviews" in raw and raw.get("reviews") is not None:
         item["reviews"] = [_task_review(value) for value in raw["reviews"]]
     return TaskRecord.model_validate(item).model_dump(mode="json", exclude_unset=True)
-
-
-def session_result(raw: dict[str, Any], action: str) -> CallToolResult:
-    if not raw.get("ok"):
-        return _result("session", action, SessionOutput, raw, {})
-    if action == "start":
-        session = {
-            key: raw[key] for key in SessionInfo.model_fields if key in raw and raw[key] is not None
-        }
-        session["session_state"] = raw.get("session_state") or "active"
-        structured = {"ok": True, "action": "start", "session": session}
-        if raw.get("access_code") is not None:
-            structured["session_number"] = raw["access_code"]
-    else:
-        structured = {
-            "ok": True,
-            "action": action,
-            "session_state": "interrupted" if action == "interrupt" else "inactive",
-        }
-        for key in ("session_ref", "public_name", "mode", "stopping"):
-            if key in raw and raw[key] is not None:
-                structured[key] = raw[key]
-    return _result("session", action, SessionOutput, raw, structured)
 
 
 def observe_result(

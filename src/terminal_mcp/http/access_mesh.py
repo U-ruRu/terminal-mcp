@@ -38,10 +38,9 @@ class OperatorMutation(BaseModel):
     slot_id: str | None = Field(default=None, min_length=1, max_length=128)
     expected_revision: int | None = Field(default=None, ge=1)
     expected_parent_revision: int | None = Field(default=None, ge=1)
-    mode: Literal["legacy", "persistent"] | None = None
+    mode: Literal["temporary", "persistent"] | None = None
     policy: PolicyPatch | None = None
     deadline_at: str | None = Field(default=None, min_length=1, max_length=64)
-    legacy_enabled: bool | None = None
     inherit_policy: bool | None = None
 
     @model_validator(mode="after")
@@ -50,7 +49,7 @@ class OperatorMutation(BaseModel):
         allowed = (
             {"mode", "policy"}
             if self.action == "create"
-            else {"expected_revision", "policy", "legacy_enabled"}
+            else {"expected_revision", "policy"}
             if self.action == "defaults"
             else {"slot_id", "expected_revision"}
             | (
@@ -63,9 +62,7 @@ class OperatorMutation(BaseModel):
         )
         if self.action in {"create", "defaults", "policy"}:
             allowed |= {"inherit_policy"}
-        if self.inherit_policy is True and (
-            self.policy is not None or self.legacy_enabled is not None
-        ):
+        if self.inherit_policy is True and self.policy is not None:
             raise ValueError("inheritance reset cannot include an override")
         if self.action == "policy" and self.inherit_policy is True:
             allowed |= {"expected_parent_revision"}

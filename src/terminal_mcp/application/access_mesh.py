@@ -50,23 +50,19 @@ class AccessMeshApplication(AccessRegistryApplication):
         *,
         task_store,
         execution_fence,
-        legacy_enabled: bool = True,
         defaults: SlotPolicy | None = None,
         clock=None,
     ):
         self.store = store
         self.task_store = task_store
         self.execution_fence = execution_fence
-        self.legacy_enabled = legacy_enabled
         self.defaults = defaults or SlotPolicy(1380, 60, True, 120, 30)
         self.configured_defaults = self.defaults
-        self.configured_legacy_enabled = self.legacy_enabled
         self.clock = clock or (lambda: datetime.now(UTC))
         self.store.clock = self.clock
         stored_defaults = self.store.defaults()
         if stored_defaults is not None:
             self.defaults = SlotPolicy(**stored_defaults["policy"])
-            self.legacy_enabled = stored_defaults["legacy_enabled"]
         self.registry = ProviderIdentityRegistry()
         self.replication = None
         self.messages = None
@@ -94,7 +90,6 @@ class AccessMeshApplication(AccessRegistryApplication):
             "source": "server",
             "revision": 1,
             "policy": asdict(self.configured_defaults),
-            "legacy_enabled": self.configured_legacy_enabled,
         }
 
     def defaults_state(self):
@@ -102,7 +97,6 @@ class AccessMeshApplication(AccessRegistryApplication):
         current = stored or {
             "revision": 1,
             "policy": asdict(self.defaults),
-            "legacy_enabled": self.legacy_enabled,
             "inherit_policy": True,
         }
         parent = current.get("parent") or self.local_parent_policy()
@@ -173,14 +167,13 @@ class AccessMeshApplication(AccessRegistryApplication):
                     "source": "mesh",
                     "revision": policy["revision"],
                     "policy": asdict(resolved),
-                    "legacy_enabled": policy["legacy_admission_enabled"],
                     "mesh_id": local["mesh_id"],
                     "control_node_id": state.get("control_node_id"),
                 }
         # apply_fleet_policy receives only locally committed/verified Fleet
         # Control state. Every other entry point must stay on bootstrap trust.
         # Deliberately do not trust a peer merely because it contacted the API.
-        allowed = self._bootstrap_trusted_issuers
+        allowed = frozenset({self.store.local_node_id})
         managed_mesh_id = None
         if state and state.get("managed"):
             nodes = state.get("nodes") or []
@@ -211,9 +204,6 @@ class AccessMeshApplication(AccessRegistryApplication):
                 allowed = frozenset(member_ids)
                 managed_mesh_id = mesh_id
         async with self._issuer_session_lock, self._issuer_lock:
-            current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
-            self.defaults = SlotPolicy(**current["policy"])
-            self.legacy_enabled = current["legacy_enabled"]
             # The previous authority's proof is never valid for a newly
             # selected authority or Mesh. Archived local proofs remain valid
             # only for this node's own historical grants.
@@ -232,6 +222,8 @@ class AccessMeshApplication(AccessRegistryApplication):
                 mesh_id=managed_mesh_id,
                 authority_id=authority if managed_mesh_id else self.store.local_node_id,
             )
+            current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
+            self.defaults = SlotPolicy(**current["policy"])
 
     @staticmethod
     def require_write(actor: ActorContext) -> None:
@@ -720,7 +712,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         self,
         actor: ActorContext,
         *,
-        kind: str = "legacy",
+        kind: str = "temporary",
         policy: SlotPolicy | None = None,
         start: bool = True,
         code: str | None = None,
@@ -731,21 +723,12 @@ class AccessMeshApplication(AccessRegistryApplication):
         self.require_write(actor)
         if not self.registry_authoritative:
             raise AccessMeshError("mesh_not_primary")
-        if kind not in {"legacy", "persistent"}:
+        if kind not in {"temporary", "persistent"}:
             raise AccessMeshError("invalid_mode")
-        if kind == "legacy" and not self.legacy_enabled:
-            raise AccessMeshError("legacy_disabled")
         async with self._issuer_lock:
             attempt_id = "nr_" + secrets.token_urlsafe(16)
-            announcement_deadline = None
             reserved_number = None
-            if self.replication is not None and not self.store.registry_mesh_id:
-                (
-                    reserved_number,
-                    attempt_id,
-                    announcement_deadline,
-                ) = await self.replication.negotiate_number(preferred=code, exact=code is not None)
-            elif code is None:
+            if code is None:
                 candidate = f"{secrets.randbelow(10000):04d}"
                 proposed = await asyncio.to_thread(
                     self.store.numbers.reserve,
@@ -815,20 +798,6 @@ class AccessMeshApplication(AccessRegistryApplication):
                             "started_at": issued_at,
                         },
                     )
-                    started_at = issued_at
-                    if self.replication is not None and announcement_deadline is not None:
-                        await self.replication.announce_number(
-                            number=allocated,
-                            issuer_id=event.issuer_id,
-                            slot_id=slot_id,
-                            logical_agent_id=agent_id,
-                            started_at=started_at.isoformat(),
-                            hard_expires_at=(
-                                started_at + timedelta(seconds=event.policy.duration_seconds)
-                            ).isoformat(),
-                            attempt_id=attempt_id,
-                            deadline=announcement_deadline,
-                        )
                     return result
                 except AccessMeshError as exc:
                     if exc.code != "access_mesh_code_in_use":
@@ -863,23 +832,15 @@ class AccessMeshApplication(AccessRegistryApplication):
                 raise AccessMeshError("revision_conflict")
             code = None
             rotation_attempt = None
-            rotation_deadline = None
             if kind == "AccessCodeRotated":
-                if self.replication is not None and not self.store.registry_mesh_id:
-                    (
-                        code,
-                        rotation_attempt,
-                        rotation_deadline,
-                    ) = await self.replication.negotiate_number()
-                else:
-                    rotation_attempt = "nr_" + secrets.token_urlsafe(16)
-                    reserved = await asyncio.to_thread(
-                        self.store.numbers.reserve,
-                        number=f"{secrets.randbelow(10000):04d}",
-                        attempt_id=rotation_attempt,
-                        now=self.clock(),
-                    )
-                    code = reserved.get("number") or reserved["suggested_number"]
+                rotation_attempt = "nr_" + secrets.token_urlsafe(16)
+                reserved = await asyncio.to_thread(
+                    self.store.numbers.reserve,
+                    number=f"{secrets.randbelow(10000):04d}",
+                    attempt_id=rotation_attempt,
+                    now=self.clock(),
+                )
+                code = reserved.get("number") or reserved["suggested_number"]
                 if await asyncio.to_thread(self.store.code_slot, slot.issuer_id, code) is not None:
                     await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
                     raise AccessMeshError("access_mesh_code_in_use")
@@ -947,15 +908,6 @@ class AccessMeshApplication(AccessRegistryApplication):
                     await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
                 except Exception:
                     _LOG.warning("Mesh code-rotation reservation cleanup pending")
-        if rotation_attempt is not None and self.replication is not None:
-            try:
-                await self.replication.announce_code_rotation(
-                    event_id=event.event_id,
-                    attempt_id=rotation_attempt,
-                    deadline=rotation_deadline,
-                )
-            except Exception:
-                _LOG.warning("Mesh code-rotation propagation pending")
         if (
             number_end is not None
             and actor.endpoint_role == "operator"
@@ -1030,9 +982,9 @@ class AccessMeshApplication(AccessRegistryApplication):
             if action == "start" and mode is None:
                 slot = await asyncio.to_thread(self.store.issuer_bound_slot, binding)
                 if slot is None:
-                    result = await self.issue(actor, kind="legacy", receipt_spec=spec)
+                    result = await self.issue(actor, kind="temporary", receipt_spec=spec)
                     return {"ok": True, "session_number": result["access_code"]}
-                if slot.state != "active" or slot.kind != "legacy":
+                if slot.state != "active" or slot.kind != "temporary":
                     raise AccessMeshError("access_mode_mismatch")
                 now = self.clock()
                 cycle = await asyncio.to_thread(self.store.merged_cycle, slot, now)
@@ -1077,16 +1029,16 @@ class AccessMeshApplication(AccessRegistryApplication):
                 if number is None:
                     raise AccessMeshError("invalid_session_number")
                 return {"ok": True, "session_number": number}
-            if action == "start" and mode == "legacy" and code is not None:
-                raise AccessMeshError("legacy_code_not_allowed")
+            if action == "start" and mode == "temporary" and code is not None:
+                raise AccessMeshError("temporary_code_not_allowed")
             slot = (
                 await asyncio.to_thread(self.store.code_slot, self.store.local_node_id, code)
                 if code is not None
                 else await asyncio.to_thread(self.store.issuer_bound_slot, binding)
             )
             if slot is None or slot.state == "deleted":
-                if action == "start" and mode == "legacy":
-                    return await self.issue(actor, kind="legacy", receipt_spec=spec)
+                if action == "start" and mode == "temporary":
+                    return await self.issue(actor, kind="temporary", receipt_spec=spec)
                 raise AccessMeshError("access_mesh_slot_not_found")
             cycle = local_cycle(slot, self.clock())
             previous = await asyncio.to_thread(self.store.latest_session_window, slot.slot_id)
@@ -1099,7 +1051,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                 original_deadline = previous["deadline"] or (
                     previous["start"] + timedelta(seconds=slot.policy.duration_seconds)
                 )
-            if action == "start" and mode == "legacy" and slot.kind != "legacy":
+            if action == "start" and mode == "temporary" and slot.kind != "temporary":
                 raise AccessMeshError("access_mode_mismatch")
             if action == "status":
                 if ended:
@@ -1122,7 +1074,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     "policy": asdict(slot.policy),
                 }
             if action == "start":
-                if mode not in {"legacy", "persistent"} or slot.kind != mode:
+                if mode not in {"temporary", "persistent"} or slot.kind != mode:
                     raise AccessMeshError("access_mode_mismatch")
                 if slot.state != "active":
                     raise AccessMeshError("slot_not_armed")

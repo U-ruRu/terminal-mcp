@@ -50,7 +50,9 @@ async def migrate_stores(profile: dict, backup: Path) -> dict:
     fresh = assert_identity_isolated(Path(stores["runtime"]), Path(stores["auth"]))
     # Constructors perform synchronous schema preparation; the main service and
     # executor are already stopped and their entire persistent state snapshotted.
-    from terminal_mcp.app import app
+    from terminal_mcp.app import create_app
+
+    app = create_app()
 
     state = app.state
     await state.service.repo.initialize(preserve_active_commands=True)

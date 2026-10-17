@@ -42,7 +42,6 @@ class PolicyProbe:
             "warning_after_seconds": 1200,
             "alert_after_seconds": 1320,
             "rearm_after_seconds": 180,
-            "legacy_admission_enabled": False,
         }
         self.current = dict(self.local)
         self.applied: list[dict] = []
@@ -106,7 +105,6 @@ def _managed_replica_snapshot(*, member_mesh_id=None) -> dict:
             "warning_after_seconds": 1200,
             "alert_after_seconds": 1320,
             "rearm_after_seconds": 180,
-            "legacy_admission_enabled": False,
         },
         "revisions": {"topology": 2, "trust": 2, "access_policy": 2},
     }

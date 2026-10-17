@@ -6,12 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from terminal_mcp.adapters.actor import actor_for
 from terminal_mcp.api_models import (
-    AgentFinishResponse,
     AgentOverviewResponse,
     CancelResponse,
     ContextAction,
     ContextResponse,
-    CoordinateResponse,
     HealthResponse,
     MessageResponse,
     ReadResponse,
@@ -51,33 +49,6 @@ class AgentRequest(StrictRequest):
 
 class OptionalAgentRequest(StrictRequest):
     agent_id: str | None = Field(default=None, min_length=1, max_length=64)
-
-
-class AgentStartRequest(StrictRequest):
-    agent_id: str | None = Field(default=None, min_length=1, max_length=64)
-    task_summary: str | None = Field(default=None, min_length=1, max_length=120)
-    intent: str | None = Field(default=None, min_length=1, max_length=160)
-    details: list[StepItem] | None = Field(default=None, min_length=1, max_length=12)
-    work_scope: list[ScopeItem] | None = Field(default=None, max_length=4)
-
-    @model_validator(mode="after")
-    def validate_start(self):
-        if self.agent_id is None:
-            if self.task_summary is None or self.intent is None or self.details is None:
-                raise ValueError("new admission requires task_summary, intent and details")
-        return self
-
-
-class CoordinateRequest(AgentRequest):
-    step: int | None = Field(default=None, ge=1)
-    intent: str | None = Field(default=None, min_length=1, max_length=160)
-    show_details: bool = False
-
-    @model_validator(mode="after")
-    def validate_coordinate(self):
-        if self.intent is not None and self.step is None:
-            raise ValueError("step is required when intent is provided")
-        return self
 
 
 class MessageRequest(AgentRequest):
@@ -240,7 +211,9 @@ class TaskRequest(AgentRequest):
 
 
 class RunRequest(AgentRequest):
-    cmd: str = Field(min_length=1, description="Script supplied to the configured shell through stdin.")
+    cmd: str = Field(
+        min_length=1, description="Script supplied to the configured shell through stdin."
+    )
     queue_id: int | None = Field(default=None, ge=1)
     task_scope: str = Field(
         min_length=1,
@@ -270,49 +243,6 @@ def build_actions_router(service, auth_mode="none"):
     router = APIRouter(prefix="/actions", tags=["terminal-actions"])
 
     @router.post(
-        "/agent/start",
-        operation_id="startAgentSession",
-        response_model=AgentOverviewResponse,
-        response_model_exclude_none=True,
-    )
-    async def agent_start(body: AgentStartRequest):
-        return await observed(
-            service,
-            "rest",
-            "agent_start",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
-                "agent_start",
-                task_summary=body.task_summary,
-                intent=body.intent,
-                details=body.details,
-                work_scope=body.work_scope,
-                agent_id=body.agent_id,
-            ),
-        )
-
-    @router.post(
-        "/coordinate",
-        operation_id="coordinateAgent",
-        response_model=CoordinateResponse,
-        response_model_exclude_none=True,
-    )
-    async def coordinate(body: CoordinateRequest):
-        return await observed(
-            service,
-            "rest",
-            "coordinate",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
-                "coordinate",
-                body.agent_id,
-                step=body.step,
-                intent=body.intent,
-                show_details=body.show_details,
-            ),
-        )
-
-    @router.post(
         "/message",
         operation_id="messageAgent",
         response_model=MessageResponse,
@@ -323,8 +253,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "message",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "message",
                 body.agent_id,
                 text=body.text,
@@ -348,8 +278,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "agents",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "agents",
                 body.agent_id,
                 target=body.target,
@@ -358,24 +288,6 @@ def build_actions_router(service, auth_mode="none"):
                 show_commands=body.show_commands,
                 command_hash=body.command_hash,
                 since_minutes=body.since_minutes,
-            ),
-        )
-
-    @router.post(
-        "/agent/finish",
-        operation_id="finishAgentSession",
-        response_model=AgentFinishResponse,
-        response_model_exclude_none=True,
-    )
-    async def agent_finish(body: AgentRequest):
-        return await observed(
-            service,
-            "rest",
-            "agent_finish",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
-                "agent_finish",
-                body.agent_id,
             ),
         )
 
@@ -390,8 +302,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "context",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "context",
                 body.action,
                 context_id=body.id,
@@ -413,8 +325,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "tasks",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "tasks",
                 namespace=body.namespace,
                 task_id=body.task_id,
@@ -442,8 +354,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "task",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "task",
                 body.agent_id,
                 action=body.action,
@@ -458,8 +370,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "run",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "run",
                 body.cmd,
                 agent_id=body.agent_id,
@@ -474,8 +386,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "recovery",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "recovery",
                 body.cmd,
                 agent_id=body.agent_id,
@@ -491,8 +403,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "read",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "read",
                 body.cmd_hash,
                 body.lines_count,
@@ -510,8 +422,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "cancel",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "cancel",
                 body.cmd_hash,
                 agent_id=body.agent_id,
@@ -532,8 +444,8 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "health",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "health",
                 auth_mode,
                 agent_id=agent_id,

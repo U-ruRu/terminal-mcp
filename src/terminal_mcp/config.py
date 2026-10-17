@@ -112,7 +112,6 @@ class Settings(BaseSettings):
     mesh_vpn_state_dir: str = str(CONFIG_DIR / "mesh-vpn")
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
-    fleet_legacy_replication_enabled: bool = True
     fleet_v1_source_enabled: bool = False
     fleet_v1_authority_enabled: bool = False
     fleet_v1_projection_enabled: bool = False
@@ -128,31 +127,23 @@ class Settings(BaseSettings):
     fleet_permit_ttl_ms: int = 10_000
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
-    access_mesh_enabled: bool = False
     access_mesh_proof_key: str = ""
     access_mesh_peers_json: str = "[]"
-    access_mesh_legacy_enabled: bool = True
     access_mesh_duration_sec: int = 1200
     access_mesh_cooldown_sec: int = 60
     access_mesh_warning_sec: int = 120
     access_mesh_draining_sec: int = 30
 
-    persistent_agents_enabled: bool = False
     persistent_session_duration_sec: int = 23 * 60
     persistent_session_warning_after_sec: int = 20 * 60
     persistent_session_alert_after_sec: int = 22 * 60
     persistent_session_rearm_after_sec: int = 3 * 60
-    legacy_agent_admission_enabled: bool | None = None
 
     @model_validator(mode="after")
     def validate_access_mesh(self):
-        if not self.access_mesh_enabled:
-            return self
         from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
-        if not self.persistent_agents_enabled or not self.fleet_instance_id:
-            raise ValueError("access_mesh requires persistent storage and a configured node id")
-        if len(self.access_mesh_proof_key.encode()) < 32:
+        if self.access_mesh_proof_key and len(self.access_mesh_proof_key.encode()) < 32:
             raise ValueError("access_mesh_proof_key must contain at least 32 bytes")
         peers = json.loads(self.access_mesh_peers_json)
         if not isinstance(peers, list) or any(
@@ -194,8 +185,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_persistent_session_thresholds(self):
-        if not self.persistent_agents_enabled:
-            return self
         duration = self.persistent_session_duration_sec
         warning = self.persistent_session_warning_after_sec
         alert = self.persistent_session_alert_after_sec
@@ -235,8 +224,6 @@ class Settings(BaseSettings):
     def validate_fleet_v1_authority(self):
         if not self.fleet_v1_authority_enabled:
             return self
-        if not self.persistent_agents_enabled:
-            raise ValueError("fleet v1 authority requires persistent_agents_enabled")
         if not self.fleet_v1_source_enabled:
             raise ValueError("fleet v1 authority requires fleet_v1_source_enabled")
         if not self.fleet_control_node_id.strip():
@@ -297,11 +284,6 @@ class Settings(BaseSettings):
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode
         return explicit or self.auth_mode
-
-    def legacy_admission_allowed(self) -> bool:
-        if self.legacy_agent_admission_enabled is not None:
-            return bool(self.legacy_agent_admission_enabled)
-        return not (self.persistent_agents_enabled and self.mode_for("mcp") != "none")
 
     def browser_allowed_origins(self) -> tuple[str, ...]:
         from terminal_mcp.http.browser_security import canonical_origin

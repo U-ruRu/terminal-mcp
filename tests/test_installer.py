@@ -64,7 +64,6 @@ def _run_doctor_with_ingress_status(
     tmp_path,
     ingress_status: str,
     *,
-    legacy_replication_enabled: str = "true",
     fleet_v1_public_enabled: str = "true",
 ):
     fake_bin = tmp_path / "fake-bin"
@@ -80,7 +79,7 @@ def _run_doctor_with_ingress_status(
         "  previous=$arg\n"
         "done\n"
         'case "$*" in\n'
-        "  */internal/fleet/identities*|*/internal/fleet/v1/source/manifest*) "
+        "  */internal/fleet/control/state*) "
         "printf '%s' \"$FAKE_INGRESS_STATUS\" ;;\n"
         "  *'/actions/console/snapshot'*)\n"
         '    [ -z "$header_file" ] || '
@@ -103,7 +102,6 @@ def _run_doctor_with_ingress_status(
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://server-a.example.invalid"\n'
         'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"\n'
         'TERMINAL_MCP_QUEUE_WORKERS="4"\n'
-        f'TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED="{legacy_replication_enabled}"\n'
         f'TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED="{fleet_v1_public_enabled}"\n'
     )
     env = {
@@ -210,6 +208,7 @@ def test_doctor_probes_console_fallback_and_read_v2_surfaces(tmp_path):
 
     assert result.returncode == 0, result.stderr
     for route in (
+        "/internal/fleet/control/state",
         "/connect",
         "/actions/console/snapshot",
         "/console/ws-ticket",

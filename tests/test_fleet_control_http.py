@@ -31,7 +31,6 @@ def test_fleet_policy_in_use_is_returned_as_structured_control_error():
                 "warning_after_seconds": 60,
                 "alert_after_seconds": 120,
                 "rearm_after_seconds": 15,
-                "legacy_admission_enabled": False,
                 "expected_revision": 1,
             },
         )

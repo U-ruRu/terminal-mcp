@@ -70,24 +70,22 @@ class ProbeClient:
             require(value["release"] == expected_release, "live_release_mismatch")
         return {"ok": True, "release": value["release"], "version": value.get("version")}
 
-    def ingress(self, base: str, *, access: bool, persistent: bool) -> list[dict]:
+    def ingress(self, base: str) -> list[dict]:
         base = checked_url(base)
         # These calls carry no credentials and cannot mutate application state.
         routes = [
             ("GET", "/.well-known/oauth-authorization-server", 200),
             ("GET", "/.well-known/oauth-protected-resource", 200),
-            ("GET", "/mcp", 401),
             ("GET", "/terminal-mcp/executor/v1/mcp", 401),
             ("GET", "/terminal-mcp/coordinator/v1/mcp", 401),
             ("GET", "/connect", 200),
         ]
-        roles = ["executor", "coordinator"] + (["access"] if access else [])
-        if access:
-            routes += [
-                ("GET", "/terminal-mcp/access/v1/mcp", 401),
-                ("GET", "/actions/access/slots", 401),
-                ("GET", "/actions/access/defaults", 401),
-            ]
+        roles = ["access", "executor", "coordinator"]
+        routes += [
+            ("GET", "/terminal-mcp/access/v1/mcp", 401),
+            ("GET", "/actions/access/slots", 401),
+            ("GET", "/actions/access/defaults", 401),
+        ]
         for role in roles:
             routes.append(
                 (
@@ -96,9 +94,6 @@ class ProbeClient:
                     200,
                 )
             )
-        if persistent:
-            routes.append(("POST", "/actions/persistent/slots/list", 401))
-            routes.append(("POST", "/actions/persistent/managed/status", 401))
         results = []
         for method, path, expected in routes:
             kwargs = {"json": {"code": "0000"}} if method == "POST" else {}

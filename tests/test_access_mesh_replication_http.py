@@ -55,6 +55,7 @@ async def node(tmp_path, name, other, routes, client, *, proof_key=KEY):
     store = AccessMeshStore(
         path, local_node_id=name, trusted_issuers=frozenset({name, other}), proof_key=proof_key
     )
+    store.install_registry_scope(mesh_id="fixture-mesh", authority_id="firstbyte")
     mesh = AccessMeshApplication(
         store, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0
     )
@@ -80,7 +81,11 @@ async def test_authenticated_peer_cannot_spoof_event_issuer(tmp_path):
         wire = source.store.pending_outbox(peer_node_id="bacloud")[0].event.to_wire()
         response = await client.post(
             "https://firstbyte/internal/fleet/access-mesh/events",
-            headers={"x-terminal-mcp-peer": "bacloud", "authorization": "Bearer fixture-token"},
+            headers={
+                "x-terminal-mcp-peer": "bacloud",
+                "authorization": "Bearer fixture-token",
+                "x-terminal-mcp-mesh": "fixture-mesh",
+            },
             json={"events": [{"event": wire, "issued_kind": "persistent"}]},
         )
         assert response.json()["code"] == "access_mesh_untrusted_issuer"

@@ -132,7 +132,7 @@ def build_access_mcp(
     )
     from terminal_mcp.operation_metadata import install_action_metadata
 
-    install_action_metadata(mcp, "access", mesh=True)
+    install_action_metadata(mcp, "access")
     if publish_agent_contract:
         from terminal_mcp.mcp.agent_contracts import install_agent_contract
 

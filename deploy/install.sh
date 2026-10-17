@@ -101,15 +101,11 @@ TERMINAL_MCP_MESSAGE_REMINDER_CALLS="${TERMINAL_MCP_MESSAGE_REMINDER_CALLS:-5}"
 TERMINAL_MCP_MAX_ACTIVE_AGENTS="${TERMINAL_MCP_MAX_ACTIVE_AGENTS:-8}"
 TERMINAL_MCP_QUEUE_WORKERS="${TERMINAL_MCP_QUEUE_WORKERS:-4}"
 TERMINAL_MCP_QUEUE_RECONCILE_SEC="${TERMINAL_MCP_QUEUE_RECONCILE_SEC:-1.0}"
-TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED="${TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED:-true}"
 TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC:-1380}"
 TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC:-1200}"
 TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC:-1320}"
 TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC:-180}"
 ENV
-  if [ -n "${TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED:-}" ]; then
-    printf 'TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED="%s"\\n' "${TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED}" >>"$ENV_FILE"
-  fi
   chmod 600 "$ENV_FILE"
 }
 ensure_console_origins(){
@@ -162,16 +158,11 @@ ensure_env_defaults(){
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC:-1380}"
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC:-60}"
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE "${TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE:-Ваша сессия закончилась. У пользователя для вас новая задача. Завершите сессию и немедленно вернитесь в чат к пользователю, чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу.}"
-  ensure_env TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED "${TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED:-true}"
   ensure_env TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED "${TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED:-false}"
-  ensure_env TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED "${TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED:-true}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC:-1380}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC:-1200}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC:-1320}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC:-180}"
-  if [ -n "${TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED:-}" ]; then
-    ensure_env TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED "${TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED}"
-  fi
   chmod 600 "$ENV_FILE"
 }
 
@@ -326,24 +317,20 @@ configure_console_caddy(){
   fi
 }
 
-check_public_fleet_ingress(){
+check_public_mesh_ingress(){
   [ -f "$ENV_FILE" ] || { echo "Missing env file: $ENV_FILE" >&2; return 1; }
   public_base_url=$(
     sed -n 's/^TERMINAL_MCP_PUBLIC_BASE_URL="\(.*\)"$/\1/p' "$ENV_FILE" | tail -n 1
   )
   [ -n "$public_base_url" ] || { echo "TERMINAL_MCP_PUBLIC_BASE_URL is not configured" >&2; return 1; }
-  legacy_replication_enabled=$(read_env_value TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED)
-  case "${legacy_replication_enabled,,}" in
-    false|0|no|off) ingress_path=/internal/fleet/v1/source/manifest ;;
-    *) ingress_path=/internal/fleet/identities ;;
-  esac
+  ingress_path=/internal/fleet/control/state
   ingress_url="${public_base_url%/}${ingress_path}"
   ingress_status=$(
     curl --max-time "$PUBLIC_INGRESS_TIMEOUT_SEC" -sS -o /dev/null -w '%{http_code}' "$ingress_url" || true
   )
   if [ "$ingress_status" != "401" ]; then
-    echo "Public fleet ingress check failed: $ingress_url returned ${ingress_status:-request_error}, expected 401" >&2
-    echo "Ensure the reverse proxy forwards /internal/fleet/* to Terminal MCP without bypassing fleet authentication." >&2
+    echo "Public Mesh ingress check failed: $ingress_url returned ${ingress_status:-request_error}, expected 401" >&2
+    echo "Ensure the reverse proxy forwards /internal/fleet/* to Terminal MCP without bypassing Mesh authentication." >&2
     return 1
   fi
 }
@@ -848,7 +835,7 @@ activate(){
   ln -sfn "$new" "$ROOT/current"; $SYSTEMCTL daemon-reload; $SYSTEMCTL restart terminal-mcp
   for _ in $(seq 1 "$HEALTH_TIMEOUT_SEC"); do
     if curl -fsS "$HEALTH_URL" >/dev/null; then
-      if check_public_fleet_ingress && check_public_console_ingress; then
+      if check_public_mesh_ingress && check_public_console_ingress; then
         install_cli_link
         if [ -f "$new/CANONICAL_RELEASE.json" ]; then
           cp "$new/RELEASE_META.json" "$ROOT/CANONICAL_BASELINE.json"
@@ -925,6 +912,6 @@ case "$CMD" in
  clean-deploy) clean_deploy ;;
  update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
  ingress) ensure_env_defaults; configure_console_caddy ;;
- doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress; check_public_console_ingress ;;
+ doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_mesh_ingress; check_public_console_ingress ;;
  *) echo 'Usage: install.sh {install|clean-deploy|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
 esac

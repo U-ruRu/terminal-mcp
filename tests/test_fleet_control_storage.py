@@ -15,7 +15,6 @@ POLICY = {
     "warning_after_seconds": 900,
     "alert_after_seconds": 1100,
     "rearm_after_seconds": 120,
-    "legacy_admission_enabled": False,
 }
 
 

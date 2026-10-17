@@ -20,20 +20,19 @@ def build_console_router(service, settings):
             service,
             "rest",
             "console_snapshot",
-            get_application(service).compatibility.call(
-                actor_for(service, transport="http", endpoint_role="legacy"),
+            get_application(service).operator_data.call(
+                actor_for(service, transport="http", endpoint_role="operator"),
                 "console_snapshot",
                 settings.mode_for("actions"),
                 public_base_url=settings.public_base_url,
                 persistent_policy={
-                    "enabled": settings.persistent_agents_enabled,
+                    "enabled": True,
                     "duration_seconds": settings.persistent_session_duration_sec,
                     "warning_after_seconds": settings.persistent_session_warning_after_sec,
                     "alert_after_seconds": settings.persistent_session_alert_after_sec,
                     "rearm_after_seconds": settings.persistent_session_rearm_after_sec,
                     "manual_rearm": True,
                     "admission_mode": settings.mode_for("mcp"),
-                    "legacy_admission_enabled": bool(service.legacy_agent_admission_enabled),
                     "policy_control_supported": True,
                 },
             ),

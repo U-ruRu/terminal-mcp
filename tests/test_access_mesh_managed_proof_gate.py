@@ -45,6 +45,7 @@ async def setup(tmp_path, name, other, key, routes, client):
     store = AccessMeshStore(
         path, local_node_id=name, trusted_issuers=frozenset((name, other)), proof_key=key
     )
+    store.install_registry_scope(mesh_id="mesh-test", authority_id="bacloud")
     mesh = AccessMeshApplication(store, task_store=TaskStore(path), execution_fence=Fence())
     mesh.managed_trust_enabled = True
     mesh.managed_trust_mesh_id = "mesh-test"
@@ -72,7 +73,11 @@ async def test_authenticated_peer_receives_nonce_bound_proof(tmp_path):
         mesh, _ = await setup(tmp_path, "firstbyte", "bacloud", PROOF, routes, client)
         response = await client.post(
             "https://firstbyte/internal/fleet/access-mesh/proof",
-            headers={"x-terminal-mcp-peer": "bacloud", "authorization": "Bearer token-bacloud"},
+            headers={
+                "x-terminal-mcp-peer": "bacloud",
+                "authorization": "Bearer token-bacloud",
+                "x-terminal-mcp-mesh": "mesh-test",
+            },
             json={"nonce": "a" * 32},
         )
         assert response.status_code == 200

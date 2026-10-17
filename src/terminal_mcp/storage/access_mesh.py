@@ -69,11 +69,9 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         *args,
         clock=None,
         upgrade_defaults: SlotPolicy | None = None,
-        upgrade_legacy_enabled: bool | None = None,
         **kwargs,
     ):
         self._upgrade_defaults = upgrade_defaults
-        self._upgrade_legacy_enabled = upgrade_legacy_enabled
         self.clock = clock or (lambda: datetime.now(UTC))
         self._delivery_notifier = None
         super().__init__(*args, **kwargs)
@@ -226,18 +224,19 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     "WHERE name='access_defaults_snapshot_required'"
                 )
             return
-        if (
-            not isinstance(self._upgrade_defaults, SlotPolicy)
-            or type(self._upgrade_legacy_enabled) is not bool
-        ):
+        if not isinstance(self._upgrade_defaults, SlotPolicy):
             raise RuntimeError("native Access upgrade requires its configured effective defaults")
-        names = ["singleton", "revision", "policy_json", "legacy_enabled"]
+        names = ["singleton", "revision", "policy_json"]
         values = [
             1,
             1,
             json.dumps(asdict(self._upgrade_defaults), sort_keys=True),
-            int(self._upgrade_legacy_enabled),
         ]
+        if "legacy_enabled" in columns:
+            # Old installations stored this required flag. It is retired in
+            # the same initialization after preserving their effective policy.
+            names.append("legacy_enabled")
+            values.append(1)
         if "inherit_policy" in columns:
             names.append("inherit_policy")
             values.append(0)
@@ -295,11 +294,13 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             ) WITHOUT ROWID""")
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_operator_defaults (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL,
-                policy_json TEXT NOT NULL, legacy_enabled INTEGER NOT NULL
+                policy_json TEXT NOT NULL
             )""")
             default_columns = {
                 row[1] for row in db.execute("PRAGMA table_info(access_mesh_operator_defaults)")
             }
+            if "legacy_enabled" in default_columns:
+                db.execute("ALTER TABLE access_mesh_operator_defaults DROP COLUMN legacy_enabled")
             if "inherit_policy" not in default_columns:
                 db.execute(
                     "ALTER TABLE access_mesh_operator_defaults "
@@ -333,7 +334,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
 
     @staticmethod
     def _release_at_end(slot: SlotSnapshot) -> bool:
-        return slot.kind == "legacy" or slot.policy.release_on_end is True
+        return slot.kind == "temporary" or slot.policy.release_on_end is True
 
     def _native_slot(self, db, slot: SlotSnapshot, stamp: str) -> None:
         existing = db.execute(
@@ -1374,7 +1375,6 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             {
                 "revision": row["revision"],
                 "policy": json.loads(row["policy_json"]),
-                "legacy_enabled": bool(row["legacy_enabled"]),
                 "inherit_policy": bool(row["inherit_policy"]),
                 "parent": json.loads(row["parent_json"]) if row["parent_json"] else None,
             }
@@ -1387,7 +1387,6 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         *,
         expected_revision,
         policy,
-        legacy_enabled,
         receipt,
         inherit_policy=False,
         parent=None,
@@ -1398,7 +1397,6 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             self,
             expected_revision=expected_revision,
             policy=policy,
-            legacy_enabled=legacy_enabled,
             receipt=receipt,
             inherit_policy=inherit_policy,
             parent=parent,
@@ -1525,9 +1523,16 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             raise AccessMeshError("access_mesh_invalid_snapshot_request")
         with self._connect() as db:
             rows = db.execute(
-                "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? "
+                "SELECT * FROM access_mesh_slot_replicas WHERE (? OR issuer_id=?) "
                 "AND slot_id>? ORDER BY slot_id LIMIT ?",
-                (issuer_id, after, limit),
+                (
+                    bool(
+                        self.registry_mesh_id and self.registry_authority_id == self.local_node_id
+                    ),
+                    issuer_id,
+                    after,
+                    limit,
+                ),
             ).fetchall()
         return [self.snapshot_wire(row) for row in rows]
 
@@ -1615,7 +1620,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 display_suffix=raw["display_suffix"],
             )
             if raw["state"] not in {"active", "suspended", "deleted"} or raw["kind"] not in {
-                "legacy",
+                "temporary",
                 "persistent",
             }:
                 raise ValueError("invalid state or slot kind")

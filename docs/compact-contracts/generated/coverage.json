@@ -66,7 +66,7 @@
       "logical_agent_id"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.MeshAgentObserveInput",
+    "model": "terminal_mcp.mcp.role_contracts.MeshAgentObserveInput",
     "output_fallback": "strict-contracts.json:coordinator.agent_observe.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -103,6 +103,7 @@
     ],
     "exact_input_fallbacks": [],
     "input_fields": [
+      "scope",
       "action",
       "text",
       "target",
@@ -116,11 +117,10 @@
       "cursor",
       "detail",
       "namespace",
-      "task_id",
-      "scope"
+      "task_id"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
+    "model": "terminal_mcp.mcp.role_contracts.MessageInput",
     "output_fallback": "strict-contracts.json:coordinator.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -150,7 +150,7 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+    "strict_input_sha256": "39274d2050c1d4a84acb9d0a70833fb5197d9703e29f4416e971b9d28ada8c5e",
     "strict_output_sha256": "7820762f16b6d382d68bb3f1c5901e75bfe07403b0335b56705b52c1242319f6"
   },
   "coordinator.session": {
@@ -164,7 +164,7 @@
       "intent"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.AttachInput",
+    "model": "terminal_mcp.mcp.role_contracts.AttachInput",
     "output_fallback": "strict-contracts.json:coordinator.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -173,7 +173,7 @@
     "runtime_annotations": [
       {
         "anchor": "def action_fields(self):",
-        "source": "src/terminal_mcp/mcp/access_contracts.py",
+        "source": "src/terminal_mcp/mcp/role_contracts.py",
         "text": "attach-only work session lifecycle: action=attach requires a four-digit session_number (leading zeros allowed) and optionally nonblank intent; action=intent requires nonblank intent and forbids session_number; intent refresh keeps the existing attachment"
       }
     ],
@@ -865,7 +865,7 @@
       "cursor"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.MeshCommandReadInput",
+    "model": "terminal_mcp.mcp.role_contracts.MeshCommandReadInput",
     "output_fallback": "strict-contracts.json:executor.command_read.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -933,6 +933,7 @@
     ],
     "exact_input_fallbacks": [],
     "input_fields": [
+      "scope",
       "action",
       "text",
       "target",
@@ -946,11 +947,10 @@
       "cursor",
       "detail",
       "namespace",
-      "task_id",
-      "scope"
+      "task_id"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
+    "model": "terminal_mcp.mcp.role_contracts.MessageInput",
     "output_fallback": "strict-contracts.json:executor.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -980,7 +980,7 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+    "strict_input_sha256": "39274d2050c1d4a84acb9d0a70833fb5197d9703e29f4416e971b9d28ada8c5e",
     "strict_output_sha256": "7820762f16b6d382d68bb3f1c5901e75bfe07403b0335b56705b52c1242319f6"
   },
   "executor.session": {
@@ -994,7 +994,7 @@
       "intent"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.AttachInput",
+    "model": "terminal_mcp.mcp.role_contracts.AttachInput",
     "output_fallback": "strict-contracts.json:executor.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -1003,7 +1003,7 @@
     "runtime_annotations": [
       {
         "anchor": "def action_fields(self):",
-        "source": "src/terminal_mcp/mcp/access_contracts.py",
+        "source": "src/terminal_mcp/mcp/role_contracts.py",
         "text": "attach-only work session lifecycle: action=attach requires a four-digit session_number (leading zeros allowed) and optionally nonblank intent; action=intent requires nonblank intent and forbids session_number; intent refresh keeps the existing attachment"
       }
     ],
@@ -1150,7 +1150,7 @@
       "checkpoint"
     ],
     "local_types": [],
-    "model": "terminal_mcp.mcp.access_contracts.MeshTaskCommentInput",
+    "model": "terminal_mcp.mcp.role_contracts.MeshTaskCommentInput",
     "output_fallback": "strict-contracts.json:executor.task_comment.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -1162,7 +1162,7 @@
     "runtime_annotations": [
       {
         "anchor": "def to_request(self):",
-        "source": "src/terminal_mcp/mcp/access_contracts.py",
+        "source": "src/terminal_mcp/mcp/role_contracts.py",
         "text": "comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision."
       }
     ],

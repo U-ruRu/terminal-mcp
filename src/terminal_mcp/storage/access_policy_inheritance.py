@@ -14,18 +14,17 @@ import secrets
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
 
 
-def _write(db, *, revision, policy, legacy_enabled, inherit_policy, parent):
+def _write(db, *, revision, policy, inherit_policy, parent):
     db.execute(
         "INSERT INTO access_mesh_operator_defaults "
-        "(singleton,revision,policy_json,legacy_enabled,inherit_policy,parent_json) "
-        "VALUES(1,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET "
+        "(singleton,revision,policy_json,inherit_policy,parent_json) "
+        "VALUES(1,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET "
         "revision=excluded.revision,policy_json=excluded.policy_json,"
-        "legacy_enabled=excluded.legacy_enabled,inherit_policy=excluded.inherit_policy,"
+        "inherit_policy=excluded.inherit_policy,"
         "parent_json=excluded.parent_json",
         (
             revision,
             json.dumps(policy, sort_keys=True),
-            int(legacy_enabled),
             int(inherit_policy),
             json.dumps(parent, sort_keys=True) if parent else None,
         ),
@@ -33,6 +32,8 @@ def _write(db, *, revision, policy, legacy_enabled, inherit_policy, parent):
 
 
 def _propagate(store, db, policy):
+    if store.registry_authority_id != store.local_node_id:
+        return
     resolved = SlotPolicy(**policy)
     # Bounded pages, indexed issuer selection; no network while a transaction is open.
     after = ""
@@ -40,10 +41,10 @@ def _propagate(store, db, policy):
     now = store.clock()
     while True:
         rows = db.execute(
-            "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? "
-            "AND slot_id>? AND inherit_policy=1 AND state!='deleted' "
+            "SELECT * FROM access_mesh_slot_replicas WHERE slot_id>? "
+            "AND inherit_policy=1 AND state!='deleted' "
             "ORDER BY slot_id LIMIT 100",
-            (store.local_node_id, after),
+            (after,),
         ).fetchall()
         if not rows:
             break
@@ -81,11 +82,12 @@ def _notify(store):
 
 
 def change_defaults(
-    store, *, expected_revision, policy, legacy_enabled, receipt, inherit_policy=False, parent=None
+    store, *, expected_revision, policy, receipt, inherit_policy=False, parent=None
 ):
     SlotPolicy(**policy)
     with store._connect() as db:
         db.execute("BEGIN IMMEDIATE")
+        store.assert_registry_ready(db)
         row = db.execute(
             "SELECT revision FROM access_mesh_operator_defaults WHERE singleton=1"
         ).fetchone()
@@ -96,7 +98,6 @@ def change_defaults(
             db,
             revision=revision + 1,
             policy=policy,
-            legacy_enabled=legacy_enabled,
             inherit_policy=inherit_policy,
             parent=parent,
         )
@@ -112,16 +113,15 @@ def sync_parent_defaults(store, parent):
     SlotPolicy(**parent["policy"])
     with store._connect() as db:
         db.execute("BEGIN IMMEDIATE")
+        store.assert_registry_ready(db)
         row = db.execute("SELECT * FROM access_mesh_operator_defaults WHERE singleton=1").fetchone()
-        inherited = row is None or bool(row["inherit_policy"])
+        inherited = parent["source"] == "mesh" or row is None or bool(row["inherit_policy"])
         policy = parent["policy"] if inherited else json.loads(row["policy_json"])
-        enabled = parent["legacy_enabled"] if inherited else bool(row["legacy_enabled"])
         old_parent = json.loads(row["parent_json"]) if row and row["parent_json"] else None
-        if row is not None and old_parent == parent:
+        if row is not None and old_parent == parent and bool(row["inherit_policy"]) == inherited:
             return {
                 "revision": row["revision"],
                 "policy": policy,
-                "legacy_enabled": enabled,
                 "inherit_policy": inherited,
                 "parent": parent,
             }
@@ -130,7 +130,6 @@ def sync_parent_defaults(store, parent):
             db,
             revision=revision,
             policy=policy,
-            legacy_enabled=enabled,
             inherit_policy=inherited,
             parent=parent,
         )

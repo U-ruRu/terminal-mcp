@@ -24,7 +24,7 @@ def node(tmp_path, name):
     )
 
 
-def new_slot(store, *, code="1234", slot="agent-slot", kind="legacy"):
+def new_slot(store, *, code="1234", slot="agent-slot", kind="temporary"):
     return AccessSlotEvent(
         issuer_id=store.local_node_id,
         slot_id=slot,

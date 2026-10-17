@@ -8,14 +8,12 @@ Only one packaged agent-facing catalog is published for each role.
 from __future__ import annotations
 
 import json
-import os
 from functools import lru_cache
 from pathlib import Path
 
 from terminal_mcp.mcp.role_contracts import schema_digest
 
 OBJECT_SCHEMA = {"type": "object"}
-MODE_ENV = "TERMINAL_MCP_AGENT_SCHEMA_MODE"
 
 
 @lru_cache(maxsize=1)
@@ -24,20 +22,12 @@ def bundled_catalog() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def install_agent_contract(
-    mcp, role: str, models: dict[str, type], *, mesh: bool = True
-) -> None:
+def install_agent_contract(mcp, role: str, models: dict[str, type]) -> None:
     """Publish object-only schemas without replacing FastMCP's arg_model/validator.
 
     A stale packaged description is an installation error instead of silently
     misdocumenting runtime behavior. A second legacy discovery mode is unsupported.
     """
-    mode = os.environ.get(MODE_ENV, "knowledge")
-    if mode != "knowledge":
-        raise ValueError(f"Unsupported {MODE_ENV} value; expected knowledge")
-
-    if role != "access" and not mesh:
-        raise RuntimeError("Knowledge role discovery requires Access Mesh")
     catalog = bundled_catalog()[role]
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     if set(tools) != set(catalog) or set(models) != set(tools):

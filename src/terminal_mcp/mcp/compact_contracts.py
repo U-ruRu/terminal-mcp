@@ -20,13 +20,8 @@ from jsonschema import Draft202012Validator
 
 from terminal_mcp.mcp.access import build_access_mcp
 from terminal_mcp.mcp.access_contracts import (
-    AttachInput,
     GetEventsInput,
     IssuerSessionInput,
-    MeshAgentObserveInput,
-    MeshCommandReadInput,
-    MeshMessageInput,
-    MeshTaskCommentInput,
 )
 from terminal_mcp.mcp.role_contracts import ROLE_TOOL_MODELS
 from terminal_mcp.mcp.roles import build_role_mcp
@@ -44,7 +39,6 @@ SOURCE_FILES = (
     "src/terminal_mcp/mcp/output_planning.py",
     "src/terminal_mcp/mcp/roles.py",
     "src/terminal_mcp/mcp/access.py",
-    "src/terminal_mcp/mcp/server.py",
     "src/terminal_mcp/mcp/schema_manifest.py",
     "src/terminal_mcp/application/task_requests.py",
     "src/terminal_mcp/core/public_errors.py",
@@ -542,15 +536,7 @@ def output_summary(schema: dict) -> str:
 def contract_models(role: str) -> dict[str, type]:
     if role == "access":
         return {"session": IssuerSessionInput, "get_events": GetEventsInput}
-    models = {name: model for (r, name), model in ROLE_TOOL_MODELS.items() if r == role}
-    models["session"] = AttachInput
-    models["message"] = MeshMessageInput
-    if role == "coordinator":
-        models["agent_observe"] = MeshAgentObserveInput
-    if role == "executor":
-        models["command_read"] = MeshCommandReadInput
-        models["task_comment"] = MeshTaskCommentInput
-    return models
+    return {name: model for (r, name), model in ROLE_TOOL_MODELS.items() if r == role}
 
 
 def servers() -> dict:

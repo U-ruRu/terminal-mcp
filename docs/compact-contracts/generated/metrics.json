@@ -62,19 +62,19 @@
       },
       "before": {
         "component_byte_shares": {
-          "descriptions": 0.134268,
-          "input_schemas": 0.330505,
-          "output_schemas": 0.404279
+          "descriptions": 0.14114,
+          "input_schemas": 0.296239,
+          "output_schemas": 0.424971
         },
         "component_utf8_bytes": {
           "descriptions": 364,
-          "input_schemas": 896,
+          "input_schemas": 764,
           "output_schemas": 1096
         },
         "serialized_tools_list": {
-          "characters": 2711,
-          "tokens": 631,
-          "utf8_bytes": 2711
+          "characters": 2579,
+          "tokens": 596,
+          "utf8_bytes": 2579
         },
         "tools": {
           "get_events": {
@@ -98,45 +98,45 @@
             "utf8_bytes": 1421
           },
           "session": {
-            "characters": 1277,
+            "characters": 1145,
             "description": {
               "characters": 95,
               "tokens": 19,
               "utf8_bytes": 95
             },
             "input_schema": {
-              "characters": 496,
-              "tokens": 129,
-              "utf8_bytes": 496
+              "characters": 364,
+              "tokens": 94,
+              "utf8_bytes": 364
             },
             "output_schema": {
               "characters": 517,
               "tokens": 120,
               "utf8_bytes": 517
             },
-            "tokens": 305,
-            "utf8_bytes": 1277
+            "tokens": 270,
+            "utf8_bytes": 1145
           }
         }
       },
       "delta": {
         "characters": {
           "after": 2589,
-          "before": 2711,
-          "change_pct": -4.5,
-          "delta": -122
+          "before": 2579,
+          "change_pct": 0.388,
+          "delta": 10
         },
         "tokens": {
           "after": 606,
-          "before": 631,
-          "change_pct": -3.962,
-          "delta": -25
+          "before": 596,
+          "change_pct": 1.678,
+          "delta": 10
         },
         "utf8_bytes": {
           "after": 2589,
-          "before": 2711,
-          "change_pct": -4.5,
-          "delta": -122
+          "before": 2579,
+          "change_pct": 0.388,
+          "delta": 10
         }
       },
       "per_tool_delta": {
@@ -163,21 +163,21 @@
         "session": {
           "characters": {
             "after": 1070,
-            "before": 1277,
-            "change_pct": -16.21,
-            "delta": -207
+            "before": 1145,
+            "change_pct": -6.55,
+            "delta": -75
           },
           "tokens": {
             "after": 245,
-            "before": 305,
-            "change_pct": -19.672,
-            "delta": -60
+            "before": 270,
+            "change_pct": -9.259,
+            "delta": -25
           },
           "utf8_bytes": {
             "after": 1070,
-            "before": 1277,
-            "change_pct": -16.21,
-            "delta": -207
+            "before": 1145,
+            "change_pct": -6.55,
+            "delta": -75
           }
         }
       }
@@ -196,7 +196,7 @@
         },
         "serialized_tools_list": {
           "characters": 24175,
-          "tokens": 5598,
+          "tokens": 5597,
           "utf8_bytes": 24177
         },
         "tools": {
@@ -244,7 +244,7 @@
             "characters": 4262,
             "description": {
               "characters": 4059,
-              "tokens": 945,
+              "tokens": 944,
               "utf8_bytes": 4061
             },
             "input_schema": {
@@ -257,7 +257,7 @@
               "tokens": 5,
               "utf8_bytes": 17
             },
-            "tokens": 991,
+            "tokens": 990,
             "utf8_bytes": 4264
           },
           "session": {
@@ -549,10 +549,10 @@
           "delta": -19418
         },
         "tokens": {
-          "after": 5598,
+          "after": 5597,
           "before": 10553,
-          "change_pct": -46.953,
-          "delta": -4955
+          "change_pct": -46.963,
+          "delta": -4956
         },
         "utf8_bytes": {
           "after": 24177,
@@ -610,10 +610,10 @@
             "delta": 1298
           },
           "tokens": {
-            "after": 991,
+            "after": 990,
             "before": 682,
-            "change_pct": 45.308,
-            "delta": 309
+            "change_pct": 45.161,
+            "delta": 308
           },
           "utf8_bytes": {
             "after": 4264,
@@ -738,7 +738,7 @@
         },
         "serialized_tools_list": {
           "characters": 21873,
-          "tokens": 5035,
+          "tokens": 5034,
           "utf8_bytes": 21875
         },
         "tools": {
@@ -826,7 +826,7 @@
             "characters": 4262,
             "description": {
               "characters": 4059,
-              "tokens": 945,
+              "tokens": 944,
               "utf8_bytes": 4061
             },
             "input_schema": {
@@ -839,7 +839,7 @@
               "tokens": 5,
               "utf8_bytes": 17
             },
-            "tokens": 991,
+            "tokens": 990,
             "utf8_bytes": 4264
           },
           "session": {
@@ -1171,10 +1171,10 @@
           "delta": 3538
         },
         "tokens": {
-          "after": 5035,
+          "after": 5034,
           "before": 4178,
-          "change_pct": 20.512,
-          "delta": 857
+          "change_pct": 20.488,
+          "delta": 856
         },
         "utf8_bytes": {
           "after": 21875,
@@ -1272,10 +1272,10 @@
             "delta": 1298
           },
           "tokens": {
-            "after": 991,
+            "after": 990,
             "before": 682,
-            "change_pct": 45.308,
-            "delta": 309
+            "change_pct": 45.161,
+            "delta": 308
           },
           "utf8_bytes": {
             "after": 4264,
@@ -1392,21 +1392,21 @@
   "three_catalogs_total": {
     "characters": {
       "after": 48637,
-      "before": 64639,
-      "change_pct": -24.756,
-      "delta": -16002
+      "before": 64507,
+      "change_pct": -24.602,
+      "delta": -15870
     },
     "tokens": {
-      "after": 11239,
-      "before": 15362,
-      "change_pct": -26.839,
-      "delta": -4123
+      "after": 11237,
+      "before": 15327,
+      "change_pct": -26.685,
+      "delta": -4090
     },
     "utf8_bytes": {
       "after": 48641,
-      "before": 64639,
-      "change_pct": -24.75,
-      "delta": -15998
+      "before": 64507,
+      "change_pct": -24.596,
+      "delta": -15866
     }
   },
   "tokenizer": "tiktoken==0.12.0 / cl100k_base"

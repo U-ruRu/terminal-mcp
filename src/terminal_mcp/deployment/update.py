@@ -606,11 +606,7 @@ class NodeDriver:
         return versions
 
     def ingress(self) -> list[dict]:
-        return self.client.ingress(
-            self.p["public_base_url"],
-            access=truth(self.values.get("TERMINAL_MCP_ACCESS_MESH_ENABLED", "false")),
-            persistent=truth(self.values.get("TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED", "true")),
-        )
+        return self.client.ingress(self.p["public_base_url"])
 
     def stage(self, bundle: Path, destination: Path, manifest: dict) -> None:
         unpack(bundle, destination, manifest)

@@ -39,7 +39,10 @@ class FleetControlApplication:
                 result["blockers"] = exc.blockers
             return result
         except (FleetControlError, ValueError) as exc:
-            return {"ok": False, "code": str(exc), "error": str(exc)}
+            result = {"ok": False, "code": str(exc), "error": str(exc)}
+            if getattr(exc, "blockers", None):
+                result["blockers"] = exc.blockers
+            return result
 
     async def state(self, actor: ActorContext):
         OperatorApplication._require_operator(actor)
@@ -136,7 +139,27 @@ class FleetControlApplication:
                     result["blockers"] = exc.blockers
                 return result
             except (FleetControlError, ValueError) as exc:
-                return {"ok": False, "code": str(exc), "error": str(exc)}
+                result = {"ok": False, "code": str(exc), "error": str(exc)}
+                if getattr(exc, "blockers", None):
+                    result["blockers"] = exc.blockers
+                return result
+
+    async def internal_transition(self, actor: ActorContext, *, action: str, payload: dict):
+        MeshApplication._require_peer(actor)
+        with actor.bind():
+            try:
+                if action == "prepare":
+                    return await self._controller.prepare_local_transition(
+                        **payload, coordinator_id=actor.peer_node_id
+                    )
+                return await self._controller.abort_local_transition(
+                    **payload, coordinator_id=actor.peer_node_id
+                )
+            except FleetControlError as exc:
+                result = {"ok": False, "code": exc.code, "error": exc.code}
+                if exc.blockers:
+                    result["blockers"] = exc.blockers
+                return result
 
     async def move_node(
         self,
@@ -162,7 +185,6 @@ class FleetControlApplication:
         warning_after_seconds: int,
         alert_after_seconds: int,
         rearm_after_seconds: int,
-        legacy_admission_enabled: bool,
         expected_revision: int | None,
     ):
         OperatorApplication._require_operator(actor)
@@ -173,7 +195,6 @@ class FleetControlApplication:
                     warning_after_seconds=warning_after_seconds,
                     alert_after_seconds=alert_after_seconds,
                     rearm_after_seconds=rearm_after_seconds,
-                    legacy_admission_enabled=legacy_admission_enabled,
                     expected_revision=expected_revision,
                 )
             )

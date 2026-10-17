@@ -4,55 +4,23 @@ from typing import Annotated, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from terminal_mcp.core.read_contract import DEFAULT_CMD_READ_LINES, MAX_CMD_READ_LINES
 from terminal_mcp.mcp.output_contracts import AccessError, CmdReadResult
 from terminal_mcp.mcp.role_contracts import (
-    Cursor,
-    Hash,
-    MessageInput,
-    Namespace,
-    ResultValue,
-    StrictRoleInput,
-    TaskId,
+    AttachInput as AttachInput,
 )
-
-
-class AttachInput(StrictRoleInput):
-    action: Literal["attach", "intent"] = "attach"
-    session_number: Annotated[
-        str | None,
-        Field(
-            pattern=r"^[0-9]{4}$",
-            description="Required for attach only. Four digits, including leading zeros.",
-        ),
-    ] = None
-    intent: Annotated[
-        str | None,
-        Field(
-            min_length=1,
-            max_length=1000,
-            description="Required for action=intent; optional initial intent on attach.",
-        ),
-    ] = None
-
-    @model_validator(mode="after")
-    def action_fields(self):
-        if self.action == "attach" and self.session_number is None:
-            raise ValueError("session_number is required for attach")
-        if self.action == "intent" and (self.intent is None or not self.intent.strip()):
-            raise ValueError("intent is required for refresh")
-        if self.action == "intent" and self.session_number is not None:
-            raise ValueError("intent refresh uses the existing connector binding")
-        if self.intent is not None and not self.intent.strip():
-            raise ValueError("intent must contain text")
-        return self
-
-
-class MeshAgentObserveInput(StrictRoleInput):
-    limit: Annotated[int, Field(ge=1, le=100)] = 20
-    cursor: Cursor | None = None
-    include_inactive: bool = False
-    logical_agent_id: Annotated[str | None, Field(min_length=1, max_length=160)] = None
+from terminal_mcp.mcp.role_contracts import (
+    MeshAgentObserveInput as MeshAgentObserveInput,
+)
+from terminal_mcp.mcp.role_contracts import (
+    MeshCommandReadInput as MeshCommandReadInput,
+)
+from terminal_mcp.mcp.role_contracts import (
+    MeshTaskCommentInput as MeshTaskCommentInput,
+)
+from terminal_mcp.mcp.role_contracts import (
+    MessageInput,
+    StrictRoleInput,
+)
 
 
 class IssuerSessionInput(StrictRoleInput):
@@ -60,9 +28,7 @@ class IssuerSessionInput(StrictRoleInput):
 
 
 class GetEventsInput(StrictRoleInput):
-    event_id: Annotated[
-        str | None, Field(pattern=r"^evt_[0-9a-f]{32}$", max_length=36)
-    ] = None
+    event_id: Annotated[str | None, Field(pattern=r"^evt_[0-9a-f]{32}$", max_length=36)] = None
     limit: Annotated[int, Field(ge=1, le=20)] = 20
     cursor: Annotated[str | None, Field(min_length=1, max_length=512)] = None
     show_read: bool = False
@@ -74,40 +40,7 @@ class GetEventsInput(StrictRoleInput):
         return self
 
 
-class MeshCommandReadInput(StrictRoleInput):
-    cmd_hash: Hash | None = None
-    limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
-    cursor: Cursor | None = None
-
-
-class MeshTaskCommentInput(StrictRoleInput):
-    action: Literal["comment", "checkpoint"] = "comment"
-    namespace: Namespace
-    task_id: TaskId
-    comment_text: Annotated[
-        str | None, Field(min_length=1, max_length=4000, description="Required for action=comment.")
-    ] = None
-    checkpoint: Annotated[
-        ResultValue | None,
-        Field(
-            description="Required for action=checkpoint; saves progress and preserves task state."
-        ),
-    ] = None
-
-    def to_request(self):
-        from terminal_mcp.application.task_requests import TaskCheckpointRequest, TaskCommentRequest
-
-        model = TaskCheckpointRequest if self.action == "checkpoint" else TaskCommentRequest
-        return model.model_validate({"action": self.action, **self.model_dump(exclude_unset=True)})
-
-    @model_validator(mode="after")
-    def action_fields(self):
-        self.to_request()
-        return self
-
-
-class MeshMessageInput(MessageInput):
-    scope: Literal["local", "fleet"] = "local"
+MeshMessageInput = MessageInput
 
 
 class _Strict(BaseModel):

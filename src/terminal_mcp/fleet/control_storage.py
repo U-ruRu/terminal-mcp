@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import secrets
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.fleet.protocol import validate_capabilities, validate_protocol_id
+from terminal_mcp.fleet.topology_transition import TopologyTransitionStore
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import (
     SqliteDiagnostics,
@@ -22,13 +24,16 @@ from terminal_mcp.storage.sqlite_observability import (
 
 
 class FleetControlError(RuntimeError):
-    pass
+    def __init__(self, code: str, *, blockers=None):
+        super().__init__(code)
+        self.code = code
+        self.blockers = blockers or []
 
 
-class FleetControlStore:
+class FleetControlStore(TopologyTransitionStore):
     """Critical monotonic Fleet routing metadata; never owns slot/session truth."""
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(
         self,
@@ -240,14 +245,24 @@ class FleetControlStore:
                         pending_fleet_id TEXT,
                         updated_at TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS mesh_topology_transitions(
+                        node_id TEXT PRIMARY KEY,
+                        operation_id TEXT NOT NULL,
+                        target_mesh_id TEXT,
+                        target_authority_id TEXT NOT NULL,
+                        coordinator_id TEXT NOT NULL,
+                        phase TEXT NOT NULL CHECK(phase IN (
+                            'prepared','committed','completed','aborted'
+                        )),
+                        payload_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
                     CREATE TABLE IF NOT EXISTS access_policy(
                         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                         duration_seconds INTEGER NOT NULL CHECK(duration_seconds>0),
                         warning_after_seconds INTEGER NOT NULL CHECK(warning_after_seconds>0),
                         alert_after_seconds INTEGER NOT NULL CHECK(alert_after_seconds>0),
                         rearm_after_seconds INTEGER NOT NULL CHECK(rearm_after_seconds>0),
-                        legacy_admission_enabled INTEGER NOT NULL
-                            CHECK(legacy_admission_enabled IN (0,1)),
                         revision INTEGER NOT NULL CHECK(revision>0),
                         updated_at TEXT NOT NULL
                     );
@@ -255,6 +270,14 @@ class FleetControlStore:
                         ON managed_nodes(state,node_id);
                     """
                 )
+
+                policy_columns = {row[1] for row in await (
+                    await db.execute("PRAGMA table_info(access_policy)")
+                ).fetchall()}
+                if "legacy_admission_enabled" in policy_columns:
+                    await db.execute(
+                        "ALTER TABLE access_policy DROP COLUMN legacy_admission_enabled"
+                    )
 
                 identity_columns = {
                     row[1]
@@ -374,7 +397,9 @@ class FleetControlStore:
     ) -> str:
         """Make this standalone node its own control-domain authority."""
         stamp = now or utc_text()
-        namespace = self.fleet_id
+        namespace = "local-" + self.node_id
+        if len(namespace) > 64:
+            namespace = "local-" + hashlib.sha256(self.node_id.encode()).hexdigest()[:48]
         async with self._connect("fleet_control_claim_local_authority") as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
@@ -386,19 +411,15 @@ class FleetControlStore:
                 ).fetchone()
                 if row is not None and row[1] != "detached" and row[0] is not None:
                     raise FleetControlError("control_authority_rehome_requires_standalone")
-                home = await (
-                    await db.execute(
-                        "SELECT home_fleet_id FROM control_namespace WHERE singleton=1"
-                    )
-                ).fetchone()
-                if home is not None and home[0] != namespace:
-                    namespace = str(home[0])
+                if namespace != self.fleet_id:
                     await db.execute(
                         "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (namespace,)
                     )
                     await db.execute(
-                        "UPDATE control_namespace SET pending_fleet_id=?,updated_at=? "
-                        "WHERE singleton=1", (namespace, stamp),
+                        "INSERT INTO control_namespace VALUES(1,?,?,?) "
+                        "ON CONFLICT(singleton) DO UPDATE SET home_fleet_id=excluded.home_fleet_id,"
+                        "pending_fleet_id=excluded.pending_fleet_id,updated_at=excluded.updated_at",
+                        (namespace, namespace, stamp),
                     )
                 await db.execute(
                     "UPDATE control_meta SET control_node_id=?,routing_revision=routing_revision+1,"
@@ -410,9 +431,13 @@ class FleetControlStore:
                     "UPDATE managed_identity SET ingress_token=?,updated_at=? WHERE singleton=1",
                     (ingress_token, stamp),
                 )
-                # Old authority observations remain historical only. Trust material is kept
-                # in rows so an explicit rejoin does not require pairing or file repair.
-                await db.execute("UPDATE managed_meshes SET active=0,updated_at=?", (stamp,))
+                # Pairing and node identity have separate owners. Mesh credentials
+                # are discarded locally; the source registry is never touched.
+                await db.execute("DELETE FROM managed_meshes")
+                await db.execute("DELETE FROM managed_nodes WHERE node_id!=?", (self.node_id,))
+                await db.execute("DELETE FROM fleet_members WHERE node_id!=?", (self.node_id,))
+                await db.execute("DELETE FROM authority_routes")
+                await db.execute("DELETE FROM authority_transfers")
                 await db.execute(
                     "UPDATE managed_nodes SET mesh_id=NULL,state='detached',last_error=NULL,"
                     "updated_at=?",
@@ -432,7 +457,6 @@ class FleetControlStore:
                     warning = int(policy["warning_after_seconds"])
                     alert = int(policy["alert_after_seconds"])
                     rearm = int(policy["rearm_after_seconds"])
-                    legacy = int(bool(policy["legacy_admission_enabled"]))
                     if duration <= 0 or not (0 < warning < alert < duration) or rearm <= 0:
                         raise ValueError("invalid access policy")
                     revision_row = await (
@@ -444,16 +468,15 @@ class FleetControlStore:
                     await db.execute(
                         "INSERT INTO access_policy("
                         "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
-                        "rearm_after_seconds,legacy_admission_enabled,revision,updated_at"
-                        ") VALUES(1,?,?,?,?,?,?,?) "
+                        "rearm_after_seconds,revision,updated_at"
+                        ") VALUES(1,?,?,?,?,?,?) "
                         "ON CONFLICT(singleton) DO UPDATE SET "
                         "duration_seconds=excluded.duration_seconds,"
                         "warning_after_seconds=excluded.warning_after_seconds,"
                         "alert_after_seconds=excluded.alert_after_seconds,"
                         "rearm_after_seconds=excluded.rearm_after_seconds,"
-                        "legacy_admission_enabled=excluded.legacy_admission_enabled,"
                         "revision=excluded.revision,updated_at=excluded.updated_at",
-                        (duration, warning, alert, rearm, legacy, revision, stamp),
+                        (duration, warning, alert, rearm, revision, stamp),
                     )
                 await db.commit()
             except Exception:
@@ -825,7 +848,6 @@ class FleetControlStore:
         warning = int(policy["warning_after_seconds"])
         alert = int(policy["alert_after_seconds"])
         rearm = int(policy["rearm_after_seconds"])
-        legacy = bool(policy["legacy_admission_enabled"])
         if duration <= 0 or not (0 < warning < alert < duration) or rearm <= 0:
             raise ValueError("invalid access policy")
         stamp = now or utc_text()
@@ -883,6 +905,8 @@ class FleetControlStore:
                         await db.commit()
                         return await self.control_state(include_secrets=False)
                     raise FleetControlError("mesh_already_exists")
+                if attach_local_control:
+                    await db.execute("UPDATE managed_meshes SET active=0,updated_at=?", (stamp,))
                 topology = await self._bump_revision(db, "topology", stamp)
                 if existing_mesh is None:
                     await db.execute(
@@ -910,9 +934,9 @@ class FleetControlStore:
                     await db.execute(
                         "INSERT INTO access_policy("
                         "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
-                        "rearm_after_seconds,legacy_admission_enabled,revision,updated_at"
-                        ") VALUES(1,?,?,?,?,?,?,?)",
-                        (duration, warning, alert, rearm, int(legacy), policy_revision, stamp),
+                        "rearm_after_seconds,revision,updated_at"
+                        ") VALUES(1,?,?,?,?,?,?)",
+                        (duration, warning, alert, rearm, policy_revision, stamp),
                     )
 
                 for item in normalized:
@@ -969,6 +993,17 @@ class FleetControlStore:
                         "WHERE node_id=?",
                         (mesh_id, topology, stamp, self.node_id),
                     )
+                    if self.fleet_id != mesh_id:
+                        await db.execute(
+                            "INSERT INTO control_namespace VALUES(1,?,?,?) "
+                            "ON CONFLICT(singleton) DO UPDATE SET "
+                            "pending_fleet_id=excluded.pending_fleet_id,"
+                            "updated_at=excluded.updated_at",
+                            (self.fleet_id, mesh_id, stamp),
+                        )
+                        await db.execute(
+                            "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (mesh_id,)
+                        )
                 await db.execute(
                     "UPDATE managed_nodes SET desired_topology_revision=? WHERE state!='detached'",
                     (topology,),
@@ -977,6 +1012,8 @@ class FleetControlStore:
             except Exception:
                 await db.rollback()
                 raise
+        if attach_local_control:
+            self.fleet_id = mesh_id
         return await self.control_state(include_secrets=False)
 
     async def delete_managed_mesh(
@@ -1115,8 +1152,6 @@ class FleetControlStore:
                         (node_id,),
                     )
                 ).fetchone()
-                if existing is not None and existing[3] and existing[3] != mesh_id:
-                    raise FleetControlError("node_already_in_other_mesh")
                 if (
                     existing is None
                     and node_id != self.node_id
@@ -1342,7 +1377,7 @@ class FleetControlStore:
             row = await (
                 await db.execute(
                     "SELECT duration_seconds,warning_after_seconds,alert_after_seconds,"
-                    "rearm_after_seconds,legacy_admission_enabled,revision,updated_at "
+                    "rearm_after_seconds,revision,updated_at "
                     "FROM access_policy WHERE singleton=1"
                 )
             ).fetchone()
@@ -1353,9 +1388,8 @@ class FleetControlStore:
             "warning_after_seconds": int(row[1]),
             "alert_after_seconds": int(row[2]),
             "rearm_after_seconds": int(row[3]),
-            "legacy_admission_enabled": bool(row[4]),
-            "revision": int(row[5]),
-            "updated_at": row[6],
+            "revision": int(row[4]),
+            "updated_at": row[5],
         }
 
     async def update_access_policy(
@@ -1365,7 +1399,6 @@ class FleetControlStore:
         warning_after_seconds: int,
         alert_after_seconds: int,
         rearm_after_seconds: int,
-        legacy_admission_enabled: bool,
         expected_revision: int | None = None,
     ) -> dict:
         if self.node_id != self.control_node_id:
@@ -1383,23 +1416,23 @@ class FleetControlStore:
                 row = await (
                     await db.execute(
                         "SELECT duration_seconds,warning_after_seconds,alert_after_seconds,"
-                        "rearm_after_seconds,legacy_admission_enabled,revision "
+                        "rearm_after_seconds,revision "
                         "FROM access_policy WHERE singleton=1"
                     )
                 ).fetchone()
                 if row is None:
                     raise FleetControlError("managed_access_policy_missing")
-                current_revision = int(row[5])
+                current_revision = int(row[4])
                 if expected_revision is not None and current_revision != int(expected_revision):
                     raise FleetControlError("access_policy_revision_conflict")
-                desired = (duration, warning, alert, rearm, int(bool(legacy_admission_enabled)))
-                current = tuple(int(value) for value in row[:5])
+                desired = (duration, warning, alert, rearm)
+                current = tuple(int(value) for value in row[:4])
                 if current != desired:
                     revision = await self._bump_revision(db, "policy", stamp)
                     await db.execute(
                         "UPDATE access_policy SET duration_seconds=?,"
                         "warning_after_seconds=?,alert_after_seconds=?,"
-                        "rearm_after_seconds=?,legacy_admission_enabled=?,"
+                        "rearm_after_seconds=?,"
                         "revision=?,updated_at=? WHERE singleton=1",
                         (*desired, revision, stamp),
                     )
@@ -1470,7 +1503,7 @@ class FleetControlStore:
             "fleet_id": self.fleet_id,
             "node_id": self.node_id,
             "control_node_id": self.control_node_id,
-            "managed": bool(nodes),
+            "managed": mesh is not None,
             "mesh": mesh,
             "meshes": meshes,
             "nodes": nodes,
@@ -1493,6 +1526,7 @@ class FleetControlStore:
         *,
         bootstrap_tokens: dict[str, str] | None = None,
         namespace_authorized: bool = False,
+        authority_authorized: bool = False,
         now: str | None = None,
     ) -> dict:
         if not bool(snapshot.get("managed")):
@@ -1505,6 +1539,8 @@ class FleetControlStore:
             str(snapshot.get("control_node_id") or ""), "control_node_id"
         )
         authority_changed = incoming_control_node_id != self.control_node_id
+        if authority_changed and not authority_authorized:
+            raise FleetControlError("authority_transition_authorization_required")
 
         legacy_mesh = snapshot.get("mesh") or {}
         incoming_meshes = snapshot.get("meshes")
@@ -1539,7 +1575,6 @@ class FleetControlStore:
         warning = int(policy.get("warning_after_seconds") or 0)
         alert = int(policy.get("alert_after_seconds") or 0)
         rearm = int(policy.get("rearm_after_seconds") or 0)
-        legacy = bool(policy.get("legacy_admission_enabled"))
         if duration <= 0 or not (0 < warning < alert < duration) or rearm <= 0:
             raise ValueError("invalid access policy")
         tokens = dict(bootstrap_tokens or {})
@@ -1583,14 +1618,6 @@ class FleetControlStore:
             try:
                 current = await self._control_revisions(db)
                 if authority_changed:
-                    local = await (
-                        await db.execute(
-                            "SELECT mesh_id,state FROM managed_nodes WHERE node_id=?",
-                            (self.node_id,),
-                        )
-                    ).fetchone()
-                    if local is not None and local[1] != "detached" and local[0] is not None:
-                        raise FleetControlError("control_node_mismatch")
                     await db.execute(
                         "UPDATE control_meta SET control_node_id=?,updated_at=? WHERE singleton=1",
                         (incoming_control_node_id, stamp),
@@ -1693,21 +1720,19 @@ class FleetControlStore:
                 await db.execute(
                     "INSERT INTO access_policy("
                     "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
-                    "rearm_after_seconds,legacy_admission_enabled,revision,updated_at"
-                    ") VALUES(1,?,?,?,?,?,?,?) "
+                    "rearm_after_seconds,revision,updated_at"
+                    ") VALUES(1,?,?,?,?,?,?) "
                     "ON CONFLICT(singleton) DO UPDATE SET "
                     "duration_seconds=excluded.duration_seconds,"
                     "warning_after_seconds=excluded.warning_after_seconds,"
                     "alert_after_seconds=excluded.alert_after_seconds,"
                     "rearm_after_seconds=excluded.rearm_after_seconds,"
-                    "legacy_admission_enabled=excluded.legacy_admission_enabled,"
                     "revision=excluded.revision,updated_at=excluded.updated_at",
                     (
                         duration,
                         warning,
                         alert,
                         rearm,
-                        int(legacy),
                         policy_revision,
                         stamp,
                     ),

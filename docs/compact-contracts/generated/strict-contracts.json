@@ -3121,7 +3121,7 @@
       "required": [
         "action"
       ],
-      "title": "MeshMessageInput",
+      "title": "MessageInput",
       "type": "object"
     },
     "outputSchema": {
@@ -18016,7 +18016,7 @@
       "required": [
         "action"
       ],
-      "title": "MeshMessageInput",
+      "title": "MessageInput",
       "type": "object"
     },
     "outputSchema": {

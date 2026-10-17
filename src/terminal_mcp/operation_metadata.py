@@ -103,41 +103,16 @@ MESSAGE_ACTION_EFFECTS = {
     "ack": DELETE_EFFECTS,
     "reply": REPLACE_EFFECTS,
 }
-LEGACY_ACTION_EFFECTS = {
-    "session": {"start": APPEND_EFFECTS, "end": DELETE_EFFECTS, "interrupt": DELETE_EFFECTS},
-    "observe": {"sessions": READ_EFFECTS, "tasks": READ_EFFECTS, "namespaces": READ_EFFECTS},
-    "message": MESSAGE_ACTION_EFFECTS,
-    "task": TASK_ACTION_EFFECTS,
-    "cmd": {
-        "run": SHELL_EFFECTS,
-        "read": READ_EFFECTS,
-        "cancel": DELETE_EFFECTS,
-        "recovery": SHELL_EFFECTS,
-    },
-    "context": {
-        "list": READ_EFFECTS,
-        "create": APPEND_EFFECTS,
-        "update": REPLACE_EFFECTS,
-        "delete": DELETE_EFFECTS,
-    },
-    "health": {"read": READ_EFFECTS},
-}
 
 
-def tool_action_effects(role, name, *, mesh=False):
-    if role == "legacy":
-        return LEGACY_ACTION_EFFECTS[name]
+def tool_action_effects(role, name):
     if role == "access":
         if name == "get_events":
             # Reading automatically marks returned events as consumed.
             return {"consume": effects()}
-        return {"start": APPEND_EFFECTS, "status": READ_EFFECTS, "end": DELETE_EFFECTS}
+        return {"start": APPEND_EFFECTS, "end": DELETE_EFFECTS}
     if name == "session":
-        return (
-            {"attach": effects(idempotent=True), "intent": effects()}
-            if mesh
-            else {"start": APPEND_EFFECTS, "status": READ_EFFECTS, "end": DELETE_EFFECTS}
-        )
+        return {"attach": effects(idempotent=True), "intent": effects()}
     if name == "message":
         return MESSAGE_ACTION_EFFECTS
     if name == "task_claim":
@@ -149,7 +124,7 @@ def tool_action_effects(role, name, *, mesh=False):
             if key not in {"claim", "release"}
         }
     if name == "task_comment":
-        return {"comment": APPEND_EFFECTS, **({"checkpoint": REPLACE_EFFECTS} if mesh else {})}
+        return {"comment": APPEND_EFFECTS, "checkpoint": REPLACE_EFFECTS}
     if name == "task_state":
         return {"state": TASK_ACTION_EFFECTS["state"]}
     if name in {"command_run", "command_recovery"}:
@@ -157,23 +132,22 @@ def tool_action_effects(role, name, *, mesh=False):
     if name == "command_cancel":
         return {"cancel": DELETE_EFFECTS}
     if name == "command_read":
-        return {"output": READ_EFFECTS, **({"journal": READ_EFFECTS} if mesh else {})}
+        return {"output": READ_EFFECTS, "journal": READ_EFFECTS}
     return {"read": READ_EFFECTS}
 
 
-def install_action_metadata(mcp, role, *, mesh=False):
+def install_action_metadata(mcp, role):
     from mcp.types import ToolAnnotations
 
     for tool in mcp._tool_manager.list_tools():
-        matrix = tool_action_effects(role, tool.name, mesh=mesh)
+        matrix = tool_action_effects(role, tool.name)
         tool.parameters["x-terminal-mcp-action-matrix"] = matrix
-        if role == "access" or mesh:
-            tool.annotations = ToolAnnotations(
-                readOnlyHint=all(row["readOnlyHint"] for row in matrix.values()),
-                destructiveHint=any(row["destructiveHint"] for row in matrix.values()),
-                idempotentHint=all(row["idempotentHint"] for row in matrix.values()),
-                openWorldHint=any(row["openWorldHint"] for row in matrix.values()),
-            )
+        tool.annotations = ToolAnnotations(
+            readOnlyHint=all(row["readOnlyHint"] for row in matrix.values()),
+            destructiveHint=any(row["destructiveHint"] for row in matrix.values()),
+            idempotentHint=all(row["idempotentHint"] for row in matrix.values()),
+            openWorldHint=any(row["openWorldHint"] for row in matrix.values()),
+        )
 
 
 def openapi_effects(operation_id):
@@ -198,7 +172,12 @@ def openapi_action_matrix(operation_id):
     if operation_id == "messageAgent":
         return MESSAGE_ACTION_EFFECTS
     if operation_id == "manageInstanceContext":
-        return LEGACY_ACTION_EFFECTS["context"]
+        return {
+            "list": READ_EFFECTS,
+            "create": APPEND_EFFECTS,
+            "update": REPLACE_EFFECTS,
+            "delete": DELETE_EFFECTS,
+        }
     if operation_id == "mutateAccessMesh":
         return {
             name: effects(

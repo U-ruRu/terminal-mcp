@@ -5,12 +5,12 @@ from __future__ import annotations
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import CapabilityPolicy
 from terminal_mcp.application.commands import CommandApplication
-from terminal_mcp.application.compatibility import ApplicationCompatibility
 from terminal_mcp.application.contexts import ContextApplication
 from terminal_mcp.application.fleet_control import FleetControlApplication
 from terminal_mcp.application.health import HealthApplication
 from terminal_mcp.application.messages import MessagingApplication
 from terminal_mcp.application.observations import ObservationApplication
+from terminal_mcp.application.operator_data import OperatorDataApplication
 from terminal_mcp.application.ports import ApplicationUnitOfWorkPort
 from terminal_mcp.application.replication import (
     FleetProjectionApplication,
@@ -56,8 +56,7 @@ class TerminalApplication:
         self.commands = CommandApplication(service, self.session_gate, **options)
         self.contexts = ContextApplication(service, self.session_gate, **options)
         self.health_capability = HealthApplication(service, self.session_gate, **options)
-        self.compatibility = ApplicationCompatibility(service)
-        self.legacy = self.compatibility
+        self.operator_data = OperatorDataApplication(service)
         self.replication = ReplicationApplication(replication) if replication else None
         self.fleet_source = FleetSourceApplication(fleet_source) if fleet_source else None
         self.fleet_projection = (
@@ -66,8 +65,6 @@ class TerminalApplication:
             else None
         )
         self.fleet_control = FleetControlApplication(fleet_control) if fleet_control else None
-        # Managed identity/session capabilities are composed by the host but stay
-        # transport-inactive until the explicit endpoint cutover.
         self.managed_identity = managed_identity
         self.managed_sessions = managed_sessions
         self._operator = None

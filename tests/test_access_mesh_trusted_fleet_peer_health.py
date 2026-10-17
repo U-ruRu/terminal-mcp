@@ -19,7 +19,9 @@ def _config(*ids: str):
 
 def test_transport_refresh_publishes_only_trusted_access_peer_health():
     mesh = SimpleNamespace(
-        store=SimpleNamespace(trusted_issuers=frozenset({"firstbyte", "bacloud"}))
+        store=SimpleNamespace(
+            trusted_issuers=frozenset({"firstbyte", "bacloud"}), registry_mesh_id="mesh-test"
+        )
     )
     replica = AccessMeshReplication(mesh, _config("bacloud"))
     replica.peer_health["bacloud"] = {"status": "healthy"}

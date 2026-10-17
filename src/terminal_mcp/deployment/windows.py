@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import json
 import secrets
@@ -111,13 +110,6 @@ def initialize(root: Path, public_url: str, host: str, port: int):
         "OAUTH_SIGNING_SECRET": secrets.token_urlsafe(48),
         "OAUTH_USERNAME_FILE": str(root / "config/credentials/oauth-username"),
         "OAUTH_PASSWORD_FILE": str(root / "config/credentials/oauth-password"),
-        "PERSISTENT_AGENTS_ENABLED": "true",
-        "ACCESS_MESH_ENABLED": "true",
-        "FLEET_INSTANCE_ID": "windows-laptop",
-        "FLEET_PEERS_JSON": "[]",
-        "ACCESS_MESH_PEERS_JSON": "[]",
-        "ACCESS_MESH_PROOF_KEY": secrets.token_urlsafe(48),
-        "FLEET_SIGNING_PRIVATE_KEY": base64.b64encode(secrets.token_bytes(32)).decode(),
     }
     for name, value in (("oauth-username", "owner"), ("oauth-password", password)):
         with (root / "config/credentials" / name).open("x", encoding="utf-8") as handle:

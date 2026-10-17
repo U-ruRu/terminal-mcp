@@ -23,7 +23,7 @@ class StrictRequest(BaseModel):
 
 class AdoptRequest(StrictRequest):
     mesh_id: str | None = Field(default=None, min_length=1, max_length=64)
-    display_name: str = Field(default="Fleet", min_length=1, max_length=120)
+    display_name: str = Field(default="Mesh", min_length=1, max_length=120)
     control_node_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
@@ -63,7 +63,6 @@ class AccessPolicyRequest(StrictRequest):
     warning_after_seconds: int = Field(ge=1)
     alert_after_seconds: int = Field(ge=1)
     rearm_after_seconds: int = Field(ge=1)
-    legacy_admission_enabled: bool
     expected_revision: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -87,6 +86,16 @@ class InternalApplyRequest(StrictRequest):
 
 class InternalMutationRequest(StrictRequest):
     payload: dict = Field(default_factory=dict)
+
+
+class TransitionPrepareRequest(StrictRequest):
+    operation_id: str = Field(min_length=1, max_length=128)
+    target_mesh_id: str | None = Field(default=None, min_length=1, max_length=64)
+    target_authority_id: str = Field(min_length=1, max_length=64)
+
+
+class TransitionAbortRequest(StrictRequest):
+    operation_id: str = Field(min_length=1, max_length=128)
 
 
 def build_fleet_control_router(controller, replication, *, application=None) -> APIRouter:
@@ -228,7 +237,6 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
                 warning_after_seconds=body.warning_after_seconds,
                 alert_after_seconds=body.alert_after_seconds,
                 rearm_after_seconds=body.rearm_after_seconds,
-                legacy_admission_enabled=body.legacy_admission_enabled,
                 expected_revision=body.expected_revision,
             )
         except MeshApplicationError as exc:
@@ -302,5 +310,33 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
             return await target.internal_apply(actor, control_state=body.state)
         except MeshApplicationError as exc:
             raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
+
+    @router.post("/internal/fleet/control/transition/prepare", include_in_schema=False)
+    async def transition_prepare(
+        body: TransitionPrepareRequest,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = await authenticate(
+            x_terminal_mcp_peer, authorization,
+            first_apply_control_node_id=x_terminal_mcp_peer,
+        )
+        return await target.internal_transition(
+            actor, action="prepare", payload=body.model_dump()
+        )
+
+    @router.post("/internal/fleet/control/transition/abort", include_in_schema=False)
+    async def transition_abort(
+        body: TransitionAbortRequest,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = await authenticate(
+            x_terminal_mcp_peer, authorization,
+            first_apply_control_node_id=x_terminal_mcp_peer,
+        )
+        return await target.internal_transition(
+            actor, action="abort", payload=body.model_dump()
+        )
 
     return router

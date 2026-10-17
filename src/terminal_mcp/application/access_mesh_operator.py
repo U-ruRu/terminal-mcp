@@ -129,7 +129,6 @@ class AccessMeshOperator:
         mode=None,
         policy=None,
         deadline_at=None,
-        legacy_enabled=None,
         inherit_policy=None,
         expected_parent_revision=None,
     ):
@@ -153,7 +152,6 @@ class AccessMeshOperator:
             "mode": mode,
             "policy": policy,
             "deadline_at": deadline_at,
-            "legacy_enabled": legacy_enabled,
             **({"inherit_policy": inherit_policy} if inherit_policy is not None else {}),
             **(
                 {"expected_parent_revision": expected_parent_revision}
@@ -179,41 +177,34 @@ class AccessMeshOperator:
                     actor,
                     kind=mode,
                     policy=resolved,
-                    start=mode == "legacy",
+                    start=mode == "temporary",
                     receipt_spec=spec,
                     inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                 )
             if action == "defaults":
+                if self.store.registry_mesh_id:
+                    raise AccessMeshError("mesh_policy_managed")
                 current = await self.defaults(actor)
                 inherited = inherit_policy is True
                 base = current["inherited_policy"] if inherited else current["policy"]
                 resolved = self._policy(None if inherited else policy, SlotPolicy(**base))
-                enabled = (
-                    current["parent"]["legacy_enabled"]
-                    if inherited
-                    else current["legacy_enabled"]
-                    if legacy_enabled is None
-                    else legacy_enabled
-                )
                 result = {
                     "ok": True,
                     "issuer_node_id": self.store.local_node_id,
                     "slot_id": "defaults",
                     "revision": expected_revision + 1,
                     "policy": asdict(resolved),
-                    "legacy_enabled": enabled,
                 }
                 receipt = self.store.prepare_receipt(event_id="defaults", result=result, **spec)
                 await asyncio.to_thread(
                     self.store.change_defaults,
                     expected_revision=expected_revision,
                     policy=asdict(resolved),
-                    legacy_enabled=enabled,
                     receipt=receipt,
                     inherit_policy=inherited,
                     parent=current["parent"],
                 )
-                self.mesh.defaults, self.mesh.legacy_enabled = resolved, enabled
+                self.mesh.defaults = resolved
                 return result
             slot = await asyncio.to_thread(self.store.registry_slot, slot_id)
             if slot is None:

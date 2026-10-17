@@ -149,6 +149,8 @@ def inventory(
         value = values.get("TERMINAL_MCP_" + key)
         if value:
             path = Path(value)
+            if key == "DATABASE_PATH":
+                files.append(path.parent / "node-identity.json")
             files.extend(
                 Path(str(path) + suffix)
                 for suffix in ("", "-wal", "-shm", "-journal", ".access-key", ".identity-anchor")

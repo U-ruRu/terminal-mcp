@@ -124,3 +124,23 @@ hydrating attach from the primary, namespace rejection and primary unavailabilit
 Existing grant, replication and lifecycle checks remain the regression owners.
 Secondary scoped validation: 25 passed; Ruff and diff checks passed.
 This source stage is not a deployment or final architecture acceptance receipt.
+
+## Unified Mesh runtime, policy and membership foundation (2026-10-17)
+
+Access is always available. Execution/Coordination expose attach and intent only;
+the former /mcp catalog and mode-selecting validators are removed. Node identity
+bootstrap runs without creating Mesh membership. Fresh-install identity validation
+runs before storage constructors so retained auth cannot be silently replaced.
+
+The old decentralized number-negotiation modules test_access_mesh_negotiation_contract
+and test_access_mesh_pinned_allocation were removed with their retired algorithm.
+Primary single-writer behavior, primary-offline denial and cross-namespace isolation
+are covered by test_access_mesh_registry_http. test_access_mesh_unified_migration
+checks exact slot/attachment preservation and common Mesh policy ownership.
+
+New atomic checks cover node identity, topology admission fences and universal
+installer ingress. Clean reset additionally checks external node-identity state.
+Membership checks cover the source authority, not merely a lagging target replica.
+The combined runtime, ACS, topology and deployment selection passed 126 tests.
+This stage does not claim completion of the following primary-handoff and hot
+migration implementation; full acceptance is recorded on the final source commit.

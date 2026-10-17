@@ -34,13 +34,18 @@ def test_clean_removes_managed_state(tmp_path, area):
     assert not target.exists()
 
 
-def test_clean_removes_custom_database_and_security_sidecars(tmp_path):
+@pytest.mark.parametrize("key", ["AUTH_DATABASE_PATH", "DATABASE_PATH"])
+def test_clean_removes_custom_database_and_security_sidecars(tmp_path, key):
     database = tmp_path / "custom.sqlite3"
-    state = _state(tmp_path, {"TERMINAL_MCP_AUTH_DATABASE_PATH": str(database)})
+    state = _state(tmp_path, {"TERMINAL_MCP_" + key: str(database)})
     for suffix in ("", "-wal", ".access-key", ".identity-anchor"):
         database.with_name(database.name + suffix).write_text("old")
+    identity = database.with_name("node-identity.json")
+    if key == "DATABASE_PATH":
+        identity.write_text("old installation identity")
     state.apply()
     assert not list(tmp_path.glob("custom.sqlite3*"))
+    assert not identity.exists()
 
 
 def test_clean_preserves_unmanaged_data(tmp_path):

@@ -50,16 +50,6 @@ from terminal_mcp.core.task_projections import (
     TaskRecord,
     project_task_detail,
 )
-from terminal_mcp.mcp.access_contracts import (
-    AttachInput,
-    MeshAgentObserveInput,
-    MeshCommandReadInput,
-    MeshCommandReadOutput,
-    MeshMessageInput,
-    MeshObserveOutput,
-    MeshSessionOutput,
-    MeshTaskCommentInput,
-)
 from terminal_mcp.mcp.output_contracts import (
     _task_record as _normalize_task_record,
 )
@@ -67,24 +57,19 @@ from terminal_mcp.mcp.output_contracts import (
     cmd_result,
     message_result,
     observe_result,
-    session_result,
     task_result,
 )
 from terminal_mcp.mcp.public_responses import operation_notices, public_task, resolve_task_names
 from terminal_mcp.mcp.role_contracts import (
     ROLE_TOOL_DESCRIPTIONS,
     ROLE_TOOL_MODELS,
-    AgentObserveInput,
     CommandCancelInput,
-    CommandReadInput,
     CommandRecoveryInput,
     CommandRunInput,
     HealthInput,
     MessageInput,
     RuntimeBoundary,
-    SessionInput,
     TaskClaimInput,
-    TaskCommentInput,
     TaskGetInput,
     TaskGraphInput,
     TaskListInput,
@@ -333,51 +318,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
         if raw.get("ok"):
             await application.session_gate.touch_provider(actor)
         return project(raw)
-    if chunk:
-        from terminal_mcp.mcp.server import _preflight_message_inbox_result
-
-        text_options["response_preflight"] = lambda preview: _preflight_message_inbox_result(
-            preview,
-            sender=sender,
-            target=None,
-            mode=None,
-            require_reply=False,
-            alert=False,
-        )
-    raw = await application.message(
-        resolution.actor,
-        sender=sender,
-        code=None,
-        text=request.text,
-        target=request.target,
-        message_hash=message_hash,
-        mode=request.mode,
-        require_reply=request.require_reply,
-        alert=request.alert,
-        history=history,
-        limit=request.limit,
-        cursor=request.cursor,
-        detail=request.detail,
-        namespace=request.namespace,
-        task_id=request.task_id,
-        recipients=request.action == "recipients",
-        **text_options,
-    )
-    if request.action == "recipients":
-        return raw
-    return _structured(
-        message_result(
-            raw,
-            sender=sender,
-            text=request.text,
-            target=request.target,
-            message_hash=message_hash,
-            mode=request.mode,
-            require_reply=request.require_reply,
-            alert=request.alert,
-            show_all=history,
-        )
-    )
+    raise RuntimeError("local messaging must be composed with Access")
 
 
 def _task_record_from_observe(raw: dict) -> tuple[TaskRecord | None, dict | None]:
@@ -660,41 +601,12 @@ def build_role_mcp(
     if role not in ROLE_TOOLS:
         raise ValueError("unsupported MCP endpoint role")
     application = get_application(service, auth_mode=auth_mode)
-    mesh = getattr(application.service, "access_mesh", None)
-    input_overrides = (
-        {
-            **({(role, "agent_observe"): MeshAgentObserveInput} if role == "coordinator" else {}),
-            (role, "session"): AttachInput,
-            (role, "message"): MeshMessageInput,
-            **(
-                {
-                    (role, "command_read"): MeshCommandReadInput,
-                    (role, "task_comment"): MeshTaskCommentInput,
-                }
-                if role == "executor"
-                else {}
-            ),
-        }
-        if mesh
-        else {}
-    )
-    output_overrides = (
-        {
-            (role, "session"): MeshSessionOutput,
-            **(
-                {(role, "command_read"): MeshCommandReadOutput}
-                if role == "executor"
-                else {(role, "agent_observe"): MeshObserveOutput}
-            ),
-        }
-        if mesh
-        else {}
-    )
+    mesh = application.service.access_mesh
+    if mesh is None:
+        raise ValueError("Access registration must be composed before the role endpoints")
 
     def _validate(boundary, endpoint_role, tool_name):
-        model = input_overrides.get(
-            (endpoint_role, tool_name), ROLE_TOOL_MODELS[(endpoint_role, tool_name)]
-        )
+        model = ROLE_TOOL_MODELS[(endpoint_role, tool_name)]
         return validate_boundary(boundary, model)
 
     mcp = FastMCP(
@@ -715,23 +627,9 @@ def build_role_mcp(
         request, failure = _validate(boundary, role, "session")
         if failure is not None:
             return failure
-        if mesh:
-            actor = _actor(application, role)
-            with actor.bind():
-                if request.action == "intent":
-                    return await mesh.update_intent(actor, request.intent)
-                result = await mesh.attach(actor, session_number=request.session_number)
-                if request.intent is not None:
-                    await mesh.update_intent(actor, request.intent, initial_only=True)
-                return result
-        request = SessionInput.model_validate(request)
-        raw = await application.session(
-            _actor(application, role),
-            action=request.action,
-            mode="persistent" if request.action == "start" else None,
-            code=None,
+        return await application.session(
+            _actor(application, role), **request.model_dump()
         )
-        return _structured(session_result(raw, request.action))
 
     @mcp.tool(
         name="task_list",
@@ -790,12 +688,10 @@ def build_role_mcp(
             request, failure = _validate(boundary, role, "command_read")
             if failure is not None:
                 return failure
-            if mesh and request.cmd_hash is None:
+            if request.cmd_hash is None:
                 return await application.commands.journal(
                     _actor(application, role), limit=request.limit, cursor=request.cursor
                 )
-            if not mesh:
-                request = CommandReadInput.model_validate(request)
             canonical = CmdReadRequest(
                 action="read",
                 code=None,
@@ -896,24 +792,11 @@ def build_role_mcp(
             request, failure = _validate(boundary, role, "task_comment")
             if failure is not None:
                 return failure
-            if mesh:
-                canonical = request.to_request()
-                raw = await application.task(_actor(application, role), canonical)
-                if raw.get("ok"):
-                    return {"ok": True, **operation_notices(raw)}
-                return _structured(task_result(raw, canonical.action))
-            request = TaskCommentInput.model_validate(request)
-            canonical = TaskCommentRequest(
-                action="comment",
-                code=None,
-                namespace=request.namespace,
-                task_id=request.task_id,
-                comment_text=request.comment_text,
-            )
+            canonical = request.to_request()
             raw = await application.task(_actor(application, role), canonical)
             if raw.get("ok"):
                 return {"ok": True, **operation_notices(raw)}
-            return _structured(task_result(raw, "comment"))
+            return _structured(task_result(raw, canonical.action))
 
     else:
 
@@ -986,10 +869,7 @@ def build_role_mcp(
             request, failure = _validate(boundary, role, "agent_observe")
             if failure is not None:
                 return failure
-            if mesh:
-                return await mesh.observe(_actor(application, role), **request.model_dump())
-            AgentObserveInput.model_validate(request)
-            return await application.agent_observe(_actor(application, role))
+            return await mesh.observe(_actor(application, role), **request.model_dump())
 
         @mcp.tool(
             name="health",
@@ -1011,69 +891,68 @@ def build_role_mcp(
             result["agent_name"] = identity.get("public_name")
             return result
 
-    install_role_input_contract(mcp, role, overrides=input_overrides)
-    install_role_output_contract(mcp, role, overrides=output_overrides, application=application)
-    if mesh:
-        for tool in mcp._tool_manager.list_tools():
-            text = tool.description or ""
-            text = text.split(" Requires an active managed session;")[0]
-            if tool.name == "session":
-                tool.description = (
-                    "Attach this connector once using session_number. "
-                    "Use action='attach' with session_number and optional initial intent. "
-                    "Repeated attach preserves existing intent and its timer. "
-                    "Before any domain write, set intent here with action='intent', intent=...; "
-                    "refresh uses the existing binding and never needs session_number. "
-                    "Refresh intent every 180 seconds. The first due call warns; the next write "
-                    "is blocked until refresh. Reads, cancel, recovery, release and "
-                    "message ACK/reply "
-                    "remain available under their existing policy. Access only issues the number. "
-                    "The local binding survives restart and automatic work-cycle rearm. "
-                    "Manage issuance and end the shared access cycle through Access MCP. "
-                    "Contract updated for Terminal MCP 0.14.1."
-                )
-                tool.annotations = ToolAnnotations(
-                    readOnlyHint=False,
-                    destructiveHint=False,
-                    idempotentHint=True,
-                    openWorldHint=False,
-                )
-            elif tool.name == "task_comment":
-                tool.description = (
-                    "Append comment_text with action='comment' (the default), or save "
-                    "checkpoint with action='checkpoint' and a checkpoint payload. "
-                    "Checkpoint updates preserve task state and history. "
-                    "Writes require this connector's attached local work cycle."
-                )
-            elif tool.name == "command_read":
-                tool.description = (
-                    "Read any local command by cmd_hash, or omit cmd_hash for the local "
-                    "command journal. Access Code and active work cycle are unnecessary. "
-                    "Use the returned opaque cursor for the next bounded page."
-                )
-            elif tool.name == "agent_observe":
-                tool.description = (
-                    "List the bounded local agent overview with stable logical_agent_id, real "
-                    "display_name/public_name, server, current intent and timestamps. Default "
-                    "includes live sessions; include_inactive adds ended/expired latest sessions. "
-                    "Filter logical_agent_id to resolve an Events agent ID. Continue next_cursor. "
-                    "Intent staleness, activity staleness and session expiry are separate states. "
-                    "Available without an active work cycle or Access Code."
-                )
-            elif tool.name in {"task_list", "task_get", "task_graph", "health"}:
-                tool.description = text + " Available without an active work cycle or Access Code."
-            elif tool.name == "message":
-                tool.description = (
-                    "Read inbox, history, and recipients; send, acknowledge, or reply on "
-                    "this server only. Message recipients require a current local attachment; "
-                    "message transport never uses Mesh peers. Legacy scope='fleet' requests return "
-                    "feature_disabled. Messages expire 24 hours after created_at. Writes use an "
-                    "attached local work cycle."
-                )
-            else:
-                tool.description = (
-                    text + " Attach this connector once; writes use its local work cycle."
-                )
+    install_role_input_contract(mcp, role)
+    install_role_output_contract(mcp, role, application=application)
+    for tool in mcp._tool_manager.list_tools():
+        text = tool.description or ""
+        text = text.split(" Requires an active managed session;")[0]
+        if tool.name == "session":
+            tool.description = (
+                "Attach this connector once using session_number. "
+                "Use action='attach' with session_number and optional initial intent. "
+                "Repeated attach preserves existing intent and its timer. "
+                "Before any domain write, set intent here with action='intent', intent=...; "
+                "refresh uses the existing binding and never needs session_number. "
+                "Refresh intent every 180 seconds. The first due call warns; the next write "
+                "is blocked until refresh. Reads, cancel, recovery, release and "
+                "message ACK/reply "
+                "remain available under their existing policy. Access only issues the number. "
+                "The local binding survives restart and automatic work-cycle rearm. "
+                "Manage issuance and end the shared access cycle through Access MCP. "
+                "Contract updated for Terminal MCP 0.14.1."
+            )
+            tool.annotations = ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            )
+        elif tool.name == "task_comment":
+            tool.description = (
+                "Append comment_text with action='comment' (the default), or save "
+                "checkpoint with action='checkpoint' and a checkpoint payload. "
+                "Checkpoint updates preserve task state and history. "
+                "Writes require this connector's attached local work cycle."
+            )
+        elif tool.name == "command_read":
+            tool.description = (
+                "Read any local command by cmd_hash, or omit cmd_hash for the local "
+                "command journal. Access Code and active work cycle are unnecessary. "
+                "Use the returned opaque cursor for the next bounded page."
+            )
+        elif tool.name == "agent_observe":
+            tool.description = (
+                "List the bounded local agent overview with stable logical_agent_id, real "
+                "display_name/public_name, server, current intent and timestamps. Default "
+                "includes live sessions; include_inactive adds ended/expired latest sessions. "
+                "Filter logical_agent_id to resolve an Events agent ID. Continue next_cursor. "
+                "Intent staleness, activity staleness and session expiry are separate states. "
+                "Available without an active work cycle or Access Code."
+            )
+        elif tool.name in {"task_list", "task_get", "task_graph", "health"}:
+            tool.description = text + " Available without an active work cycle or Access Code."
+        elif tool.name == "message":
+            tool.description = (
+                "Read inbox, history, and recipients; send, acknowledge, or reply on "
+                "this server only. Message recipients require a current local attachment; "
+                "message transport never uses Mesh peers. Legacy scope='fleet' requests return "
+                "feature_disabled. Messages expire 24 hours after created_at. Writes use an "
+                "attached local work cycle."
+            )
+        else:
+            tool.description = (
+                text + " Attach this connector once; writes use its local work cycle."
+            )
 
     def _install_activity_touch() -> None:
         for tool in mcp._tool_manager.list_tools():
@@ -1082,52 +961,48 @@ def build_role_mcp(
             async def touched(*, _raw_fn=raw_fn, _name=tool.name, **kwargs):
                 intent_status = {}
                 args = {}
-                if mesh:
-                    boundary = kwargs.get("boundary")
-                    args = getattr(boundary, "raw_arguments", {})
-                    safe = _name in {
-                        "session",
-                        "command_read",
-                        "command_cancel",
-                        "command_recovery",
-                        "task_list",
-                        "task_get",
-                        "task_graph",
-                        "agent_observe",
-                        "health",
+                boundary = kwargs.get("boundary")
+                args = getattr(boundary, "raw_arguments", {})
+                safe = _name in {
+                    "session",
+                    "command_read",
+                    "command_cancel",
+                    "command_recovery",
+                    "task_list",
+                    "task_get",
+                    "task_graph",
+                    "agent_observe",
+                    "health",
+                }
+                if _name == "message":
+                    safe = args.get("action", "read") in {
+                        "read",
+                        "history",
+                        "recipients",
+                        "ack",
+                        "reply",
                     }
-                    if _name == "message":
-                        safe = args.get("action", "read") in {
-                            "read",
-                            "history",
-                            "recipients",
-                            "ack",
-                            "reply",
-                        }
-                    if _name == "task_claim" and args.get("action") == "release":
-                        safe = True
-                    try:
-                        intent_status = await mesh.observe_intent_call(
-                            _actor(application, role), require_intent=not safe
-                        )
-                    except Exception as exc:
-                        result = role_error_result(error_from_exception(exc).as_dict())
-                        result.meta = await _session_envelope(application, role)
-                        return result
-                    if intent_status.get("blocked"):
-                        result = role_error_result(
-                            public_error(
-                                "intent_required"
-                                if intent_status["state"] == "missing"
-                                else "intent_stale"
-                            ).as_dict()
-                        )
-                        result.meta = await _session_envelope(application, role)
-                        return result
-                if mesh:
-                    with mesh.intent_call_context(intent_status):
-                        result = await _raw_fn(**kwargs)
-                else:
+                if _name == "task_claim" and args.get("action") == "release":
+                    safe = True
+                try:
+                    intent_status = await mesh.observe_intent_call(
+                        _actor(application, role), require_intent=not safe
+                    )
+                except Exception as exc:
+                    result = role_error_result(error_from_exception(exc).as_dict())
+                    result.meta = await _session_envelope(application, role)
+                    return result
+                if intent_status.get("blocked"):
+                    result = role_error_result(
+                        public_error(
+                            "intent_required"
+                            if intent_status["state"] == "missing"
+                            else "intent_stale"
+                        ).as_dict()
+                    )
+                    result.meta = await _session_envelope(application, role)
+                    return result
+                with mesh.intent_call_context(intent_status):
                     result = await _raw_fn(**kwargs)
                 if (
                     _name == "session"
@@ -1180,46 +1055,34 @@ def build_role_mcp(
     mcp._tool_manager._tools = {name: registered[name] for name in ROLE_TOOLS[role]}
     from terminal_mcp.operation_metadata import install_action_metadata
 
-    install_action_metadata(mcp, role, mesh=bool(mesh))
-    # The packaged agent contract is the Mesh contract only. Standalone keeps
-    # its existing runtime validator without a second published catalog.
-    if publish_agent_contract and mesh:
+    install_action_metadata(mcp, role)
+    if publish_agent_contract:
         from terminal_mcp.mcp.agent_contracts import install_agent_contract
 
         install_agent_contract(
             mcp,
             role,
-            {
-                name: input_overrides.get((role, name), ROLE_TOOL_MODELS[(role, name)])
-                for name in ROLE_TOOLS[role]
-            },
-            mesh=bool(mesh),
+            {name: ROLE_TOOL_MODELS[(role, name)] for name in ROLE_TOOLS[role]},
         )
-    mcp.role_schema_contract = role_schema_contract(role)
-    if mesh:
-        from terminal_mcp.mcp.role_contracts import (
-            schema_digest,
-            serialized_schema,
-        )
+    from terminal_mcp.mcp.role_contracts import (
+        schema_digest,
+        serialized_schema,
+    )
 
-        mcp.role_schema_contract = {
-            "endpoint_role": role,
-            "contract_version": 1,
-            "access_mesh": True,
-            "tools": [
-                {
-                    "tool_name": name,
-                    "runtime_input_schema_digest": schema_digest(
-                        input_overrides.get(
-                            (role, name), ROLE_TOOL_MODELS[(role, name)]
-                        ).model_json_schema()
-                    ),
-                    "planning_input_schema_digest": schema_digest(registered[name].parameters),
-                    "planning_input_schema_bytes": len(
-                        serialized_schema(registered[name].parameters)
-                    ),
-                }
-                for name in ROLE_TOOLS[role]
-            ],
-        }
+    mcp.role_schema_contract = {
+        "endpoint_role": role,
+        "contract_version": 1,
+        "access_mesh": True,
+        "tools": [
+            {
+                "tool_name": name,
+                "runtime_input_schema_digest": schema_digest(
+                    ROLE_TOOL_MODELS[(role, name)].model_json_schema()
+                ),
+                "planning_input_schema_digest": schema_digest(registered[name].parameters),
+                "planning_input_schema_bytes": len(serialized_schema(registered[name].parameters)),
+            }
+            for name in ROLE_TOOLS[role]
+        ],
+    }
     return mcp

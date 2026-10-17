@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from mcp.types import CallToolResult, TextContent
 from pydantic import (
@@ -36,15 +36,17 @@ from terminal_mcp.core.task_projections import (
     TaskReviewHistory,
     WorkflowWarning,
 )
+from terminal_mcp.mcp.access_contracts import (
+    MeshCommandReadOutput,
+    MeshObserveOutput,
+    MeshSessionOutput,
+)
 from terminal_mcp.mcp.output_contracts import (
     AccessError,
     CmdOutput,
     CmdRunOutput,
     MessageOutput,
-    SessionEndResult,
-    SessionInterruptResult,
     SessionLifecycleInfo,
-    SessionStartResult,
     TaskOutput,
     projected_result,
 )
@@ -108,20 +110,6 @@ def session_provider_fingerprint() -> dict | None:
     except Exception:
         logging.getLogger(__name__).exception("session_provider_diagnostic_unavailable")
         return None
-
-
-class RoleSessionStartResult(SessionStartResult):
-    provider_identity: ProviderFingerprint | None = None
-
-
-RoleSessionSuccess = Annotated[
-    RoleSessionStartResult | SessionEndResult | SessionInterruptResult,
-    Field(discriminator="action"),
-]
-
-
-class RoleSessionOutput(_RoleOutput, RootModel[RoleSessionSuccess | AccessError]):
-    __success_type__ = RoleSessionSuccess
 
 
 class TaskListSuccess(_Strict):
@@ -229,42 +217,6 @@ class TaskGraphOutput(_RoleOutput, RootModel[TaskGraphSuccess | AccessError]):
     __success_type__ = TaskGraphSuccess
 
 
-class LogicalAgentView(_Strict):
-    logical_agent_id: str
-    public_name: str
-    authority_node_id: str
-
-
-class WorkWindowView(_Strict):
-    work_window_id: str
-    state: str
-    opened_at: str
-    hard_expires_at: str
-    remaining_seconds: int = Field(ge=0)
-    revision: int = Field(ge=1)
-
-
-class WorkSessionView(_Strict):
-    work_session_id: str
-    session_epoch: int = Field(ge=1)
-    state: str
-    started_at: str
-    hard_expires_at: str
-    role: Literal["executor", "coordinator", "legacy"]
-    contract_version: int = Field(ge=1)
-
-
-class AgentObserveSuccess(_Strict):
-    ok: Literal[True]
-    logical_agent: LogicalAgentView
-    work_window: WorkWindowView
-    work_session: WorkSessionView
-
-
-class AgentObserveOutput(_RoleOutput, RootModel[AgentObserveSuccess | AccessError]):
-    __success_type__ = AgentObserveSuccess
-
-
 class CompactHealthTerminal(_Strict):
     ok: bool | None = None
     scheduler: str | None = None
@@ -322,22 +274,22 @@ class RoleHealthOutput(_RoleOutput, RootModel[RoleHealthSuccess | AccessError]):
 
 
 ROLE_OUTPUT_MODELS = {
-    ("executor", "session"): RoleSessionOutput,
+    ("executor", "session"): MeshSessionOutput,
     ("executor", "task_list"): TaskListOutput,
     ("executor", "command_run"): CmdRunOutput,
-    ("executor", "command_read"): CmdOutput,
+    ("executor", "command_read"): MeshCommandReadOutput,
     ("executor", "command_cancel"): CmdOutput,
     ("executor", "command_recovery"): CmdOutput,
     ("executor", "task_claim"): TaskClaimOutput,
     ("executor", "task_state"): TaskStateOutput,
     ("executor", "task_comment"): TaskCommentOutput,
     ("executor", "message"): MessageOutput,
-    ("coordinator", "session"): RoleSessionOutput,
+    ("coordinator", "session"): MeshSessionOutput,
     ("coordinator", "task_get"): TaskGetOutput,
     ("coordinator", "task_list"): TaskListOutput,
     ("coordinator", "task_manage"): TaskOutput,
     ("coordinator", "task_graph"): TaskGraphOutput,
-    ("coordinator", "agent_observe"): AgentObserveOutput,
+    ("coordinator", "agent_observe"): MeshObserveOutput,
     ("coordinator", "message"): MessageOutput,
     ("coordinator", "health"): RoleHealthOutput,
 }

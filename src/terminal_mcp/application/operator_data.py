@@ -1,9 +1,4 @@
-"""Explicit legacy application facade during the public-surface migration.
-
-Legacy routes retain their published request/response contracts. They invoke
-these existing domain use cases with the same server-resolved actor rather than
-acquiring direct access to storage or resolving identities in a transport.
-"""
+"""Operator application facade for existing data, tasks and command history."""
 
 from __future__ import annotations
 
@@ -12,12 +7,9 @@ from typing import Literal
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import CapabilityPolicy, canonical_application_result
 
-LegacyOperation = Literal[
-    "agent_start",
-    "coordinate",
+OperatorOperation = Literal[
     "message",
     "agents",
-    "agent_finish",
     "context",
     "tasks",
     "task",
@@ -28,13 +20,10 @@ LegacyOperation = Literal[
     "health",
     "console_snapshot",
 ]
-LEGACY_OPERATIONS: frozenset[str] = frozenset(
+OPERATOR_OPERATIONS: frozenset[str] = frozenset(
     {
-        "agent_start",
-        "coordinate",
         "message",
         "agents",
-        "agent_finish",
         "context",
         "tasks",
         "task",
@@ -48,17 +37,14 @@ LEGACY_OPERATIONS: frozenset[str] = frozenset(
 )
 
 
-class ApplicationCompatibility:
+class OperatorDataApplication:
     def __init__(self, service):
         self._service = service
 
-    async def call(self, actor: ActorContext, operation: LegacyOperation, *args, **kwargs):
-        if operation not in LEGACY_OPERATIONS:
-            raise ValueError("unknown legacy application operation")
+    async def call(self, actor: ActorContext, operation: OperatorOperation, *args, **kwargs):
+        if operation not in OPERATOR_OPERATIONS:
+            raise ValueError("unknown operator data operation")
         capability = {
-            "agent_start": "sessions",
-            "agent_finish": "sessions",
-            "coordinate": "sessions",
             "agents": "observations",
             "console_snapshot": "observations",
             "run": "commands",
@@ -97,6 +83,3 @@ class ApplicationCompatibility:
                 return canonical_application_result(result)
             result = await getattr(self._service, operation)(*args, **kwargs)
             return canonical_application_result(result)
-
-
-LegacyApplication = ApplicationCompatibility
