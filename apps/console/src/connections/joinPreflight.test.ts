@@ -16,11 +16,11 @@ test('current autonomous node may join a different namespace', () => {
   expect(joinPreflightError(target, authority)).toBeNull()
 })
 
-test('controller with attached members cannot join a different authority', () => {
+test('paired controller may move to a different Mesh after the server validates the transition', () => {
   const target = {
     ...meshControl('gamma'), nodeId: 'gamma', controlNodeId: 'gamma',
     mesh: undefined, meshes: [], nodes: meshControl('gamma').nodes,
   }
 
-  expect(joinPreflightError(target, authority)).toBe('already_managed_by_other_authority')
+  expect(joinPreflightError(target, authority)).toBeNull()
 })

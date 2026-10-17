@@ -160,8 +160,8 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     const timer = window.setInterval(() => setClock(Date.now()), 1000)
     return () => { controlLifetime.deactivate(); window.clearInterval(timer) }
   }, [controlLifetime])
-  const [meshName, setMeshName] = useState('Fleet')
-  const [newMeshName, setNewMeshName] = useState('Fleet')
+  const [meshName, setMeshName] = useState('Mesh')
+  const [newMeshName, setNewMeshName] = useState('Mesh')
   const [newMeshControlInstanceId, setNewMeshControlInstanceId] = useState('')
   const [selectedMeshId, setSelectedMeshId] = useState('')
   // Independent control authorities must never share a UI write lock.
@@ -544,7 +544,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   }, [])
 
   async function createMesh() {
-    const displayName = newMeshName.trim() || 'Fleet'
+    const displayName = newMeshName.trim() || 'Mesh'
     const selectedProfile = eligibleControlProfiles.find((profile) => profile.instanceId === newMeshControlInstanceId)
     if (!selectedProfile || states[selectedProfile.instanceId]?.status !== 'connected') {
       setControlError('control_write_unavailable')
@@ -616,7 +616,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       ? 'confirmed' : result.ok ? 'pending' : 'failed')
     if (result.ok && result.control?.meshes.some((mesh) => mesh.meshId === requestedMeshId)
       && isConverged(result.control.nodes.find((node) => node.nodeId === requestedNodeId))
-      && nativeTrustReady(result.control, requestedMeshId)) setNewMeshName('Fleet')
+      && nativeTrustReady(result.control, requestedMeshId)) setNewMeshName('Mesh')
   }
 
   async function renameMesh() {
@@ -770,9 +770,6 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       // addToMesh repeats this check against fresh reads after Detach.
       if (local.schemaVersion !== destination.schemaVersion) {
         return { ok: false, code: 'management_contract_mismatch', error: 'management_contract_mismatch' }
-      }
-      if (local.fleetId !== destination.fleetId && !local.namespaceTransitionSupported) {
-        return { ok: false, error: 'namespace_transition_unsupported' }
       }
       // Validate operator enrollment before releasing the old membership.
       // Detach rotates ingress credentials, so Join fetches it again afterwards.

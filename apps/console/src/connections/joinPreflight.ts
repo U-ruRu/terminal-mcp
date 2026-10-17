@@ -11,11 +11,6 @@ export function isAutonomous(target: ManagedFleetControlReadModel): boolean {
 export function joinPreflightError(
   target: ManagedFleetControlReadModel,
   destination: ManagedFleetControlReadModel,
-): 'namespace_transition_unsupported' | 'management_contract_mismatch' | 'already_managed_by_other_authority' | null {
-  if (target.fleetId !== destination.fleetId && !target.namespaceTransitionSupported) return 'namespace_transition_unsupported'
-  if (target.schemaVersion !== destination.schemaVersion) return 'management_contract_mismatch'
-  if (target.managed && target.controlNodeId !== destination.controlNodeId && !isAutonomous(target)) {
-    return 'already_managed_by_other_authority'
-  }
-  return null
+): 'management_contract_mismatch' | null {
+  return target.schemaVersion === destination.schemaVersion ? null : 'management_contract_mismatch'
 }

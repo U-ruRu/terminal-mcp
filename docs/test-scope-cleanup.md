@@ -106,3 +106,8 @@ pre-mutation path/link validation, repeatability, and rejection of retained stat
 during a fresh install. The existing failed-stage installer test now includes
 `clean-deploy` and verifies that failed preparation preserves the prior state.
 Windows XML/path checks and existing installer checks are reused.
+
+The Console Join preflight check for a controller with members now accepts the
+paired application's request. The server owns transition safety and registry
+preservation; membership history and namespace names are not client admission
+conditions. Existing connection lifecycle/cache-isolation and i18n checks are reused.
