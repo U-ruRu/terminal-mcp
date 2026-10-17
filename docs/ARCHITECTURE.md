@@ -1,5 +1,7 @@
 # Terminal MCP architecture
 
+**Целевой продуктовый контракт:** [Mesh, ACS, единая модель агентов и управление топологией](mesh-product-contract.md). Ниже описано текущее состояние реализации; для изменений продукта требуемое поведение определяет целевой контракт.
+
 Current application version: **0.14.4**. Durable runtime schema: **25**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
 
 ## Public boundary

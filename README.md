@@ -1,5 +1,7 @@
 # terminal-mcp
 
+**Целевая архитектура:** [Mesh и единый агентский контракт](docs/mesh-product-contract.md) — нормативное описание Standalone, ACS, слотов, pairing, Join/Detach и обновлений.
+
 Native Access Events: [public session-number message routing](docs/mcp-events-session-number.md).
 
 `terminal-mcp` — Python-сервис управляемого доступа к Linux и Windows через MCP, HTTP Actions и Console.
