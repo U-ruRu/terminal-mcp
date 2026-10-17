@@ -95,3 +95,14 @@ Secondary is Linux. Native Windows tests can be inspected and statically checked
 there, but their Job Object/ACL/PowerShell execution requires Windows. This audit
 makes no claim of native Windows execution or deployment acceptance. Deployment
 approval and runtime rollout are separate from the authorized branch merge/push.
+
+## Unified Mesh installation checks
+
+The explicit clean-deploy operation introduces a separate state-reset responsibility.
+Existing retention checks cover pruning old releases/backups and do not authorize or
+exercise a full reset. `test_deployment_clean.py` covers removal of each managed
+state area, external auth database sidecars, preservation of unrelated files,
+pre-mutation path/link validation, repeatability, and rejection of retained state
+during a fresh install. The existing failed-stage installer test now includes
+`clean-deploy` and verifies that failed preparation preserves the prior state.
+Windows XML/path checks and existing installer checks are reused.

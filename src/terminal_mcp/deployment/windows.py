@@ -63,9 +63,7 @@ def service_xml(root: PureWindowsPath, python: PureWindowsPath) -> str:
     return ET.tostring(service, encoding="unicode") + "\n"
 
 
-def initialize(root: Path, public_url: str, host: str, port: int):
-    from terminal_mcp.platform_windows import secure_path
-
+def validate_public_url(public_url: str) -> None:
     parsed = urlsplit(public_url)
     if (
         parsed.scheme != "https"
@@ -77,6 +75,12 @@ def initialize(root: Path, public_url: str, host: str, port: int):
         or parsed.fragment
     ):
         raise ValueError("public URL requires an HTTPS origin")
+
+
+def initialize(root: Path, public_url: str, host: str, port: int):
+    from terminal_mcp.platform_windows import secure_path
+
+    validate_public_url(public_url)
     env = root / "config/terminal-mcp.env"
     if env.exists():
         return
@@ -191,18 +195,45 @@ async def probe():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("initialize", "render", "backup", "check-rollback", "probe")
+        "action",
+        choices=(
+            "initialize",
+            "clean",
+            "check-install",
+            "render",
+            "backup",
+            "check-rollback",
+            "probe",
+        ),
     )
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--python", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--public-url")
+    parser.add_argument("--apply", action="store_true")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.action == "initialize":
         initialize(root, args.public_url, args.host, args.port)
+    elif args.action in {"clean", "check-install"}:
+        from terminal_mcp.deployment.clean import inventory
+
+        validate_public_url(args.public_url)
+        state = inventory(
+            root=root,
+            config=root / "config",
+            data=root / "data",
+            cache=root / "cache",
+            backups=root / "backups",
+            extra_directories=(root / "logs", root / "work"),
+        )
+        state.validate(protected=(Path(__file__).absolute(),))
+        if args.action == "check-install":
+            state.require_empty()
+        elif args.apply:
+            state.apply(protected=(Path(__file__).absolute(),))
     elif args.action == "render":
         args.output.write_text(service_xml(root, args.python), encoding="utf-8")
     elif args.action == "backup":

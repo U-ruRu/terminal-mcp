@@ -148,3 +148,27 @@ SQLite WAL, loopback HTTP and subprocess timeout boundaries run for real. Servic
 actuation in the fault matrix is an explicit isolated adapter; it is not a claim of
 physical systemd/Caddy deployment acceptance. A production trial still requires dot's
 specific approval, real target preflight and confirmed compatibility evidence.
+
+## Fresh installation and explicit state reset
+
+`bash deploy/install.sh install` requires an empty managed installation state.
+An existing environment, database, identity sidecar or retained backup must be
+handled with the appropriate operation:
+
+- `update` and `release apply` preserve the current installation and migrate its data.
+- `clean-deploy` explicitly discards the previous installation's managed state.
+
+A clean deployment first builds and validates the candidate. It then stops the API
+and any installed local executor, removes managed runtime/auth/control databases,
+caches, pairing, registrations, slot replicas, configuration and local secrets,
+as well as backups in the configured backup directory and earlier release-operation
+snapshots. Custom state paths are read from the installation environment and runtime
+configuration. The configuration inventory is removed last to make interrupted
+cleanup repeatable. Linked paths and overlap with the staged release/source are
+rejected before deletion. Unrelated filesystem data lies outside this inventory.
+
+`clean-deploy` uses the same installation parameters as `install`, including a
+new administrator password and public origin. It creates new credentials and has
+no automatic rollback target pointing at the old installation. Hot-update recovery
+continues to preserve the current security state. A deployment requires its own
+authorization; publishing a canonical source commit performs no deployment.

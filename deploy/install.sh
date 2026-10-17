@@ -17,7 +17,7 @@ ALLOW_DOWNGRADE=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --allow-downgrade) ALLOW_DOWNGRADE=true ;;
-    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
+    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|clean-deploy|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
   esac
   shift
 done
@@ -35,7 +35,7 @@ UNIT_FILE=${TERMINAL_MCP_UNIT_FILE:-/etc/systemd/system/terminal-mcp.service}
 CLI_LINK=${TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp}
 # The legacy updater cannot safely chown API stores or roll back one half of a
 # split topology. Refuse before any filesystem/service mutation.
-if [ -f "${UNIT_FILE}.d/50-local-executor.conf" ] && [ "$CMD" != doctor ]; then
+if [ -f "${UNIT_FILE}.d/50-local-executor.conf" ] && [ "$CMD" != doctor ] && [ "$CMD" != clean-deploy ]; then
   echo 'Split executor topology is active; use the coordinated topology transition, not the legacy installer' >&2
   exit 46
 fi
@@ -876,6 +876,38 @@ activate(){
   fi
   return 1
 }
+clean_state(){
+  PYTHONPATH="$SOURCE/src" PYTHONDONTWRITEBYTECODE=1 python3 -m terminal_mcp.deployment.clean \
+    --root "$ROOT" --config "$ENV_DIR" --data "$DATA" --cache "$CACHE" \
+    --backups "$BACKUPS" --extra-directory "${UNIT_FILE}.d" --protect "$SOURCE" "$@"
+}
+clean_deploy(){
+  [ -n "${TERMINAL_MCP_ADMIN_PASSWORD:-}" ] || { echo 'Set TERMINAL_MCP_ADMIN_PASSWORD' >&2; return 1; }
+  [ ! -e "$ROOT/current" ] || [ -L "$ROOT/current" ] || { echo 'Current release must be a symlink' >&2; return 1; }
+  clean_state >/dev/null
+  # Build and validate the new binary before stopping or deleting the old state.
+  stage
+  clean_state --protect "$STAGED_RELEASE" >/dev/null
+  if $SYSTEMCTL cat terminal-mcp >/dev/null 2>&1; then $SYSTEMCTL stop terminal-mcp; fi
+  if $SYSTEMCTL cat terminal-mcp-executor >/dev/null 2>&1; then
+    $SYSTEMCTL stop terminal-mcp-executor
+    $SYSTEMCTL disable terminal-mcp-executor
+  fi
+  clean_state --protect "$STAGED_RELEASE" --apply
+  # A clean deployment has no rollback target and never restores old credentials.
+  rm -f -- "$ROOT/current"
+  install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
+  write_env
+  ensure_env_defaults
+  write_unit
+  configure_console_caddy
+  activate "$STAGED_RELEASE"
+  $SYSTEMCTL enable terminal-mcp
+}
+
+if [ "$CMD" = install ]; then
+  clean_state --require-empty >/dev/null
+fi
 if [ "$CMD" = install ] || [ "$CMD" = update ]; then
   mkdir -p "$ROOT/releases"
   install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
@@ -890,8 +922,9 @@ case "$CMD" in
    printf '%s\n' "$STAGED_RELEASE"
    ;;
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; configure_console_caddy; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
+ clean-deploy) clean_deploy ;;
  update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
  ingress) ensure_env_defaults; configure_console_caddy ;;
  doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress; check_public_console_ingress ;;
- *) echo 'Usage: install.sh {install|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
+ *) echo 'Usage: install.sh {install|clean-deploy|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
 esac

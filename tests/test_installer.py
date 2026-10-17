@@ -1,9 +1,13 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 
-def test_failed_stage_never_activates_incomplete_release(tmp_path):
+
+@pytest.mark.parametrize("action", ["update", "clean-deploy"])
+def test_failed_stage_never_activates_incomplete_release(tmp_path, action):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     (fake_bin / "id").write_text("#!/bin/sh\necho 0\n")
@@ -15,7 +19,7 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
         '  chmod +x "$3/bin/pip"\n'
         "  exit 0\n"
         "fi\n"
-        "exit 99\n"
+        f'exec "{sys.executable}" "$@"\n'
     )
     for path in fake_bin.iterdir():
         path.chmod(0o755)
@@ -25,9 +29,13 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     data_dir = tmp_path / "data"
     backup_dir = tmp_path / "backups"
     cache_dir = tmp_path / "cache"
+    data_dir.mkdir()
+    retained = data_dir / "existing-state"
+    retained.write_text("keep until staging succeeds")
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "TERMINAL_MCP_ADMIN_PASSWORD": "isolated-test-only",
         "TERMINAL_MCP_INSTALL_ROOT": str(root),
         "TERMINAL_MCP_ENV_DIR": str(env_dir),
         "TERMINAL_MCP_DATA_DIR": str(data_dir),
@@ -38,7 +46,7 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
         "TERMINAL_MCP_HEALTH_URL": "http://127.0.0.1:9/health/live",
     }
     result = subprocess.run(
-        ["bash", "deploy/install.sh", "update"],
+        ["bash", "deploy/install.sh", action],
         cwd=Path(__file__).resolve().parents[1],
         env=env,
         capture_output=True,
@@ -47,6 +55,7 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     )
 
     assert result.returncode != 0
+    assert retained.read_text() == "keep until staging succeeds"
     assert not (root / "current").exists()
     assert list((root / "releases").iterdir()) == []
 

@@ -52,6 +52,17 @@ Deployment lock сериализует операции. Update готовит �
 схем со снимком. Durable data и identity сохраняют текущее состояние. Uninstall
 снимает регистрацию службы; каталоги экземпляра сохраняются.
 
+## Explicit clean installation
+
+`-Action CleanInstall` accepts the installation parameters above and prepares a
+fresh release directory, including when the requested commit is already installed.
+After validating the new release and the state inventory, it stops and unregisters
+the existing service, removes managed `config`, `data`, `cache`, `logs`, `work`,
+backup and deployment-state directories, and initializes new local credentials and
+pairing. Configured external database paths and identity sidecars are included.
+The previous release is not an automatic rollback target. Ordinary `Install`
+rejects retained managed state; `Update` preserves it.
+
 ## Network
 
 Отдельный узел использует собственные Access, Executor и Coordinator с локальным

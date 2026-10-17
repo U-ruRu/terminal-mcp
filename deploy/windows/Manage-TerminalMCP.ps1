@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('Install','Update','Rollback','Status','Uninstall')]
+    [Parameter(Mandatory)][ValidateSet('Install','CleanInstall','Update','Rollback','Status','Uninstall')]
     [string]$Action,
     [string]$Root = "$env:ProgramData\TerminalMCP",
     [string]$SourcePath = (Resolve-Path "$PSScriptRoot\..\.."),
@@ -120,7 +120,7 @@ try {
         $oldState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         $previousPython = $oldState.currentPython
     }
-    if (-not $existing) {
+    if (-not $existing -or $Action -eq 'CleanInstall') {
         if (-not $PublicUrl) { throw 'PublicUrl is required for installation.' }
         if ($WinSWSha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'WinSW checksum is required.' }
         $observed = (Get-FileHash -LiteralPath $WinSWPath -Algorithm SHA256).Hash
@@ -129,7 +129,11 @@ try {
     foreach ($name in 'service','releases','work','logs') {
         Protect-Directory (Join-Path $Root $name)
     }
-    $release = Join-Path $Root "releases\$ExpectedCommit"
+    $releaseId = $ExpectedCommit
+    if ($Action -eq 'CleanInstall') {
+        $releaseId += '-clean-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    }
+    $release = Join-Path $Root "releases\$releaseId"
     if (Test-Path -LiteralPath $release) { throw 'Release directory already exists.' }
     Protect-Directory $release
     $sourceCopy = Join-Path $release 'source'
@@ -149,6 +153,22 @@ try {
     $runtime = Join-Path $release 'venv\Scripts\python.exe'
     Invoke-Checked $runtime @('-m','pip','install',"$sourceCopy`[compact`]")
     Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','probe','--root',$Root)
+    if ($Action -eq 'Install') {
+        Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','check-install',
+            '--root',$Root,'--public-url',$PublicUrl)
+    }
+    if ($Action -eq 'CleanInstall') {
+        Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','clean',
+            '--root',$Root,'--public-url',$PublicUrl)
+        if ($existing) {
+            Invoke-Checked $wrapper @('stop')
+            Invoke-Checked $wrapper @('uninstall')
+        }
+        Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','clean',
+            '--root',$Root,'--public-url',$PublicUrl,'--apply')
+        $existing = $null
+        $previousPython = $null
+    }
     if (-not $existing) {
         Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','initialize',
             '--root',$Root,'--public-url',$PublicUrl,'--host',$ListenHost,'--port',"$Port")
