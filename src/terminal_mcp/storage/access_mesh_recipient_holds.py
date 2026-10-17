@@ -145,7 +145,7 @@ class MeshRecipientHolds:
             # number winner instead of trusting historical snapshot admission.
             if (
                 row["source_node_id"] not in self.store.trusted_issuers
-                or row["issuer_id"] not in self.store.trusted_issuers
+                or not self.store.registry_issuer_trusted(row["issuer_id"])
             ):
                 continue
             winner = self.store.numbers.winner(row["number"])
@@ -182,12 +182,13 @@ class MeshRecipientHolds:
             raise AccessMeshError("invalid_recipient_hold_snapshot")
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             for row in rows:
                 if (
                     not isinstance(row, dict)
                     or set(row) != HOLD_FIELDS
                     or row["source_node_id"] != authenticated_peer_id
-                    or row["issuer_id"] not in self.store.trusted_issuers
+                    or not self.store.registry_issuer_trusted(row["issuer_id"])
                     or any(
                         not isinstance(row[k], str) or not 1 <= len(row[k]) <= 160
                         for k in ("hold_id", "recipient_agent_id", "slot_id")

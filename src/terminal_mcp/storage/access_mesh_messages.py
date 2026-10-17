@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from terminal_mcp.core.access_mesh_scope import assert_registry_scope
+
 MESSAGE_TTL = timedelta(hours=24)
 CUTOVER_REASON = "delivery_stopped_local_cutover"
 LOCAL_MESSAGE_TAG = ":localmsg:"
@@ -185,6 +187,7 @@ class AccessMeshMessageStore:
             raise MeshMessagingError("feature_disabled")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            assert_registry_scope(db)
             existing = db.execute(
                 "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?", (message_hash,)
             ).fetchone()
@@ -284,6 +287,7 @@ class AccessMeshMessageStore:
     def acknowledge(self, message_hash, agent_id, stamp):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            assert_registry_scope(db)
             self._recipient_tx(db, message_hash, agent_id)
             message = db.execute(
                 "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?",
@@ -317,6 +321,7 @@ class AccessMeshMessageStore:
     def surface(self, agent_id, message_hashes, stamp):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            assert_registry_scope(db)
             for message_hash in message_hashes:
                 self._recipient_tx(db, message_hash, agent_id)
                 db.execute(
@@ -477,6 +482,7 @@ class AccessMeshMessageStore:
         now = now or self.clock()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            assert_registry_scope(db)
             report = self._local_cutover_report_tx(db, now)
             if report["blockers"]:
                 raise MeshMessagingError("migration_blocked")
@@ -494,6 +500,7 @@ class AccessMeshMessageStore:
         cutoff = (now - MESSAGE_TTL).isoformat()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            assert_registry_scope(db)
             ids = [
                 row[0]
                 for row in db.execute(

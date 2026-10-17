@@ -144,3 +144,19 @@ Membership checks cover the source authority, not merely a lagging target replic
 The combined runtime, ACS, topology and deployment selection passed 126 tests.
 This stage does not claim completion of the following primary-handoff and hot
 migration implementation; full acceptance is recorded on the final source commit.
+
+
+## Authoritative registry upgrade and namespace fences
+
+The test_access_mesh_registry_upgrade module owns the one-time union of
+registrations issued by different old members, preserving inactive rows and
+historical issuer identity. It separately checks collision/offline refusal,
+durable export retries, message-content archiving, removal of departed native
+authority, same-Mesh return identity, and the SQLite fence for a request that
+began before Move. These are direct storage/service responsibilities rather
+than another full workflow matrix.
+
+The integrated stage passes 35 selected tests, including the registry HTTP
+adapter, native lifecycle, strict proof gate, node identity and the operator
+slot-policy continuation. This is stage evidence; final full-source acceptance
+is recorded after runtime and topology integration.

@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from terminal_mcp.core.access_mesh_scope import registry_operation
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.message_text import message_text_slice, text_slice_arguments
 from terminal_mcp.core.orchestration import utc_text
@@ -764,6 +765,7 @@ class AccessMeshMessaging:
             result = projected
         return result
 
+    @registry_operation
     async def message(
         self,
         actor,
@@ -922,6 +924,7 @@ class AccessMeshMessaging:
             return _failure("output_item_too_large")
         return _failure("feature_disabled", outcome="not_committed")
 
+    @registry_operation
     async def tick(self):
         # Read-time expiry is authoritative; physical pruning runs even if
         # the process was idle or restarted after a long outage.

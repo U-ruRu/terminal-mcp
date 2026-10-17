@@ -9,6 +9,7 @@ from dataclasses import asdict
 from datetime import datetime
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, SlotPolicy
+from terminal_mcp.core.access_mesh_scope import registry_operation
 from terminal_mcp.core.read_contract import bounded_page, decode_cursor, encode_cursor
 
 
@@ -43,7 +44,9 @@ class AccessMeshOperator:
             "inheritance": {
                 "mode": "inherit" if slot.inherit_policy else "override",
                 "source": (defaults["inheritance"]["source"] if slot.inherit_policy else "slot"),
-                "parent": {
+                "parent": defaults["inheritance"]["parent"]
+                if self.store.registry_mesh_id
+                else {
                     **defaults["inheritance"]["parent"],
                     "source": "server",
                     "id": self.store.local_node_id,
@@ -83,6 +86,7 @@ class AccessMeshOperator:
         except (TypeError, ValueError) as exc:
             raise AccessMeshError("access_mesh_invalid_policy") from exc
 
+    @registry_operation
     async def slots(self, actor, *, limit=20, cursor=None):
         self.require_operator(actor)
         forwarded = await self.mesh.proxy_registry(
@@ -101,6 +105,7 @@ class AccessMeshOperator:
         )
         return {"ok": True, "slots": page, "next_cursor": next_cursor}
 
+    @registry_operation
     async def get(self, actor, *, slot_id):
         self.require_operator(actor)
         forwarded = await self.mesh.proxy_registry(actor, "get", {"slot_id": slot_id})
@@ -111,6 +116,7 @@ class AccessMeshOperator:
             raise AccessMeshError("access_mesh_slot_not_found")
         return {"ok": True, "slot": await asyncio.to_thread(self._view, slot)}
 
+    @registry_operation
     async def defaults(self, actor):
         self.require_operator(actor)
         forwarded = await self.mesh.proxy_registry(actor, "defaults", {})
@@ -118,6 +124,7 @@ class AccessMeshOperator:
             return forwarded
         return {"ok": True, **await asyncio.to_thread(self.mesh.defaults_state)}
 
+    @registry_operation
     async def mutate(
         self,
         actor,

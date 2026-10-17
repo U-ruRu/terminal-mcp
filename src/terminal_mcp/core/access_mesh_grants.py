@@ -833,6 +833,7 @@ class LocalAccessMesh:
             guard = getattr(self, "assert_registry_ready", None)
             if guard is not None:
                 guard(db)
+                self.assert_registry_writer(db, authenticated_peer_id)
             old = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),

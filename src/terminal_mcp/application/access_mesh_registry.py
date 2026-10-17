@@ -33,6 +33,8 @@ class AccessRegistryApplication:
         """Return None locally; a member forwards only already admitted actors."""
         await asyncio.to_thread(self.store.assert_registry_ready)
         if self.registry_authoritative:
+            if operation not in {"slots", "get", "defaults"}:
+                await asyncio.to_thread(self.store.assert_registry_available)
             return None
         if self.replication is None:
             raise AccessMeshError("mesh_primary_unavailable")

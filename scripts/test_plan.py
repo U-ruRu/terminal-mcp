@@ -107,6 +107,7 @@ COMPONENT_MODULES = frozenset(
         "test_access_mesh_future_policy.py",
         "test_access_mesh_grants.py",
         "test_access_mesh_registry_storage.py",
+        "test_access_mesh_registry_upgrade.py",
         "test_access_mesh_unified_migration.py",
         "test_mesh_topology_transitions.py",
         "test_node_identity.py",

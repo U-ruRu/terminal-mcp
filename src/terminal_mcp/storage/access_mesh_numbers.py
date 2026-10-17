@@ -105,7 +105,7 @@ class MeshSessionNumbers:
         ).fetchone():
             return True
         # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
-        for issuer in self.store.trusted_issuers:
+        for issuer in self.store.registry_issuers():
             tags = self.store.code_tags(issuer, number)
             placeholders = ",".join("?" for _ in tags)
             rows = db.execute(
@@ -145,6 +145,7 @@ class MeshSessionNumbers:
         expires = self.stamp(now + timedelta(minutes=3))
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             db.execute("DELETE FROM access_mesh_number_reservations WHERE expires_at<=?", (stamp,))
             if not self._occupied(db, number, attempt_id, as_of=stamp):
                 db.execute(
@@ -173,6 +174,7 @@ class MeshSessionNumbers:
     def release(self, attempt_id, *, keep_number=None):
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             if keep_number is None:
                 db.execute(
                     "DELETE FROM access_mesh_number_reservations WHERE attempt_id=?", (attempt_id,)
@@ -223,6 +225,7 @@ class MeshSessionNumbers:
         stamp = self.stamp(now or datetime.now(UTC))
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             pinned = db.execute(
                 "SELECT c.* FROM access_mesh_recipient_holds h "
                 "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
@@ -542,6 +545,7 @@ class MeshSessionNumbers:
         }
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             existing = db.execute(
                 "SELECT * FROM access_mesh_number_starts WHERE event_id=?",
                 (event_id,),
@@ -686,7 +690,7 @@ class MeshSessionNumbers:
                 raise AccessMeshError("invalid_session_snapshot")
             number = self.validate(item["number"])
             issuer = item["issuer_id"]
-            if issuer not in self.store.trusted_issuers:
+            if not self.store.registry_issuer_trusted(issuer):
                 raise AccessMeshError("access_mesh_untrusted_peer")
             slot = item["slot_id"]
             collided = item["collided_with"]
@@ -704,6 +708,7 @@ class MeshSessionNumbers:
             validated.append((number, issuer, slot, collided, detected_at))
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             before = db.total_changes
             db.executemany(
                 "INSERT OR IGNORE INTO access_mesh_number_incidents "
@@ -739,6 +744,7 @@ class MeshSessionNumbers:
                 validated.append((number, attempt, expires))
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             db.execute("DELETE FROM access_mesh_number_reservations WHERE expires_at<=?", (stamp,))
             for number, attempt, expires in validated:
                 if not self._occupied(db, number, attempt, as_of=stamp):
@@ -761,6 +767,7 @@ class MeshSessionNumbers:
         )
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.store.assert_registry_ready(db)
             db.execute(
                 "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)",
                 (number, cycle_key, issuer_id, slot_id, event_id, stamp),

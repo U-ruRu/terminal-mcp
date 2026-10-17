@@ -9,12 +9,14 @@ import asyncio
 import json
 import logging
 import secrets
+from contextvars import Context
 from dataclasses import replace
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent
+from terminal_mcp.core.access_mesh_scope import REGISTRY_NAMESPACE, registry_operation
 
 _LOG = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 64 * 1024
@@ -65,6 +67,7 @@ class AccessMeshReplication:
         self._wake = asyncio.Event()
         self._notify_loop = None
         self._task = None
+        self._upgrade_lock = asyncio.Lock()
         self._snapshot_after = {peer.instance_id: "" for peer in config.peers}
         self._last_snapshot_pass = {peer.instance_id: 0.0 for peer in config.peers}
         # Proof compatibility is separate from Fleet member signature/transport
@@ -94,6 +97,7 @@ class AccessMeshReplication:
             raise AccessMeshError(result.get("code") or "mesh_primary_unavailable")
         return result
 
+    @registry_operation
     async def refresh_registry_slot(self, number):
         peer = self.registry_primary()
         try:
@@ -112,10 +116,10 @@ class AccessMeshReplication:
         if result.get("namespace_id") != self.store.namespace_id:
             raise AccessMeshError("mesh_namespace_mismatch")
         await asyncio.to_thread(
-            self.store.apply_snapshot, result["slot"], authenticated_peer_id=peer.instance_id
+            self.store.install_registry_verification_keys, result["verification_keys"]
         )
         await asyncio.to_thread(
-            self.store.install_registry_verification_keys, result["verification_keys"]
+            self.store.apply_snapshot, result["slot"], authenticated_peer_id=peer.instance_id
         )
         await asyncio.to_thread(
             self.store.numbers.register, **result["claim"], source_peer_id=peer.instance_id
@@ -124,6 +128,95 @@ class AccessMeshReplication:
             await asyncio.to_thread(self.store.numbers.record_start, **row)
         for row in result["ends"]:
             await asyncio.to_thread(self.store.numbers.record_end, **row)
+        if self.store.registry_upgrade_pending:
+            from terminal_mcp.storage.access_mesh_registry_upgrade import accept_primary_completion
+
+            await asyncio.to_thread(accept_primary_completion, self.store, result["namespace_id"])
+
+    @registry_operation
+    async def consolidate_registry(self):
+        """One bounded, restartable import of every member's pre-unified registry."""
+        from terminal_mcp.storage.access_mesh_registry_upgrade import (
+            UPGRADE_TABLES,
+            complete_upgrade,
+            export_page,
+            merge_page,
+        )
+
+        if self.store.registry_authority_id != self.store.local_node_id:
+            raise AccessMeshError("mesh_not_primary")
+        async with self._upgrade_lock:
+            if not self.store.registry_upgrade_pending:
+                return
+            members = set(self.store.trusted_issuers)
+            if {peer.instance_id for peer in self.peers} != members - {self.store.local_node_id}:
+                raise AccessMeshError("mesh_registry_migrating")
+            namespace = self.store.namespace_id
+            # Persist the primary's own immutable migration input as well.
+            await asyncio.to_thread(
+                export_page, self.store, namespace_id=namespace, table=UPGRADE_TABLES[0], limit=1
+            )
+            for peer in sorted(self.peers, key=lambda item: item.instance_id):
+                for table in UPGRADE_TABLES:
+                    offset = 0
+                    while True:
+                        result = await self.request(
+                            peer,
+                            "registry/upgrade",
+                            {
+                                "namespace_id": namespace,
+                                "table": table,
+                                "after": offset,
+                                "limit": 20,
+                            },
+                        )
+                        if (
+                            result.get("ok") is not True
+                            or result.get("namespace_id") != namespace
+                            or result.get("table") != table
+                        ):
+                            raise AccessMeshError(
+                                result.get("code") or "access_mesh_invalid_snapshot"
+                            )
+                        await asyncio.to_thread(
+                            self.store.install_registry_verification_keys,
+                            result["verification_keys"],
+                        )
+                        await asyncio.to_thread(
+                            merge_page,
+                            self.store,
+                            table=table,
+                            rows=result["rows"],
+                            namespace_id=namespace,
+                            source_peer_id=peer.instance_id,
+                        )
+                        following = result.get("next_offset")
+                        if following is None:
+                            break
+                        if (
+                            type(following) is not int
+                            or following != offset + len(result["rows"])
+                            or following <= offset
+                        ):
+                            raise AccessMeshError("access_mesh_invalid_snapshot")
+                        offset = following
+            if members != set(self.store.trusted_issuers):
+                raise AccessMeshError("mesh_registry_migrating")
+            await asyncio.to_thread(complete_upgrade, self.store, member_ids=members)
+
+    async def _registry_ready(self):
+        if not self.store.registry_upgrade_pending:
+            return True
+        if self.store.registry_authority_id == self.store.local_node_id:
+            await self.consolidate_registry()
+        else:
+            from terminal_mcp.storage.access_mesh_registry_upgrade import accept_primary_completion
+
+            result = await self.request(self.registry_primary(), "registry/status", {})
+            if result.get("ok") is not True or result.get("ready") is not True:
+                return False
+            await asyncio.to_thread(accept_primary_completion, self.store, result["namespace_id"])
+        return True
 
     def apply_managed_fleet_config(self, managed_config) -> None:
         """Change only transport and active membership, never pinned Access auth.
@@ -218,7 +311,7 @@ class AccessMeshReplication:
             self._wake.set()
         if self.peers and (self._task is None or self._task.done()):
             try:
-                asyncio.get_running_loop().create_task(self.start())
+                asyncio.get_running_loop().create_task(self.start(), context=Context())
             except RuntimeError:
                 # Synchronous construction is followed by the explicit start.
                 pass
@@ -430,6 +523,7 @@ class AccessMeshReplication:
                 raise AccessMeshError("invalid_session_snapshot")
             cursor = following
 
+    @registry_operation
     async def request(self, peer, path: str, payload: dict) -> dict:
         if peer.instance_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
@@ -496,6 +590,8 @@ class AccessMeshReplication:
             self._last_snapshot_pass[peer.instance_id] = asyncio.get_running_loop().time()
 
     async def _deliver(self, peer) -> None:
+        if self.store.registry_authority_id != self.store.local_node_id:
+            return False
         pending = await asyncio.to_thread(
             self.store.pending_outbox, peer_node_id=peer.instance_id, limit=20
         )
@@ -553,6 +649,7 @@ class AccessMeshReplication:
             raise AccessMeshError(str(result.get("code") or "access_mesh_delivery_failed"))
         return True
 
+    @registry_operation
     async def sync_peer(self, peer) -> None:
         try:
             if not await self.verify_peer_proof(peer):
@@ -569,10 +666,11 @@ class AccessMeshReplication:
             ):
                 await self._snapshot(peer)
                 await self.sync_recipient_holds(peer)
-                await self.sync_numbers(peer)
-                await self.sync_starts(peer)
-                await self.sync_ends(peer)
-                await self.sync_incidents(peer)
+                if peer.instance_id == self.store.registry_authority_id:
+                    await self.sync_numbers(peer)
+                    await self.sync_starts(peer)
+                    await self.sync_ends(peer)
+                    await self.sync_incidents(peer)
                 # New number claims can merge already attached LogicalAgents.
                 # Materialize their effective local session promptly, rather
                 # than waiting for an unrelated write to make them reachable.
@@ -590,7 +688,21 @@ class AccessMeshReplication:
                 "reason": getattr(exc, "code", type(exc).__name__),
             }
 
+    @registry_operation
     async def tick(self) -> None:
+        if not self.peers:
+            return
+        try:
+            ready = await self._registry_ready()
+            if not ready:
+                raise AccessMeshError("mesh_registry_migrating")
+        except Exception as exc:
+            for peer in self.peers:
+                self.peer_health[peer.instance_id] = {
+                    "status": "degraded",
+                    "reason": getattr(exc, "code", "mesh_registry_migrating"),
+                }
+            return
         await asyncio.gather(*(self.sync_peer(peer) for peer in self.peers))
         if self.lifecycle_events is not None:
             await asyncio.gather(*(self.lifecycle_events.sync_peer(peer) for peer in self.peers))
@@ -609,7 +721,9 @@ class AccessMeshReplication:
         self._wake.clear()
         self._notify_loop = asyncio.get_running_loop()
         self.store.set_delivery_notifier(self._on_committed_event)
-        self._task = asyncio.create_task(self._loop(), name="access-mesh-event-delivery")
+        self._task = asyncio.create_task(
+            self._loop(), name="access-mesh-event-delivery", context=Context()
+        )
 
     async def stop(self) -> None:
         self._stop.set()
@@ -665,18 +779,31 @@ class AccessMeshReplication:
 
 def authenticate_access_mesh_peer(mesh, replication_auth, peer_id: str, authorization: str) -> str:
     """Use the server's current verified membership and existing peer credentials."""
+    if not getattr(mesh.store, "registry_mesh_id", None):
+        raise HTTPException(401, "invalid access mesh peer")
     peer = replication_auth.authenticate(peer_id, authorization)
     if peer is None or peer.instance_id not in mesh.store.trusted_issuers:
         raise HTTPException(401, "invalid access mesh peer")
     return peer.instance_id
 
 
-def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
+def namespace_dependency(mesh):
     async def same_namespace(x_terminal_mcp_mesh: str = Header(default="")):
-        if mesh.store.registry_mesh_id and x_terminal_mcp_mesh != mesh.store.namespace_id:
+        if not mesh.store.registry_mesh_id:
+            raise HTTPException(401, "invalid access mesh peer")
+        if x_terminal_mcp_mesh != mesh.store.namespace_id:
             raise HTTPException(409, "mesh_namespace_mismatch")
+        token = REGISTRY_NAMESPACE.set(x_terminal_mcp_mesh)
+        try:
+            yield
+        finally:
+            REGISTRY_NAMESPACE.reset(token)
 
-    router = APIRouter(dependencies=[Depends(same_namespace)])
+    return same_namespace
+
+
+def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
+    router = APIRouter(dependencies=[Depends(namespace_dependency(mesh))])
 
     def authenticated(peer_id: str, authorization: str) -> str:
         return authenticate_access_mesh_peer(mesh, replication_auth, peer_id, authorization)
@@ -697,6 +824,43 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
             return await mesh.accept_registry_request(payload, authenticated_peer_id=peer)
         except (AccessMeshError, TypeError) as exc:
             return {"ok": False, "code": getattr(exc, "code", "invalid_request")}
+
+    @router.post("/internal/fleet/access-mesh/registry/upgrade", include_in_schema=False)
+    async def registry_upgrade(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if peer != mesh.store.registry_authority_id:
+            raise HTTPException(403, "mesh_not_primary")
+        if set(payload) != {"namespace_id", "table", "after", "limit"}:
+            raise HTTPException(400, "invalid registry upgrade request")
+        from terminal_mcp.storage.access_mesh_registry_upgrade import export_page
+
+        try:
+            result = await asyncio.to_thread(export_page, mesh.store, **payload)
+            bounded(result)
+            return result
+        except AccessMeshError as exc:
+            return {"ok": False, "code": exc.code}
+
+    @router.post("/internal/fleet/access-mesh/registry/status", include_in_schema=False)
+    async def registry_status(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticated(x_terminal_mcp_peer, authorization)
+        if payload or not mesh.registry_authoritative:
+            raise HTTPException(400, "invalid registry status request")
+        await asyncio.to_thread(mesh.store.assert_registry_ready)
+        return {
+            "ok": True,
+            "ready": not mesh.store.registry_upgrade_pending,
+            "namespace_id": mesh.store.namespace_id,
+        }
 
     @router.post("/internal/fleet/access-mesh/registry/slot", include_in_schema=False)
     async def registry_slot(
@@ -897,8 +1061,8 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
             "hard_expires_at",
         }:
             raise HTTPException(400, "invalid number start")
-        if payload["issuer_id"] != peer:
-            raise HTTPException(400, "issuer does not match authenticated peer")
+        if peer != mesh.store.registry_authority_id:
+            raise HTTPException(400, "issuer does not match authenticated primary")
         try:
             return await asyncio.to_thread(
                 mesh.store.numbers.record_start, **payload, source_peer_id=peer
@@ -983,8 +1147,8 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         bounded(payload)
         if set(payload) != {"number", "cycle_key", "issuer_id", "slot_id", "event_id", "ended_at"}:
             raise HTTPException(400, "invalid number end")
-        if payload["issuer_id"] != peer:
-            raise HTTPException(400, "issuer does not match authenticated peer")
+        if peer != mesh.store.registry_authority_id:
+            raise HTTPException(400, "issuer does not match authenticated primary")
         try:
             return await asyncio.to_thread(mesh.store.numbers.record_end, **payload)
         except (AccessMeshError, ValueError, TypeError) as exc:

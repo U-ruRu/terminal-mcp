@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from terminal_mcp.application.access_mesh_messages import MAX_WIRE_BYTES
+from terminal_mcp.fleet.access_mesh import namespace_dependency
 
 
 def build_access_mesh_message_router(messages, replication_auth):
-    router = APIRouter()
+    router = APIRouter(dependencies=[Depends(namespace_dependency(messages.mesh))])
 
     @router.post("/internal/fleet/access-mesh/messages/{kind}", include_in_schema=False)
     async def peer_message(

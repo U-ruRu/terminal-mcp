@@ -18,6 +18,7 @@ from terminal_mcp.application.access_mesh_registry import (
 )
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
+from terminal_mcp.core.access_mesh_scope import registry_operation
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import (
     FINALIZATION_OPERATIONS,
@@ -107,7 +108,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             "parent": parent,
             "policy_source": source,
             "issuer_node_id": self.store.local_node_id,
-            "write_target": "access_defaults",
+            "write_target": "fleet_control" if parent["source"] == "mesh" else "access_defaults",
             "inheritance": {
                 "mode": "inherit" if current["inherit_policy"] else "override",
                 "source": "standalone" if source == "server" else source,
@@ -222,6 +223,10 @@ class AccessMeshApplication(AccessRegistryApplication):
                 mesh_id=managed_mesh_id,
                 authority_id=authority if managed_mesh_id else self.store.local_node_id,
             )
+            if len(self.store.trusted_issuers) == 1 and self.store.registry_upgrade_pending:
+                from terminal_mcp.storage.access_mesh_registry_upgrade import complete_upgrade
+
+                await asyncio.to_thread(complete_upgrade, self.store)
             current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
             self.defaults = SlotPolicy(**current["policy"])
 
@@ -283,6 +288,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         except Exception as exc:
             _LOG.warning("local MCP event notification failed: %s", type(exc).__name__)
 
+    @registry_operation
     async def attach(
         self,
         actor: ActorContext,
@@ -294,6 +300,8 @@ class AccessMeshApplication(AccessRegistryApplication):
         self.require_write(actor)
         await asyncio.to_thread(self.store.assert_registry_ready)
         if session_number is not None:
+            if self.registry_authoritative:
+                await asyncio.to_thread(self.store.assert_registry_available)
             if not self.registry_authoritative:
                 if self.replication is None:
                     raise AccessMeshError("mesh_primary_unavailable")
@@ -360,6 +368,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             "contract_version": actor.contract_version,
         }
 
+    @registry_operation
     async def update_intent(self, actor: ActorContext, intent: str, *, initial_only=False) -> dict:
         self.require_write(actor)
         if not isinstance(intent, str) or not intent.strip() or len(intent) > 1000:
@@ -459,6 +468,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             result["next_cursor"] = encode_cursor(scan.scanned_until, scope)
         return result
 
+    @registry_operation
     async def resolve(self, actor: ActorContext, operation: ManagedOperation) -> dict:
         if operation not in READ_OPERATIONS:
             self.require_write(actor)
@@ -560,6 +570,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     error = getattr(exc, "code", type(exc).__name__)
                 await asyncio.to_thread(self.store.finish_cleanup, job["job_id"], error=error)
 
+    @registry_operation
     async def tick(self) -> None:
         # A tick visits at most 50 slots. Keep failures until a whole scan,
         # including cleanup, has succeeded rather than clearing on a good page.
@@ -708,6 +719,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             **({"access_code": code} if code is not None else {}),
         }
 
+    @registry_operation
     async def issue(
         self,
         actor: ActorContext,
@@ -723,6 +735,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         self.require_write(actor)
         if not self.registry_authoritative:
             raise AccessMeshError("mesh_not_primary")
+        await asyncio.to_thread(self.store.assert_registry_available)
         if kind not in {"temporary", "persistent"}:
             raise AccessMeshError("invalid_mode")
         async with self._issuer_lock:
@@ -806,6 +819,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                         raise AccessMeshError("access_mesh_code_in_use") from None
             raise AccessMeshError("access_mesh_code_capacity")
 
+    @registry_operation
     async def change(
         self,
         actor: ActorContext,
@@ -824,6 +838,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         self.require_write(actor)
         if not self.registry_authoritative:
             raise AccessMeshError("mesh_not_primary")
+        await asyncio.to_thread(self.store.assert_registry_available)
         async with self._issuer_lock:
             slot = await asyncio.to_thread(self.store.registry_slot, slot_id)
             if slot is None:
@@ -954,6 +969,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                 _LOG.exception("Mesh session start propagation pending")
         return result
 
+    @registry_operation
     async def issuer_session(
         self, actor: ActorContext, *, action: str, mode=None, code=None
     ) -> dict:
@@ -1032,7 +1048,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             if action == "start" and mode == "temporary" and code is not None:
                 raise AccessMeshError("temporary_code_not_allowed")
             slot = (
-                await asyncio.to_thread(self.store.code_slot, self.store.local_node_id, code)
+                await asyncio.to_thread(self.store.registry_code_slot, code)
                 if code is not None
                 else await asyncio.to_thread(self.store.issuer_bound_slot, binding)
             )

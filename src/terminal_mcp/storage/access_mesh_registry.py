@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import secrets
 from contextlib import nullcontext
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
+from terminal_mcp.core.access_mesh_scope import assert_registry_scope
 
 REGISTRY_TABLES = (
     "access_mesh_slot_replicas",
@@ -28,7 +30,11 @@ REGISTRY_TABLES = (
 )
 # Command results and attribution remain local application data. Their journal
 # is deliberately retained when the local Access namespace is cleared.
-LOCAL_RETAINED_TABLES = {"access_mesh_registry_scope", "access_mesh_command_journal"}
+LOCAL_RETAINED_TABLES = {
+    "access_mesh_registry_scope",
+    "access_mesh_command_journal",
+    "access_mesh_migration_receipts",
+}
 
 
 class AccessRegistryStore:
@@ -37,11 +43,37 @@ class AccessRegistryStore:
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_registry_scope (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 namespace_id TEXT NOT NULL, authority_id TEXT NOT NULL,
-                mesh_id TEXT, transition_id TEXT
+                mesh_id TEXT, transition_id TEXT,
+                upgrade_pending INTEGER NOT NULL DEFAULT 0,
+                receipts_migrated INTEGER NOT NULL DEFAULT 0
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_migration_receipts (
+                name TEXT PRIMARY KEY, namespace_id TEXT NOT NULL,
+                completed_at TEXT NOT NULL, details_json TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_registry_upgrade_export (
+                namespace_id TEXT NOT NULL, table_name TEXT NOT NULL,
+                row_offset INTEGER NOT NULL, row_json TEXT NOT NULL,
+                PRIMARY KEY(namespace_id,table_name,row_offset)
+            )""")
+            columns = {r[1] for r in db.execute("PRAGMA table_info(access_mesh_registry_scope)")}
+            for column in ("upgrade_pending", "receipts_migrated"):
+                if column not in columns:
+                    db.execute(
+                        "ALTER TABLE access_mesh_registry_scope "
+                        f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                    )
+                    if column == "upgrade_pending":
+                        db.execute("UPDATE access_mesh_registry_scope SET upgrade_pending=1")
             db.execute(
-                "INSERT OR IGNORE INTO access_mesh_registry_scope VALUES(1,?,?,NULL,NULL)",
-                ("standalone-" + secrets.token_hex(16), self.local_node_id),
+                "INSERT OR IGNORE INTO access_mesh_registry_scope "
+                "(singleton,namespace_id,authority_id,mesh_id,transition_id,upgrade_pending) "
+                "VALUES(1,?,?,NULL,NULL,?)",
+                (
+                    "standalone-" + secrets.token_hex(16),
+                    self.local_node_id,
+                    int(getattr(self, "_pre_unified_registry", False)),
+                ),
             )
         self._load_registry_scope()
 
@@ -57,11 +89,58 @@ class AccessRegistryStore:
     def assert_registry_ready(self, db=None):
         # Core-only projections have no native topology store.
         with self._connect() if db is None else nullcontext(db) as connection:
-            row = connection.execute(
-                "SELECT transition_id FROM access_mesh_registry_scope WHERE singleton=1"
-            ).fetchone()
-            if row and row[0]:
-                raise AccessMeshError("mesh_transition_pending")
+            assert_registry_scope(connection)
+
+    def assert_registry_writer(self, db, authenticated_peer_id):
+        row = db.execute(
+            "SELECT mesh_id,authority_id FROM access_mesh_registry_scope WHERE singleton=1"
+        ).fetchone()
+        if row and row[0] and row[1] != authenticated_peer_id:
+            raise AccessMeshError("access_mesh_untrusted_issuer")
+
+    def registry_verification_keys(self):
+        keys = tuple(
+            dict.fromkeys(
+                (
+                    self._proof_key,
+                    *([self._managed_proof_key] if self._managed_proof_key else []),
+                    *self._local_proof_history,
+                )
+            )
+        )
+        return [base64.b64encode(key).decode() for key in keys]
+
+    def registry_issuers(self):
+        with self._connect() as db:
+            stored = {
+                row[0]
+                for row in db.execute("SELECT DISTINCT issuer_id FROM access_mesh_slot_replicas")
+            }
+        return frozenset(stored | self.trusted_issuers)
+
+    def registry_code_slot(self, code):
+        found = [
+            slot
+            for issuer in self.registry_issuers()
+            if (slot := self.code_slot(issuer, code)) is not None
+        ]
+        if len(found) > 1:
+            raise AccessMeshError("access_mesh_ambiguous_code")
+        return found[0] if found else None
+
+    @property
+    def registry_upgrade_pending(self):
+        with self._connect() as db:
+            return bool(
+                db.execute(
+                    "SELECT upgrade_pending FROM access_mesh_registry_scope WHERE singleton=1"
+                ).fetchone()[0]
+            )
+
+    def assert_registry_available(self):
+        self.assert_registry_ready()
+        if self.registry_mesh_id and self.registry_upgrade_pending:
+            raise AccessMeshError("mesh_registry_migrating")
 
     def install_registry_scope(self, *, mesh_id, authority_id):
         """Install verified membership; the first upgrade adopts existing data.
@@ -138,6 +217,8 @@ class AccessRegistryStore:
                 raise AccessMeshError("mesh_transition_pending")
             if current == operation_id:
                 return
+            if self.registry_mesh_id and self.registry_upgrade_pending:
+                raise AccessMeshError("mesh_registry_migrating")
             summary = self.local_active_work_summary(_connection=db)
             if any(
                 summary[k]
@@ -157,8 +238,127 @@ class AccessRegistryStore:
                 (operation_id,),
             )
 
+    def _retire_native_authority_tx(self, db, tables):
+        if "logical_agents" not in tables:
+            return
+        namespace = db.execute(
+            "SELECT namespace_id FROM access_mesh_registry_scope WHERE singleton=1"
+        ).fetchone()[0]
+        stamp = self.clock().isoformat()
+        owned = "SELECT logical_agent_id FROM access_mesh_native_owners"
+        db.execute("""CREATE TABLE IF NOT EXISTS mesh_identity_history (
+            namespace_id TEXT NOT NULL, logical_agent_id TEXT NOT NULL,
+            issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL,
+            PRIMARY KEY(namespace_id,logical_agent_id)
+        )""")
+        db.execute(
+            "INSERT OR IGNORE INTO mesh_identity_history "
+            "SELECT ?,logical_agent_id,issuer_id,slot_id FROM access_mesh_native_owners",
+            (namespace,),
+        )
+        db.execute(
+            "UPDATE logical_agents SET state='deleted',deleted_at=COALESCE(deleted_at,?),"
+            "updated_at=?,tombstone_reason='mesh_namespace_departed' "
+            f"WHERE logical_agent_id IN ({owned})",
+            (stamp, stamp),
+        )
+        if "logical_agent_work_sessions" in tables:
+            db.execute(
+                "UPDATE logical_agent_work_sessions SET state='ended',"
+                "ended_at=COALESCE(ended_at,?),"
+                "end_reason='mesh_namespace_departed' "
+                f"WHERE logical_agent_id IN ({owned}) AND state IN ('active','stopping')",
+                (stamp,),
+            )
+        for name, column in (
+            ("logical_agent_node_attachments", "revoked_at"),
+            ("logical_agent_arms", "revoked_at"),
+            ("logical_agent_rearms", "cancelled_at"),
+            ("persistent_command_permits", "revoked_at"),
+        ):
+            if name in tables:
+                db.execute(
+                    f'UPDATE "{name}" SET {column}=COALESCE({column},?) '
+                    f"WHERE logical_agent_id IN ({owned})",
+                    (stamp,),
+                )
+        if "logical_agent_selectors" in tables:
+            db.execute(
+                "UPDATE logical_agent_selectors SET retired_at=COALESCE(retired_at,?),"
+                f"tombstoned_at=COALESCE(tombstoned_at,?) WHERE logical_agent_id IN ({owned})",
+                (stamp, stamp),
+            )
+        if "work_claims" in tables:
+            db.execute(
+                "UPDATE work_claims SET released_at=? WHERE released_at IS NULL "
+                f"AND owner_kind='logical_agent' AND owner_id IN ({owned})",
+                (stamp,),
+            )
+        for name in (
+            "work_claim_leases",
+            "persistent_attachment_presence",
+            "mcp_event_local_attached",
+        ):
+            if name in tables:
+                db.execute(f'DELETE FROM "{name}" WHERE logical_agent_id IN ({owned})')
+        if "mcp_event_subscriptions" in tables:
+            bindings = (
+                f" OR id IN (SELECT subscription_id FROM mcp_event_message_bindings "
+                f"WHERE recipient_agent_id IN ({owned}))"
+                if "mcp_event_message_bindings" in tables
+                else ""
+            )
+            subscriptions = (
+                f"SELECT id FROM mcp_event_subscriptions WHERE subscriber_agent_id IN ({owned})"
+                + bindings
+            )
+            db.execute("CREATE TEMP TABLE departing_subscriptions(id TEXT PRIMARY KEY)")
+            db.execute("INSERT INTO departing_subscriptions " + subscriptions)
+            for name in ("mcp_event_deliveries", "mcp_event_message_bindings"):
+                if name in tables:
+                    db.execute(
+                        f'DELETE FROM "{name}" WHERE subscription_id IN '
+                        "(SELECT id FROM departing_subscriptions)"
+                    )
+            db.execute(
+                "DELETE FROM mcp_event_subscriptions WHERE id IN "
+                "(SELECT id FROM departing_subscriptions)"
+            )
+
     def _clear_local_namespace_tx(self, db):
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self._retire_native_authority_tx(db, tables)
+        if "access_mesh_messages" in tables:
+            db.execute("""CREATE TABLE IF NOT EXISTS mesh_message_history (
+                namespace_id TEXT NOT NULL, message_hash TEXT NOT NULL,
+                content_json TEXT NOT NULL, PRIMARY KEY(namespace_id,message_hash)
+            )""")
+            namespace = db.execute(
+                "SELECT namespace_id FROM access_mesh_registry_scope WHERE singleton=1"
+            ).fetchone()[0]
+            content_fields = {
+                "sender_name",
+                "target",
+                "text",
+                "created_at",
+                "namespace",
+                "task_id",
+                "reply_to",
+            }
+            for row in db.execute(
+                "SELECT message_hash,wire_json FROM access_mesh_messages"
+            ).fetchall():
+                wire = json.loads(row["wire_json"])
+                content = {key: wire[key] for key in content_fields if key in wire}
+                db.execute(
+                    "INSERT OR IGNORE INTO mesh_message_history VALUES(?,?,?)",
+                    (namespace, row["message_hash"], json.dumps(content, sort_keys=True)),
+                )
+                for name in ("coordination_message_recipients", "coordination_messages"):
+                    if name in tables:
+                        db.execute(
+                            f'DELETE FROM "{name}" WHERE message_hash=?', (row["message_hash"],)
+                        )
         # Delete FK dependants before the slot projection. This is a local
         # erasure, never SlotDeleted/SessionEnded or an outbound revoke event.
         removable = sorted(
@@ -190,7 +390,7 @@ class AccessRegistryStore:
                 self._clear_local_namespace_tx(db)
             db.execute(
                 "UPDATE access_mesh_registry_scope SET namespace_id=?,authority_id=?,"
-                "mesh_id=?,transition_id=NULL "
+                "mesh_id=?,transition_id=NULL,upgrade_pending=0 "
                 "WHERE singleton=1",
                 (namespace_id, authority_id, mesh_id),
             )
@@ -240,11 +440,11 @@ class AccessRegistryStore:
             )
 
     def registry_slot_wire(self, number):
-        self.assert_registry_ready()
-        winner = self.numbers.winner(number)
-        if winner is None:
+        self.assert_registry_available()
+        slot = self.registry_code_slot(number)
+        if slot is None:
             raise AccessMeshError("invalid_session_number")
-        issuer, slot_id = winner["issuer_id"], winner["slot_id"]
+        issuer, slot_id = slot.issuer_id, slot.slot_id
         with self._connect() as db:
             row = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
@@ -271,14 +471,11 @@ class AccessRegistryStore:
                         f"SELECT * FROM {table} WHERE issuer_id=? AND slot_id=?", (issuer, slot_id)
                     )
                 ]
-        keys = tuple(
-            dict.fromkeys((self._managed_proof_key or self._proof_key, *self._local_proof_history))
-        )
         return {
             "ok": True,
             "namespace_id": self.namespace_id,
             **result,
-            "verification_keys": [base64.b64encode(k).decode() for k in keys],
+            "verification_keys": self.registry_verification_keys(),
         }
 
     def install_registry_verification_keys(self, encoded):
@@ -322,15 +519,12 @@ class AccessRegistryStore:
                     .decrypt(sealed[:12], sealed[12:], row["request_key"].encode())
                     .decode()
                 )
-        proofs = list(
-            dict.fromkeys((self._managed_proof_key or self._proof_key, *self._local_proof_history))
-        )
         return {
             "version": 1,
             "namespace_id": self.namespace_id,
             "mesh_id": self.registry_mesh_id,
             "tables": tables,
-            "verification_keys": [base64.b64encode(k).decode() for k in proofs],
+            "verification_keys": self.registry_verification_keys(),
         }
 
     def import_registry(self, snapshot, *, expected_namespace_id=None):
@@ -378,6 +572,9 @@ class AccessRegistryStore:
                         f'{verb} INTO "{table}" ({",".join(columns)}) VALUES ({placeholders})',
                         [row[k] for k in columns],
                     )
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='logical_agents'").fetchone():
+                for row in db.execute("SELECT * FROM access_mesh_slot_replicas").fetchall():
+                    self._native_slot(db, self._snapshot(row), self.clock().isoformat())
             for row in attachments:
                 exists = db.execute(
                     "SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",

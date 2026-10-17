@@ -55,6 +55,10 @@ async def node(tmp_path, name, other, routes, client, *, proof_key=KEY):
     store = AccessMeshStore(
         path, local_node_id=name, trusted_issuers=frozenset({name, other}), proof_key=proof_key
     )
+    # A clean Mesh creation commits an empty registration namespace.
+    from terminal_mcp.storage.access_mesh_registry_upgrade import complete_upgrade
+
+    complete_upgrade(store)
     store.install_registry_scope(mesh_id="fixture-mesh", authority_id="firstbyte")
     mesh = AccessMeshApplication(
         store, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0

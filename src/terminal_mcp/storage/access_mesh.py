@@ -16,6 +16,7 @@ import sqlite3
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -71,6 +72,18 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         upgrade_defaults: SlotPolicy | None = None,
         **kwargs,
     ):
+        database_path = args[0] if args else kwargs.get("database_path")
+        self._pre_unified_registry = False
+        if database_path is not None and Path(database_path).is_file():
+            with sqlite3.connect(database_path) as previous:
+                tables = {
+                    r[0]
+                    for r in previous.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                }
+                self._pre_unified_registry = (
+                    bool(tables & {"access_mesh_slot_replicas", "logical_agents"})
+                    and "access_mesh_registry_scope" not in tables
+                )
         self._upgrade_defaults = upgrade_defaults
         self.clock = clock or (lambda: datetime.now(UTC))
         self._delivery_notifier = None
@@ -95,6 +108,9 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
 
         self.recipient_holds = MeshRecipientHolds(self)
         self.initialize_registry()
+        from terminal_mcp.storage.access_mesh_registry_upgrade import migrate_receipt_kinds
+
+        migrate_receipt_kinds(self)
 
     def _archive_cipher(self):
         key = hmac.new(
@@ -350,10 +366,27 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             "SELECT issuer_id,slot_id FROM access_mesh_native_owners WHERE logical_agent_id=?",
             (slot.logical_agent_id,),
         ).fetchone()
+        returning = False
+        if (
+            existing
+            and owner is None
+            and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='mesh_identity_history'"
+            ).fetchone()
+        ):
+            returning = (
+                db.execute(
+                    "SELECT 1 FROM mesh_identity_history WHERE namespace_id=? "
+                    "AND logical_agent_id=? "
+                    "AND issuer_id=? AND slot_id=?",
+                    (self.namespace_id, slot.logical_agent_id, slot.issuer_id, slot.slot_id),
+                ).fetchone()
+                is not None
+            )
         if (
             conflicting
             or (existing and existing[0] != self.local_node_id)
-            or (existing and owner is None)
+            or (existing and owner is None and not returning)
             or (owner and tuple(owner) != (slot.issuer_id, slot.slot_id))
         ):
             raise AccessMeshError("access_mesh_identity_conflict")
@@ -377,6 +410,13 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 stamp,
             ),
         )
+        if returning and slot.state == "active":
+            db.execute(
+                "UPDATE logical_agents SET state='armed',deleted_at=NULL,"
+                "tombstone_reason=NULL,updated_at=? "
+                "WHERE logical_agent_id=?",
+                (stamp, slot.logical_agent_id),
+            )
         if slot.state in {"deleted", "suspended"}:
             db.execute(
                 "UPDATE logical_agents SET state=?,updated_at=?,deleted_at=? "
@@ -715,6 +755,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
     def save_receipt(self, receipt):
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.assert_registry_ready(db)
             self._save_receipt_tx(db, receipt)
 
     def receipt(self, request_key: str, fingerprint: str) -> dict | None:
@@ -810,6 +851,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         """
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.assert_registry_ready(db)
             row = db.execute(
                 "SELECT current_intent,intent_updated_at,intent_warned_at,work_session_id "
                 "FROM access_mesh_local_sessions WHERE issuer_id=? AND slot_id=?",
@@ -846,6 +888,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         stamp = _text(now)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.assert_registry_ready(db)
             if initial_only:
                 existing = db.execute(
                     "SELECT intent_updated_at FROM access_mesh_local_sessions "
@@ -1103,7 +1146,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         self.numbers.validate(code)
         found = []
         with self._connect() as db:
-            for issuer in sorted(self.trusted_issuers):
+            for issuer in sorted(self.registry_issuers()):
                 # Historic LOCAL slots may have been issued before the Mesh
                 # authority key rotated. Never restore remote issuer proofs.
                 if (
@@ -1629,6 +1672,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.assert_registry_ready(db)
+            self.assert_registry_writer(db, authenticated_peer_id)
             old = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),
