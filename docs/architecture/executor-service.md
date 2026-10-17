@@ -20,7 +20,7 @@ only after a refused connection and inode revalidation. Use systemd
 `KillMode=control-group` so an executor crash also kills descendants before restart.
 
 The only listener is AF_UNIX. Linux SO_PEERCRED enforces an explicit UID allowlist.
-The executor has no public MCP, HTTP, OAuth, Console or Fleet listener, imports no
+The executor has no public MCP, HTTP, OAuth, Console or Mesh listener, imports no
 repository, and neither claims durable queues nor writes authoritative command data.
 JSON frames are versioned, limited to 1 MiB and checked against operation-specific
 fields. Read payloads are at most 65536 bytes before base64 encoding. The service
@@ -77,5 +77,5 @@ ExecutionPort, queue, output and finalization suites remain required regressions
 
 Architecture D must validate the exact candidate on approved test nodes, including
 nonroot API/root executor permissions, unit cgroup cleanup, installation, recovery
-ordering and rollback. The Fleet-control database integrity gate remains mandatory
+ordering and rollback. The Mesh control database integrity gate remains mandatory
 for topology cutover. A source/unit-test pass is not a production-cutover claim.

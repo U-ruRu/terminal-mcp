@@ -49,14 +49,13 @@ def _unbounded(schema: object, path: str = "$", *, covered: bool = False) -> lis
 
 def test_application_command_model_rejects_oversized_command():
     with pytest.raises(ValidationError):
-        CmdRunRequest(action="run", code="1234", command="x" * (MAX_COMMAND_CHARS + 1))
+        CmdRunRequest(action="run", command="x" * (MAX_COMMAND_CHARS + 1))
 
 
 def test_task_extension_json_rejects_oversized_serialized_payload():
     with pytest.raises(ValidationError, match="evidence exceeds"):
         TaskReviewRequest(
             action="review",
-            code="1234",
             namespace="n",
             task_id="t",
             dimensions=["A"],

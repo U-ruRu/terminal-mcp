@@ -10,6 +10,16 @@ from terminal_mcp.fleet.protocol import MAX_RECENT_TERMINAL_COMMANDS, validate_p
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
+PROJECTION_CACHE_TABLES = (
+    "projection_sources",
+    "projection_entities",
+    "projection_events",
+    "projection_runtime_overlay",
+    "projection_recovery_scopes",
+    "projection_recovery_entities",
+    "projection_scope_status",
+)
+
 
 class FleetProjectionError(RuntimeError):
     pass
@@ -194,17 +204,58 @@ class FleetProjectionStore:
                         "VALUES(1,?,?,?,?,1,0,?)",
                         (*expected, stamp),
                     )
-                elif tuple(meta)[1:] != expected[1:]:
+                elif tuple(meta)[:2] != expected[:2]:
                     raise FleetProjectionError("fleet_projection identity does not match metadata")
-                elif meta[0] != self.fleet_id:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        if meta is not None:
+            # Topology can change this derived cache role. A stale bootstrap
+            # owner never reverses a completed promotion on restart.
+            self.owner_node_id = validate_protocol_id(meta[2], "owner_node_id")
+            self.role = str(meta[3])
+
+    async def adopt_local_cache(self) -> bool:
+        """Rebuild an autonomous cache without importing a former owner's rows."""
+        stamp = utc_text()
+        async with self._connect("fleet_projection_adopt_local") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                meta = await (
                     await db.execute(
-                        "UPDATE projection_meta SET fleet_id=?,updated_at=? WHERE singleton=1",
-                        (self.fleet_id, stamp),
+                        "SELECT fleet_id,node_id,owner_node_id,role "
+                        "FROM projection_meta WHERE singleton=1"
+                    )
+                ).fetchone()
+                if meta is None or tuple(meta)[:2] != (self.fleet_id, self.node_id):
+                    raise FleetProjectionError("fleet_projection identity does not match metadata")
+                changed = meta[2] != self.node_id or meta[3] != "owner"
+                for table in PROJECTION_CACHE_TABLES:
+                    if changed:
+                        break
+                    changed = await (
+                        await db.execute(
+                            f"SELECT 1 FROM {table} WHERE source_node_id<>? LIMIT 1",
+                            (self.node_id,),
+                        )
+                    ).fetchone() is not None
+                if changed:
+                    for table in PROJECTION_CACHE_TABLES:
+                        await db.execute(f"DELETE FROM {table}")
+                    await db.execute(
+                        "UPDATE projection_meta SET role='owner',owner_node_id=?,"
+                        "projection_epoch=projection_epoch+1,projection_seq=0,updated_at=? "
+                        "WHERE singleton=1",
+                        (self.node_id, stamp),
                     )
                 await db.commit()
             except Exception:
                 await db.rollback()
                 raise
+        self.owner_node_id = self.node_id
+        self.role = "owner"
+        return changed
 
     async def meta(self) -> dict:
         async with self._connect("fleet_projection_meta") as db:

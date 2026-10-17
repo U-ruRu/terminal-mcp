@@ -1616,21 +1616,6 @@
                   "title": "Claim Intent",
                   "type": "string"
                 },
-                "code": {
-                  "anyOf": [
-                    {
-                      "maxLength": 4,
-                      "minLength": 4,
-                      "pattern": "^[0-9]{4}$",
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "default": null,
-                  "title": "Code"
-                },
                 "expected_revision": {
                   "anyOf": [
                     {
@@ -2159,21 +2144,6 @@
                   "const": "release",
                   "title": "Action",
                   "type": "string"
-                },
-                "code": {
-                  "anyOf": [
-                    {
-                      "maxLength": 4,
-                      "minLength": 4,
-                      "pattern": "^[0-9]{4}$",
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "default": null,
-                  "title": "Code"
                 },
                 "expected_revision": {
                   "anyOf": [
@@ -3159,7 +3129,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.",
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; messages expire 24 hours after created_at. Writes use an attached local work cycle.",
       "inputSchema": {
         "properties": {
           "action": {
@@ -3199,7 +3169,7 @@
           },
           "scope": {
             "default": "local",
-            "description": "local | fleet"
+            "description": "local"
           },
           "target": {
             "default": null,

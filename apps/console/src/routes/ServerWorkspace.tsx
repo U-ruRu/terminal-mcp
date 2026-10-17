@@ -7,7 +7,7 @@ import { FeedbackState } from '../components/UiPrimitives'
 import type { ManagedFleetControlReadModel } from '../api/models'
 import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import { isFleetControlRevisionRegression, loadCachedFleetControlForProfile, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
-import type { FleetReadModel } from '../fleet/readModel'
+import { hasCurrentAgentSession, type FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
@@ -91,7 +91,7 @@ export function ServerWorkspace({
   if (!server) return <Navigate to="/" replace />
 
   const snapshot = instance?.runtime.realtime?.snapshot
-  const agents = snapshot?.agents.filter((agent) => agent.status === 'active') ?? []
+  const agents = snapshot?.agents.filter(hasCurrentAgentSession) ?? []
   const tasks = snapshot?.tasks ?? []
   const control = controlState.instanceId === server.instanceId ? controlState.control : undefined
   const localNode = control?.managed ? control.nodes.find((node) => node.nodeId === control.nodeId && node.state !== 'detached') : undefined

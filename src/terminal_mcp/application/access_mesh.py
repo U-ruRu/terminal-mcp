@@ -34,7 +34,6 @@ _LOG = logging.getLogger(__name__)
 _INTENT_CALL: ContextVar[dict | None] = ContextVar("mesh_intent_call", default=None)
 _INTENT_SAFE = READ_OPERATIONS | frozenset(
     {
-        ManagedOperation.SESSION_END,
         ManagedOperation.COMMAND_CANCEL,
         ManagedOperation.COMMAND_RECOVERY,
         ManagedOperation.TASK_RELEASE,
@@ -439,6 +438,7 @@ class AccessMeshApplication(AccessRegistryApplication):
 
     @registry_operation
     async def resolve(self, actor: ActorContext, operation: ManagedOperation) -> dict:
+        await asyncio.to_thread(self.store.assert_registry_available)
         if operation not in READ_OPERATIONS:
             self.require_write(actor)
         slot = await asyncio.to_thread(self.store.attached_slot, self.connection_key(actor))
@@ -609,15 +609,24 @@ class AccessMeshApplication(AccessRegistryApplication):
             self._maintenance_snapshot = signature
         await self.tick()
 
+    def registry_readiness(self) -> dict:
+        """Read durable activation fences without doing migration or peer I/O."""
+        return self.store.registry_readiness()
+
     async def health_components(self) -> dict:
         pending = await asyncio.to_thread(self.store.pending_cleanup, limit=1)
+        registry = await asyncio.to_thread(self.registry_readiness)
         running = self._task is not None and not self._task.done()
         status = (
-            "failed" if not running else "degraded" if pending or self.last_error else "healthy"
+            "failed" if not running
+            else "degraded" if pending or self.last_error or not registry["ready"]
+            else "healthy"
         )
         reason = (
             "lifecycle_worker_stopped"
             if not running
+            else registry["reason"]
+            if not registry["ready"]
             else "cleanup_pending"
             if pending
             else self.last_error

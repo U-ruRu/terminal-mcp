@@ -185,19 +185,19 @@
     "coordinator": {
       "after": {
         "component_byte_shares": {
-          "descriptions": 0.931588,
-          "input_schemas": 0.005625,
-          "output_schemas": 0.005625
+          "descriptions": 0.931086,
+          "input_schemas": 0.005666,
+          "output_schemas": 0.005666
         },
         "component_utf8_bytes": {
-          "descriptions": 22523,
+          "descriptions": 22347,
           "input_schemas": 136,
           "output_schemas": 136
         },
         "serialized_tools_list": {
-          "characters": 24175,
-          "tokens": 5597,
-          "utf8_bytes": 24177
+          "characters": 23999,
+          "tokens": 5567,
+          "utf8_bytes": 24001
         },
         "tools": {
           "agent_observe": {
@@ -241,11 +241,11 @@
             "utf8_bytes": 1617
           },
           "message": {
-            "characters": 4262,
+            "characters": 4086,
             "description": {
-              "characters": 4059,
-              "tokens": 944,
-              "utf8_bytes": 4061
+              "characters": 3883,
+              "tokens": 914,
+              "utf8_bytes": 3885
             },
             "input_schema": {
               "characters": 17,
@@ -257,8 +257,8 @@
               "tokens": 5,
               "utf8_bytes": 17
             },
-            "tokens": 990,
-            "utf8_bytes": 4264
+            "tokens": 960,
+            "utf8_bytes": 4088
           },
           "session": {
             "characters": 2040,
@@ -364,19 +364,19 @@
       },
       "before": {
         "component_byte_shares": {
-          "descriptions": 0.065905,
-          "input_schemas": 0.788223,
-          "output_schemas": 0.11417
+          "descriptions": 0.064251,
+          "input_schemas": 0.788621,
+          "output_schemas": 0.115152
         },
         "component_utf8_bytes": {
-          "descriptions": 2873,
-          "input_schemas": 34361,
+          "descriptions": 2777,
+          "input_schemas": 34085,
           "output_schemas": 4977
         },
         "serialized_tools_list": {
-          "characters": 43593,
-          "tokens": 10553,
-          "utf8_bytes": 43593
+          "characters": 43221,
+          "tokens": 10452,
+          "utf8_bytes": 43221
         },
         "tools": {
           "agent_observe": {
@@ -420,24 +420,24 @@
             "utf8_bytes": 1449
           },
           "message": {
-            "characters": 2964,
+            "characters": 2860,
             "description": {
-              "characters": 322,
-              "tokens": 62,
-              "utf8_bytes": 322
+              "characters": 226,
+              "tokens": 45,
+              "utf8_bytes": 226
             },
             "input_schema": {
-              "characters": 1677,
-              "tokens": 396,
-              "utf8_bytes": 1677
+              "characters": 1669,
+              "tokens": 394,
+              "utf8_bytes": 1669
             },
             "output_schema": {
               "characters": 796,
               "tokens": 187,
               "utf8_bytes": 796
             },
-            "tokens": 682,
-            "utf8_bytes": 2964
+            "tokens": 663,
+            "utf8_bytes": 2860
           },
           "session": {
             "characters": 2357,
@@ -520,45 +520,45 @@
             "utf8_bytes": 1560
           },
           "task_manage": {
-            "characters": 30697,
+            "characters": 30429,
             "description": {
               "characters": 365,
               "tokens": 73,
               "utf8_bytes": 365
             },
             "input_schema": {
-              "characters": 29520,
-              "tokens": 7418,
-              "utf8_bytes": 29520
+              "characters": 29252,
+              "tokens": 7336,
+              "utf8_bytes": 29252
             },
             "output_schema": {
               "characters": 639,
               "tokens": 149,
               "utf8_bytes": 639
             },
-            "tokens": 7678,
-            "utf8_bytes": 30697
+            "tokens": 7596,
+            "utf8_bytes": 30429
           }
         }
       },
       "delta": {
         "characters": {
-          "after": 24175,
-          "before": 43593,
-          "change_pct": -44.544,
-          "delta": -19418
+          "after": 23999,
+          "before": 43221,
+          "change_pct": -44.474,
+          "delta": -19222
         },
         "tokens": {
-          "after": 5597,
-          "before": 10553,
-          "change_pct": -46.963,
-          "delta": -4956
+          "after": 5567,
+          "before": 10452,
+          "change_pct": -46.737,
+          "delta": -4885
         },
         "utf8_bytes": {
-          "after": 24177,
-          "before": 43593,
-          "change_pct": -44.539,
-          "delta": -19416
+          "after": 24001,
+          "before": 43221,
+          "change_pct": -44.469,
+          "delta": -19220
         }
       },
       "per_tool_delta": {
@@ -604,22 +604,22 @@
         },
         "message": {
           "characters": {
-            "after": 4262,
-            "before": 2964,
-            "change_pct": 43.792,
-            "delta": 1298
+            "after": 4086,
+            "before": 2860,
+            "change_pct": 42.867,
+            "delta": 1226
           },
           "tokens": {
-            "after": 990,
-            "before": 682,
-            "change_pct": 45.161,
-            "delta": 308
+            "after": 960,
+            "before": 663,
+            "change_pct": 44.796,
+            "delta": 297
           },
           "utf8_bytes": {
-            "after": 4264,
-            "before": 2964,
-            "change_pct": 43.86,
-            "delta": 1300
+            "after": 4088,
+            "before": 2860,
+            "change_pct": 42.937,
+            "delta": 1228
           }
         },
         "session": {
@@ -705,21 +705,21 @@
         "task_manage": {
           "characters": {
             "after": 9884,
-            "before": 30697,
-            "change_pct": -67.801,
-            "delta": -20813
+            "before": 30429,
+            "change_pct": -67.518,
+            "delta": -20545
           },
           "tokens": {
             "after": 2312,
-            "before": 7678,
-            "change_pct": -69.888,
-            "delta": -5366
+            "before": 7596,
+            "change_pct": -69.563,
+            "delta": -5284
           },
           "utf8_bytes": {
             "after": 9884,
-            "before": 30697,
-            "change_pct": -67.801,
-            "delta": -20813
+            "before": 30429,
+            "change_pct": -67.518,
+            "delta": -20545
           }
         }
       }
@@ -727,19 +727,19 @@
     "executor": {
       "after": {
         "component_byte_shares": {
-          "descriptions": 0.904731,
-          "input_schemas": 0.007771,
-          "output_schemas": 0.007771
+          "descriptions": 0.903954,
+          "input_schemas": 0.007835,
+          "output_schemas": 0.007835
         },
         "component_utf8_bytes": {
-          "descriptions": 19791,
+          "descriptions": 19614,
           "input_schemas": 170,
           "output_schemas": 170
         },
         "serialized_tools_list": {
-          "characters": 21873,
-          "tokens": 5034,
-          "utf8_bytes": 21875
+          "characters": 21696,
+          "tokens": 5004,
+          "utf8_bytes": 21698
         },
         "tools": {
           "command_cancel": {
@@ -783,11 +783,11 @@
             "utf8_bytes": 1672
           },
           "command_recovery": {
-            "characters": 2339,
+            "characters": 2338,
             "description": {
-              "characters": 2128,
+              "characters": 2127,
               "tokens": 503,
-              "utf8_bytes": 2128
+              "utf8_bytes": 2127
             },
             "input_schema": {
               "characters": 17,
@@ -800,7 +800,7 @@
               "utf8_bytes": 17
             },
             "tokens": 550,
-            "utf8_bytes": 2339
+            "utf8_bytes": 2338
           },
           "command_run": {
             "characters": 1522,
@@ -823,11 +823,11 @@
             "utf8_bytes": 1522
           },
           "message": {
-            "characters": 4262,
+            "characters": 4086,
             "description": {
-              "characters": 4059,
-              "tokens": 944,
-              "utf8_bytes": 4061
+              "characters": 3883,
+              "tokens": 914,
+              "utf8_bytes": 3885
             },
             "input_schema": {
               "characters": 17,
@@ -839,8 +839,8 @@
               "tokens": 5,
               "utf8_bytes": 17
             },
-            "tokens": 990,
-            "utf8_bytes": 4264
+            "tokens": 960,
+            "utf8_bytes": 4088
           },
           "session": {
             "characters": 2040,
@@ -946,19 +946,19 @@
       },
       "before": {
         "component_byte_shares": {
-          "descriptions": 0.144969,
-          "input_schemas": 0.338369,
-          "output_schemas": 0.421543
+          "descriptions": 0.140483,
+          "input_schemas": 0.339879,
+          "output_schemas": 0.423971
         },
         "component_utf8_bytes": {
-          "descriptions": 2658,
-          "input_schemas": 6204,
+          "descriptions": 2561,
+          "input_schemas": 6196,
           "output_schemas": 7729
         },
         "serialized_tools_list": {
-          "characters": 18335,
-          "tokens": 4178,
-          "utf8_bytes": 18335
+          "characters": 18230,
+          "tokens": 4159,
+          "utf8_bytes": 18230
         },
         "tools": {
           "command_cancel": {
@@ -1002,11 +1002,11 @@
             "utf8_bytes": 2041
           },
           "command_recovery": {
-            "characters": 1826,
+            "characters": 1825,
             "description": {
-              "characters": 120,
+              "characters": 119,
               "tokens": 23,
-              "utf8_bytes": 120
+              "utf8_bytes": 119
             },
             "input_schema": {
               "characters": 233,
@@ -1019,7 +1019,7 @@
               "utf8_bytes": 1296
             },
             "tokens": 424,
-            "utf8_bytes": 1826
+            "utf8_bytes": 1825
           },
           "command_run": {
             "characters": 1366,
@@ -1042,24 +1042,24 @@
             "utf8_bytes": 1366
           },
           "message": {
-            "characters": 2964,
+            "characters": 2860,
             "description": {
-              "characters": 322,
-              "tokens": 62,
-              "utf8_bytes": 322
+              "characters": 226,
+              "tokens": 45,
+              "utf8_bytes": 226
             },
             "input_schema": {
-              "characters": 1677,
-              "tokens": 396,
-              "utf8_bytes": 1677
+              "characters": 1669,
+              "tokens": 394,
+              "utf8_bytes": 1669
             },
             "output_schema": {
               "characters": 796,
               "tokens": 187,
               "utf8_bytes": 796
             },
-            "tokens": 682,
-            "utf8_bytes": 2964
+            "tokens": 663,
+            "utf8_bytes": 2860
           },
           "session": {
             "characters": 2357,
@@ -1165,22 +1165,22 @@
       },
       "delta": {
         "characters": {
-          "after": 21873,
-          "before": 18335,
-          "change_pct": 19.296,
-          "delta": 3538
+          "after": 21696,
+          "before": 18230,
+          "change_pct": 19.013,
+          "delta": 3466
         },
         "tokens": {
-          "after": 5034,
-          "before": 4178,
-          "change_pct": 20.488,
-          "delta": 856
+          "after": 5004,
+          "before": 4159,
+          "change_pct": 20.317,
+          "delta": 845
         },
         "utf8_bytes": {
-          "after": 21875,
-          "before": 18335,
-          "change_pct": 19.307,
-          "delta": 3540
+          "after": 21698,
+          "before": 18230,
+          "change_pct": 19.024,
+          "delta": 3468
         }
       },
       "per_tool_delta": {
@@ -1226,9 +1226,9 @@
         },
         "command_recovery": {
           "characters": {
-            "after": 2339,
-            "before": 1826,
-            "change_pct": 28.094,
+            "after": 2338,
+            "before": 1825,
+            "change_pct": 28.11,
             "delta": 513
           },
           "tokens": {
@@ -1238,9 +1238,9 @@
             "delta": 126
           },
           "utf8_bytes": {
-            "after": 2339,
-            "before": 1826,
-            "change_pct": 28.094,
+            "after": 2338,
+            "before": 1825,
+            "change_pct": 28.11,
             "delta": 513
           }
         },
@@ -1266,22 +1266,22 @@
         },
         "message": {
           "characters": {
-            "after": 4262,
-            "before": 2964,
-            "change_pct": 43.792,
-            "delta": 1298
+            "after": 4086,
+            "before": 2860,
+            "change_pct": 42.867,
+            "delta": 1226
           },
           "tokens": {
-            "after": 990,
-            "before": 682,
-            "change_pct": 45.161,
-            "delta": 308
+            "after": 960,
+            "before": 663,
+            "change_pct": 44.796,
+            "delta": 297
           },
           "utf8_bytes": {
-            "after": 4264,
-            "before": 2964,
-            "change_pct": 43.86,
-            "delta": 1300
+            "after": 4088,
+            "before": 2860,
+            "change_pct": 42.937,
+            "delta": 1228
           }
         },
         "session": {
@@ -1391,22 +1391,22 @@
   "serialization": "json.dumps(sort_keys=True,separators=(',', ':'),ensure_ascii=False)",
   "three_catalogs_total": {
     "characters": {
-      "after": 48637,
-      "before": 64507,
-      "change_pct": -24.602,
-      "delta": -15870
+      "after": 48284,
+      "before": 64030,
+      "change_pct": -24.592,
+      "delta": -15746
     },
     "tokens": {
-      "after": 11237,
-      "before": 15327,
-      "change_pct": -26.685,
-      "delta": -4090
+      "after": 11177,
+      "before": 15207,
+      "change_pct": -26.501,
+      "delta": -4030
     },
     "utf8_bytes": {
-      "after": 48641,
-      "before": 64507,
-      "change_pct": -24.596,
-      "delta": -15866
+      "after": 48288,
+      "before": 64030,
+      "change_pct": -24.585,
+      "delta": -15742
     }
   },
   "tokenizer": "tiktoken==0.12.0 / cl100k_base"

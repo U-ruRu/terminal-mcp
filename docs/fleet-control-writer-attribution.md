@@ -1,8 +1,8 @@
-# Fleet-control raw-writer attribution
+# Mesh control raw-writer attribution
 
 This procedure is for a scrubbed test copy only. The tracer refuses targets
 outside /tmp or /var/tmp and refuses names other than fleet-control.sqlite3.
-Do not point it at live Fleet state or preserved incident evidence.
+Do not point it at live Mesh state or preserved incident evidence.
 
 The 2026-10-06 incident shape is a valid SQLite main database whose first
 32 bytes were replaced by a SQLite WAL header while the rest of the main file

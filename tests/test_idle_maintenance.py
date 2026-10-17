@@ -9,55 +9,8 @@ import pytest
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.storage.access_mesh import AccessMeshStore
-from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 
 NOW = datetime(2026, 10, 16, 12, tzinfo=UTC)
-
-
-@pytest.fixture
-def due_store(tmp_path):
-    path = tmp_path / "due.sqlite3"
-    with sqlite3.connect(path) as db:
-        db.executescript("""
-            CREATE TABLE logical_agents (
-                logical_agent_id TEXT PRIMARY KEY,display_name TEXT,state TEXT,
-                authority_node_id TEXT,authority_epoch INTEGER,slot_revision INTEGER,
-                selector_generation INTEGER,auth_generation INTEGER,created_at TEXT,
-                updated_at TEXT,deleted_at TEXT,tombstone_reason TEXT);
-            CREATE TABLE logical_agent_work_sessions (
-                logical_agent_id TEXT,state TEXT,hard_expires_at TEXT);
-            CREATE TABLE logical_agent_work_windows (
-                logical_agent_id TEXT,superseded_at TEXT);
-            INSERT INTO logical_agents VALUES
-                ('a','A','active','local',1,1,1,1,'2026-01-01','2026-01-01',NULL,NULL);
-            INSERT INTO logical_agent_work_sessions VALUES
-                ('a','active','2026-10-16T12:00:00Z');
-        """)
-    return PersistentAgentStore(path)
-
-
-@pytest.mark.parametrize(
-    ("sql", "selected"),
-    [
-        ("SELECT 1", True),
-        ("UPDATE logical_agent_work_sessions SET hard_expires_at='2026-10-17T12:00:00Z'", False),
-        (
-            "UPDATE logical_agent_work_sessions SET state='stopping', "
-            "hard_expires_at='2026-10-17T12:00:00Z'",
-            True,
-        ),
-        ("UPDATE logical_agents SET authority_node_id='remote'", False),
-        ("UPDATE logical_agents SET state='deleted'", False),
-        ("INSERT INTO logical_agent_work_windows VALUES('a',NULL)", False),
-        ("UPDATE logical_agent_work_sessions SET state='ended'", False),
-    ],
-    ids=["deadline-boundary", "future", "stopping", "foreign", "deleted", "managed", "ended"],
-)
-async def test_due_query_eligibility(due_store, sql, selected):
-    with sqlite3.connect(due_store.path) as db:
-        db.execute(sql)
-    rows = await due_store.due_session_slots(authority_node_id="local", now=NOW.isoformat())
-    assert [row.logical_agent_id for row in rows] == (["a"] if selected else [])
 
 
 def maintenance():

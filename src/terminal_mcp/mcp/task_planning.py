@@ -112,15 +112,3 @@ def task_action_planning_schema(
         "properties": properties,
         "x-runtime-schema": runtime,
     }
-
-
-def task_planning_schema(runtime_schema: dict) -> dict:
-    """Legacy request wrapper, preserving its exact authoritative boundary schema."""
-    request = task_action_planning_schema()
-    request.pop("type")
-    request.pop("x-runtime-schema")
-    return {
-        "type": "object",
-        "properties": {"request": request},
-        "x-runtime-schema": copy.deepcopy(runtime_schema),
-    }

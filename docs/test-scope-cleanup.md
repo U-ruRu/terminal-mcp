@@ -209,3 +209,31 @@ mutation continuation, cache scope and local projection modules retain those
 current responsibilities. Primary handoff and membership readiness checks cover
 a paired follower entry, aborted-operation retry and a changed target controller
 while retaining the app-selected Mesh identity.
+
+
+## Final native runtime retirement and recovery boundaries
+
+The old managed/persistent role-session modules are removed with their runtime:
+application_operator_mesh, fleet_route_first_contact, managed_fleet_session_routing,
+managed_identity_authority, managed_session_application, managed_session_gate,
+managed_session_policy, managed_session_runtime, persistent_backend_admission,
+persistent_console_projection, persistent_fleet, persistent_fleet_messaging,
+persistent_lifecycle, window_recovery, work_window_domain and work_window_store.
+The unused agent_test_helpers fixture is removed. Command replay/receipts/cancel,
+task ownership/provenance, claim leases, message atomicity, application transactions
+and auth-key preservation use native fixtures and retain their current assertions.
+
+New runtime migration checks cover exact original IDs, epochs, deadlines, one-time
+receipts, no reimport after Move and refusal of ambiguous active work. The actual
+hot application lifecycle, fresh DDL, native Console agents and readiness remain
+in existing current component/integration owners. test_mesh_runtime_migration
+and test_deployment_offline_migration include real composition seams and remain
+integration modules. Narrow row-conversion checks are component coverage in
+test_deployment_migration_preservation.
+
+Projection namespace checks cover all seven derived tables, unchanged application
+storage and replay without wiping newly rebuilt data. Worker checks cover a solo
+node without network polling, follower-to-Standalone and follower-to-new-Mesh
+cache recovery, plus cancellation of an old in-flight refresh at the transition
+boundary. The preserved-binding upgrade admission regression tests both primary
+and member. Scope mappings remove only references to deleted test modules.

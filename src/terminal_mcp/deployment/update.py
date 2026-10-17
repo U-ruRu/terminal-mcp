@@ -44,6 +44,11 @@ from terminal_mcp.deployment.artifact import (
     unpack,
     verify_approval,
 )
+from terminal_mcp.deployment.migration_preservation import (
+    comparable_columns,
+    receipt_cipher,
+    schema_row_counters,
+)
 from terminal_mcp.deployment.probes import ProbeClient, checked_url
 
 BEFORE_MIGRATION = {
@@ -252,6 +257,7 @@ def config_inventory(profile: dict, values: dict[str, str], stores: dict[str, st
         paths.append(Path(values.get(key) or default))
     for suffix in (".access-key", ".identity-anchor"):
         paths.append(Path(stores["auth"] + suffix))
+    paths.append(Path(stores["runtime"]).with_name("node-identity.json"))
     paths += [Path(p) for p in profile.get("extra_config_paths", [])]
     _, unit_env_files = unit_environment(profile)
     paths += unit_env_files
@@ -326,8 +332,11 @@ def _table_rows(db: sqlite3.Connection, table: str, columns: list[str]) -> Count
     return rows
 
 
-def preserved_rows(before: Path, after: Path) -> None:
-    """All old rows/columns must survive; migrations may add columns and rows."""
+def preserved_rows(before: Path, after: Path, *, cipher=None) -> None:
+    """Preserve old rows exactly, allowing only independently verified conversions."""
+    from terminal_mcp.fleet.topology_migration import expected_single_mesh_rows
+    from terminal_mcp.storage.mesh_runtime_migration import expected_unified_runtime_rows
+
     a, b = readonly(before), readonly(after)
     try:
         tables = [r[0] for r in a.execute("SELECT name FROM sqlite_master WHERE type='table'")]
@@ -336,10 +345,18 @@ def preserved_rows(before: Path, after: Path) -> None:
                 continue
             quoted = table.replace('"', '""')
             columns = [r[1] for r in a.execute(f'PRAGMA table_info("{quoted}")')]
-            current = {r[1] for r in b.execute(f'PRAGMA table_info("{quoted}")')}
-            require(set(columns) <= current, "protected_state_columns_removed")
+            columns = comparable_columns(a, b, table, columns)
+            expected = expected_unified_runtime_rows(a, b, table, columns)
+            if expected is None:
+                expected = expected_single_mesh_rows(a, b, table, columns)
+            if expected is not None:
+                counters = expected, _table_rows(b, table, columns)
+            else:
+                counters = schema_row_counters(a, b, table, columns, cipher=cipher)
+                if counters is None:
+                    counters = _table_rows(a, table, columns), _table_rows(b, table, columns)
             require(
-                not (_table_rows(a, table, columns) - _table_rows(b, table, columns)),
+                not (counters[0] - counters[1]),
                 "protected_state_rows_changed",
             )
     finally:
@@ -711,7 +728,15 @@ class NodeDriver:
             old = backup / data["backup"]
             require(sha256(old) == data["sha256"], "backup_tampered")
             if name != "output":
-                preserved_rows(old, Path(data["path"]))
+                preserved_rows(
+                    old,
+                    Path(data["path"]),
+                    cipher=(
+                        receipt_cipher(Path(self.stores["runtime"]))
+                        if name == "runtime"
+                        else None
+                    ),
+                )
         for path, data in snap["configs"].items():
             require(sha256(Path(path)) == data["sha256"], "protected_configuration_changed")
 
@@ -733,7 +758,9 @@ class NodeDriver:
         while True:
             try:
                 if all(self.active(unit) for unit in self.services):
-                    return self.client.health(self.p["health_url"], manifest["release"])
+                    return self.client.health(
+                        self.p["health_url"], manifest["release"], readiness=True
+                    )
             except ReleaseError as exc:
                 error = str(exc)
             if time.monotonic() >= deadline:
@@ -824,7 +851,7 @@ class Update:
                 outcome = "partially_applied"
                 try:
                     health = self.driver.client.health(
-                        self.driver.p["health_url"], self.manifest["release"]
+                        self.driver.p["health_url"], self.manifest["release"], readiness=True
                     )
                     observations["health"] = health
                     if record["phase"] == "applied" and all(

@@ -12,7 +12,7 @@ def actor_for(
     service,
     *,
     transport: str,
-    endpoint_role: str = "legacy",
+    endpoint_role: str = "internal",
     contract_version: int = 1,
     peer_node_id: str | None = None,
     provider: str | None = None,
@@ -21,9 +21,8 @@ def actor_for(
 ) -> ActorContext:
     if isinstance(service, TerminalApplication):
         service = service.service
-    backend = getattr(service, "persistent", None)
-    lifecycle = getattr(backend, "lifecycle", None)
-    node_id = getattr(lifecycle, "authority_node_id", "")
+    mesh = getattr(service, "access_mesh", None)
+    node_id = getattr(getattr(mesh, "store", None), "local_node_id", "")
     return ActorContext.from_admission(
         current_admission_context(),
         node_id=str(node_id or ""),

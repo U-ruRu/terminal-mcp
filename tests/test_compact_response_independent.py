@@ -135,7 +135,11 @@ def _current_role_service():
         return {}
 
     mesh = SimpleNamespace(
-        store=SimpleNamespace(attached_slot=lambda _key: None, touch=lambda _key: None),
+        store=SimpleNamespace(
+            attached_slot=lambda _key: None,
+            touch=lambda _key: None,
+            slot_for_agent=lambda _agent: None,
+        ),
         connection_key=lambda _actor: "current-role-fixture",
         observe_intent_call=observe_intent_call,
         intent_call_context=lambda _status: nullcontext(),
@@ -271,7 +275,7 @@ class _RunFixtureLifecycle:
 
 class _RunFixtureBackend(PersistentBackend):
     async def _execution_authority(self, *_args, **_kwargs):
-        return SimpleNamespace(hard_expires_at=NOW, authority_node_id="fixture"), None
+        return SimpleNamespace(hard_expires_at=NOW, authority_node_id="fixture")
 
     async def _task_refs(self, _agent):
         return []

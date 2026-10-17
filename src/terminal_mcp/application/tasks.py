@@ -11,12 +11,12 @@ from terminal_mcp.core.public_errors import public_error
 class TaskApplication(ApplicationCapability):
     @application_operation("tasks")
     async def task(self, actor: ActorContext, request: TaskRequest) -> dict:
-        code, namespace, task_id, backend_request = task_request_to_backend(request)
+        namespace, task_id, backend_request = task_request_to_backend(request)
         action = backend_request.pop("action")
         if not self.policy.allows_task_action(actor, action):
             return public_error("capability_not_allowed").as_dict()
         identity, failure = await self.gate.identity(
-            actor, code, ManagedOperation(f"task.{action}")
+            actor, None, ManagedOperation(f"task.{action}")
         )
         if failure is not None:
             return failure
@@ -32,22 +32,10 @@ class TaskApplication(ApplicationCapability):
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
             session_epoch=identity["session_epoch"],
-            access_code=code,
             action=action,
             namespace=namespace,
             task_id=task_id,
             idempotency_key=None,
-            # Native Mesh cleanup owns the current deadline and release policy.
-            # The older window lease would pin a superseded deadline and could
-            # release intentionally retained persistent ownership.
-            session_scoped_claim=(
-                isinstance(identity.get("session_lifecycle"), dict)
-                and not (
-                    getattr(self.service, "access_mesh", None) is not None
-                    and identity.get("issuer_node_id")
-                    and identity.get("slot_id")
-                )
-            ),
             **backend_request,
         )
         result.update(message_state or {})

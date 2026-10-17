@@ -183,7 +183,7 @@ class MeshTaskCommentInput(StrictRoleInput):
 
 
 class MessageInput(StrictRoleInput):
-    scope: Literal["local", "fleet"] = "local"
+    scope: Literal["local"] = "local"
     model_config = ConfigDict(
         extra="forbid",
         strict=True,
@@ -527,7 +527,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "readable."
     ),
     ("executor", "command_cancel"): ("Cancel a command owned by the current LogicalAgent."),
-    ("executor", "command_recovery"): ("Run a recovery command under the current managed session."),
+    ("executor", "command_recovery"): ("Run a recovery command under the current Access session."),
     ("executor", "task_claim"): (
         "Claim/release a task. claim uses claim_intent; release may use release_reason."
         " Ordinary success is only ok:true; actual incoming messages and warnings "
@@ -538,7 +538,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ),
     ("executor", "task_comment"): ("Append a comment/checkpoint note to canonical task history."),
     ("executor", "message"): (
-        "Managed inbox: send needs text; ack needs message_hash; reply needs both. Read"
+        "Mesh inbox: send needs text; ack needs message_hash; reply needs both. Read"
         " full text by action=read with message_hash, text_offset (default0), "
         "text_limit (1..2048, default2048). Offsets count Unicode code points; "
         "concatenate text chunks and follow next_text_offset until absent. text_length "
@@ -569,10 +569,10 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ),
     ("coordinator", "task_graph"): ("Read a bounded dependency/relation graph rooted at one task."),
     ("coordinator", "agent_observe"): (
-        "Read compact current LogicalAgent, WorkWindow, and WorkSession state."
+        "Read current agents, slot policy windows, and local work sessions."
     ),
     ("coordinator", "message"): (
-        "Managed inbox: send needs text; ack needs message_hash; reply needs both. Read"
+        "Mesh inbox: send needs text; ack needs message_hash; reply needs both. Read"
         " full text by action=read with message_hash, text_offset (default0), "
         "text_limit (1..2048, default2048). Offsets count Unicode code points; "
         "concatenate text chunks and follow next_text_offset until absent. text_length "
@@ -654,7 +654,7 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
         from terminal_mcp.mcp.task_planning import task_action_planning_schema
 
         return task_action_planning_schema(
-            actions=ROLE_TASK_ACTIONS["coordinator"], exclude_fields={"code"}
+            actions=ROLE_TASK_ACTIONS["coordinator"]
         )
     runtime = model.model_json_schema()
     definitions = runtime.get("$defs", {})

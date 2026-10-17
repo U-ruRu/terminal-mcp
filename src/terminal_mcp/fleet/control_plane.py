@@ -901,12 +901,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
             # The durable guard remains closed while the background reconciler
             # retries activation; operator pairing and diagnostics can start.
             pass
-        state = await self.snapshot()
+        state = await self._rehome_committed_detach(await self.snapshot())
         self._sync_control_node(str(state["control_node_id"]))
-        await self._finish_local_membership(state)
-        if not state["managed"]:
-            await self._restore_local_policy()
-            return state
         await self._apply_local(state)
         return await self.snapshot()
 
@@ -1026,6 +1022,7 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
         self._replace_runtime_config(config)
 
     async def _apply_local(self, state: dict) -> None:
+        await self._complete_namespace()
         if hasattr(self.store, "topology_transition"):
             await self._finish_local_membership(state)
         if self.native_access is not None:

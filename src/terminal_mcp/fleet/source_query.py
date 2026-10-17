@@ -9,6 +9,7 @@ from typing import Any
 
 import aiosqlite
 
+from terminal_mcp.core.human_names import full_agent_name
 from terminal_mcp.fleet.protocol import MAX_RECENT_TERMINAL_COMMANDS
 from terminal_mcp.host_resources import collect_host_resources
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
@@ -348,27 +349,26 @@ class FleetSourceQueryPlane:
         return sorted(CURRENT_SCOPES)
 
     async def access_identities(self) -> dict[str, dict[str, Any]]:
-        if self.auth_db_path is None:
-            return {}
+        """Use only identities belonging to the node's current native registry."""
         try:
             async with cancellation_safe_connection(
-                aiosqlite.connect, self.auth_db_path, timeout=1.0
+                aiosqlite.connect, self.runtime_db_path, timeout=1.0
             ) as db:
                 rows = await (
                     await db.execute(
-                        "SELECT logical_agent_id,public_name,access_generation,status "
-                        "FROM auth_access_slots WHERE status='active'"
+                        "SELECT logical_agent_id,agent_name,display_suffix,code_generation,state "
+                        "FROM access_mesh_slot_replicas WHERE state!='deleted'"
                     )
                 ).fetchall()
         except aiosqlite.Error:
             return {}
         return {
             str(row[0]): {
-                "public_name": str(row[1]),
-                "access_generation": int(row[2]),
-                "access_status": str(row[3]),
+                "public_name": full_agent_name(row[1], row[2]),
+                "access_generation": int(row[3]),
+                "access_status": str(row[4]),
             }
-            for row in rows
+            for row in rows if row[1]
         }
 
     @staticmethod

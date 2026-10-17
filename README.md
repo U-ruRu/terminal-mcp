@@ -1,134 +1,99 @@
 # terminal-mcp
 
-**Целевая архитектура:** [Mesh и единый агентский контракт](docs/mesh-product-contract.md) — нормативное описание Standalone, ACS, слотов, pairing, Join/Detach и обновлений.
+`terminal-mcp` — сервис управляемого доступа к Linux и Windows через MCP, HTTP API и Console.
 
-Native Access Events: [public session-number message routing](docs/mcp-events-session-number.md).
+**Архитектурный контракт:** [Mesh и единая модель агентских сессий](docs/mesh-product-contract.md). Он определяет регистрацию, pairing, принадлежность серверов, политики и границы данных при переходах.
 
-`terminal-mcp` — Python-сервис управляемого доступа к Linux и Windows через MCP, HTTP Actions и Console.
+## Одна модель для каждого сервера
 
-Windows runtime, служба и VPN-шлюз: [Windows node](docs/windows.md).
+Каждый сервер предоставляет Access, Execution и Coordination. Standalone означает отсутствие членства в Mesh; автономный сервер не создаёт Mesh автоматически. Mesh объединяет один или несколько серверов и имеет один основной сервер. Количество участников и положение сервера в топологии не меняют агентские инструменты.
 
-Текущая версия приложения: **0.14.4**. В публичных контрактах Executor и Coordinator операция `session` поддерживает только `attach` с обязательным `session_number`. Основной контракт: **Distributed Multi-Issuer Access Mesh V2**.
-
-## Репозиторий и область релиза
-
-Репозиторий: `https://github.com/U-ruRu/terminal-mcp.git`. Разработка и интеграция выполняются на Secondary: `/workspace/terminal-mcp`, canonical worktree `/workspace/terminal-mcp-integration`, ветка `integration/M3-functional-candidate`. Python `>=3.11`; FastAPI, Uvicorn, MCP SDK, Pydantic и SQLite/aiosqlite. Версия определяется в `src/terminal_mcp/version.py`.
-
-Текущие цели деплоя и живой приёмки — **FirstByte и BacLOUD**. На каждом сервере доступны три первичных коннектора: Access, Executor и Coordinator. Вместе это **шесть коннекторов**. Secondary используется для исходников, тестов и координации; развёрнутые Main и Tokyo сохраняются. Наличие версии в документации описывает контракт исходников, а подтверждение установленного релиза фиксируется отдельно после живой приёмки.
-
-## Public MCP
-
-Access endpoint: `/terminal-mcp/access/v1/mcp`.
+| Роль | Endpoint | Работа с сессией |
+| --- | --- | --- |
+| Access (ACS) | `/terminal-mcp/access/v1/mcp` | `session(start/end)`, события доступа |
+| Execution | `/terminal-mcp/executor/v1/mcp` | `session(attach/intent)`, команды и задачи |
+| Coordination | `/terminal-mcp/coordinator/v1/mcp` | `session(attach/intent)`, планирование и наблюдение |
 
 Access catalog: `session`, `get_events`.
 
-Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
-
 Executor catalog: `session`, `task_list`, `command_run`, `command_read`, `command_cancel`, `command_recovery`, `task_claim`, `task_state`, `task_comment`, `message`.
-
-Coordinator endpoint: `/terminal-mcp/coordinator/v1/mcp`.
 
 Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
 
-Access выдаёт или активирует слот своего issuer. Executor выполняет команды и ограниченные операции над задачами. Coordinator управляет задачами, графом, наблюдением и health. Каталоги остаются раздельными: операторское управление слотами выполняется через HTTP/Console, shell-команды — через Executor.
+## Регистрация и работа
 
-### Начало работы
+1. На Access любого участника вызови `session(action="start")`. Ответ содержит `ok: true` и четырёхзначный `session_number`; сохраняй ведущие нули.
+2. На нужных Execution и Coordination вызови `session(action="attach", session_number=...)`. Один слот действует на всех участниках его Mesh.
+3. Перед работой обнови намерение через `session(action="intent", intent=...)`. Дальнейшие операции используют доверенную привязку коннектора.
+4. Заверши цикл через `session(action="end")` на Access.
 
-На Access вызови `session(action="start")`: успешный ответ содержит только `ok: true` и четырёхзначный `session_number`. Сервер проверяет доступность номера в Mesh; при сетевом разделении выдача остаётся локально доступной. Завершение сессии — `session(action="end")`. Операторские persistent-слоты управляются через HTTP/Console.
+В Mesh основной сервер хранит общий реестр. ACS остальных участников пересылают регистрацию и управление реестром основному. Отдельного локального выпуска слотов при недоступном основном сервере нет. Уже допущенная локальная работа ограничена сохранёнными полномочиями, сроком сессии и локальными блокировками. Standalone выполняет те же операции локально, без обращения к другим серверам.
 
-На каждом нужном Executor/Coordinator один раз выполни `session(action="attach", session_number=...)`. Источник номера и текущая идентичность разрешаются сервером через Mesh. Повторное attach сохраняет привязку; подмена номера в существующей привязке возвращает `access_mesh_binding_conflict`.
+Слот бывает `temporary` или `persistent`; вид задаётся при создании. Общая политика Mesh наследуется слотами, отдельный слот может переопределить её. Индивидуальная политика сервера внутри Mesh не заменяет общую политику. Изменение будущей политики не продлевает текущую рабочую сессию; для изменения текущего срока есть отдельная операторская операция.
 
-**Role session = attach-only.** Управление началом и завершением issuer-сессии выполняется на Access. После attach доменные операции получают identity из доверенного контекста коннектора; Session Number повторно в команды, задачи и сообщения не передаётся. Чтение известного `cmd_hash`, в том числе созданного другим агентом, доступно без Session Number и предварительного attach. `command_read` без `cmd_hash` возвращает локальный журнал команд всех LogicalAgent с opaque `next_cursor`. Настроенная транспортная аутентификация сохраняется и для чтения без номера сессии.
+Повторный attach того же номера идемпотентен. Подмена номера в существующей привязке возвращает конфликт. Номер не передаётся повторно в команды, задачи и сообщения и не заменяет транспортную аутентификацию. Пространства независимых Mesh и автономных серверов изолированы.
 
-Рабочий пример: Access выдаёт слот → нужные роли выполняют attach → Executor получает задачу; claim фиксирует владение, а `task_state` задаёт статус → команды и проверка вывода → checkpoint/result → явное завершение задачи. Завершение issuer-сессии передаётся исходному Access.
+## Топология через Console и приложение
 
-### Identity, время и владение
+После pairing приложение управляет созданием Mesh, Join, Detach, Move и выбором основного сервера. Сервер проверяет полномочия приложения, согласованность запроса и отсутствие активных слотов или работы в затронутой области. Доверие между участниками устанавливается из назначенной топологии.
 
-Slot kinds: `legacy`, `persistent`. Kind задаётся при создании и остаётся неизменным. Mobile/Console — операторские интерфейсы этих же двух видов слотов.
+При выходе C из Mesh X локальные слоты, реплики, привязки и полномочия X удаляются только на C. **Полный реестр X у оставшихся участников сохраняется без изменения**, включая регистрации, выданные через ACS C. При переходе в Y узел использует реестр и политику Y; при Detach он получает пустое автономное пространство. Самостоятельная идентичность C и pairing сохраняются.
 
-LogicalAgent и его `public_name` одинаковы на обоих серверах и в обеих рабочих ролях. Каждый execution-сервер имеет локальный WorkSession, epoch, часы и write gate. Grant, policy, deadline и события issuer реплицируются; локальная операция проверяет локальное состояние и не запрашивает разрешение issuer по сети на каждый вызов. При разделении сети уже полученные ограничения и deadlines продолжают действовать; новое изменение issuer становится известно peer после доставки или catchup.
+Если уходит основной сервер, приложение сначала назначает преемника. Полный реестр передаётся до очистки уходящего узла. Журнал перехода и блокировка допуска обеспечивают восстановление после сбоя; узел не принимает одновременно слоты двух пространств. Подробности: [переходы Mesh](docs/authorized-mesh-namespace.md).
 
-Policy определяет duration, cooldown, rearm и warning/draining. Вход в новый цикл использует новый локальный WorkSession; повторный attach и обычный вызов не продлевают текущий deadline. Legacy claims освобождаются после end/expiry; persistent claims при end/expiry освобождаются при `release_on_end=true`, иначе сохраняют durable ownership. Suspend/delete отзывают доступ и запускают очистку. Сначала выполняется fencing/дренирование исполнения, затем освобождение claims; незавершённая очистка видна как `cleanup_pending`.
+## Команды, задачи и сообщения
 
-**Claim lifecycle сохраняет task state, checkpoint и result.** Claim, release и cleanup меняют владение. Изменение state выполняется явно через `task_state` или Coordinator `task_manage(action="state", ...)`; `task_manage(action="update", ...)` обновляет свойства и сохраняет state. Стартовое состояние задаёт create. Executor `task_comment` поддерживает `action="comment"` (по умолчанию) и `action="checkpoint"`; checkpoint также сохраняет состояние. Review и его audit фиксируются одной транзакцией; committed mutation receipts содержат записанные state/revision/result даже при последующем сбое чтения.
+Execution управляет локальными очередями и процессами. Успешный `command_run` подтверждает принятие или запуск; результат проверяется по `cmd_hash`, терминальному статусу и `exit_code`. После неопределённого исхода запуска сначала прочитай журнал. Повтор одного JSON-RPC ID не является гарантией единственного запуска shell-команды.
 
-## Сообщения
+`command_read(cmd_hash=...)` читает сохранённый локальный вывод, включая команды другого агента, без предварительного attach. Вариант без `cmd_hash` возвращает ограниченную страницу локального журнала. Транспортная аутентификация продолжает действовать. Coordinator `health` также доступен до attach.
 
-Обе роли предоставляют `message`: `recipients`, `send`, `read`, `ack`, `reply`, `history`. Выбирай адресата по `public_name`; broadcast задаётся отсутствием target или `target="broadcast"`. Task addressing использует пару `namespace` + `task_id`.
+Claim, release и очистка владения сохраняют явные state, checkpoint и result задачи. Workflow меняется через `task_state` или Coordinator `task_manage(action="state", ...)`. Изменение свойств и запись checkpoint не подменяют изменение состояния. Успешные мутации задач возвращают результат, зафиксированный вместе с записью в транзакции.
 
-Сообщения обслуживаются локально тем сервером, через коннектор которого выполнен вызов. scope="local" используется по умолчанию; legacy scope="fleet" возвращает feature_disabled и не создаёт межсерверную очередь. Recipients включает только активные локальные подключения, а send/inbox/history/ACK/reply не используют Mesh peer transport. Сообщение хранится 24 часа от исходного created_at; ACK, чтение и повторная доставка срок не продлевают, у reply собственный срок. Новое поколение имеет ID с префиксом `:localmsg:`. Старые `:meshmsg:` записи остаются на диске, но исключены из inbox/history, ACK и alert-gates без миграции; устаревшие message/receipt jobs получают terminal reason без ложного ACK и не возобновляются после рестарта.
+Сообщения обслуживает узел рабочего коннектора. `message` предоставляет recipients, send, read, ack, reply и history. Получатель определяется по `public_name`; локальная рассылка исключает отправителя. Notify отмечается прочитанным при успешной выдаче, ack требует подтверждения, alert требует ответа. При смене Mesh содержание прежней истории сохраняется отдельно от действующих адресатов и полномочий и не становится ресурсом нового Mesh.
 
-Inbox, history и ACK используют локальные данные. Notify отмечается прочитанным при успешной выдаче страницы; mode `ack` требует подтверждения, mode `alert` требует ответа. ACK не заменяет reply для alert. Reply создаётся на текущем сервере со ссылкой на исходное сообщение и снимает локальное обязательство атомарно; автор старого сообщения должен быть доступен локально. Команды учитывают эти обязательства через общий локальный gate.
+## API, хранение и диагностика
 
-## Runtime contract и диагностика
+Инструменты публикуют универсальные объектные схемы; подробные описания и строгие серверные валидаторы задают допустимые поля и действия. Ошибки содержат `code`, `details`, `outcome`, `retry`; ошибки валидации — также путь и ожидаемый формат. Обработанная ошибка приложения возвращается с MCP `isError: false` и `ok: false`. Альтернативного агентского каталога и переключателя прежней схемы нет.
 
-Inputs and outputs publish **object-only agent schemas** ({"type":"object"}); per-tool descriptions document arguments, nullable fields, defaults, action rules, return shapes and public errors. Existing strict Pydantic validators remain authoritative before all mutations. input_validation_failed and input_admission_failed return structuredContent with error.code/reason/path/expected and outcome:not_committed. TERMINAL_MCP_AGENT_SCHEMA_MODE=legacy restores former discovery without data changes. The precise strict models are in the offline strict-contracts.json sidecar.
-
-Handled application errors: MCP `isError: false`, `structuredContent.ok: false`, объект `error` с `code`, `details`, `outcome`, `retry`. Текстовый fallback содержит тот же JSON. `ok=true` в health подтверждает сбор диагностики; здоровье описывают `healthy`, `status` и компоненты. Coordinator `health` доступен до attach. Секреты и raw provider identifiers исключены из публичной диагностики.
-
-Нормализованный payload и доверенный caller/session/epoch/request ID формируют автоматический task replay key. Разные мутации при повторяющемся JSON-RPC ID различаются; точный retry возвращает сохранённый receipt. Для shell-команды повторяющийся ID `0` сам по себе не обеспечивает exactly-once: перед повторным запуском с побочными эффектами проверь receipt и `cmd_hash`.
-
-## Архитектура и хранилища
-
-```text
-MCP / HTTP Actions / Console / authenticated Fleet
-                  ↓ ActorContext
-      transport-independent Application API
-                  ↓
-local SessionGate · tasks · messages · command scheduler
-                  ↓
-SQLite repositories · grant/event outbox · ExecutionPort
-                  ↓
-             in_process | Unix executor
-```
-
-Исходники: `application/` — use cases; `core/` — доменные правила; `mcp/`, `http/`, `fleet/` — адаптеры; `storage/` — транзакции; `terminal/` — исполнение. API управляет очередями, command metadata и admission. В split topology `terminal-mcp-executor.service` запускает shell через `/run/terminal-mcp/executor.sock`; `terminal-mcp.service` обслуживает API.
-
-| Данные | Путь |
+| Слой | Назначение |
 | --- | --- |
-| Runtime, tasks, sessions, native messages, mesh replicas/outboxes | `/var/lib/terminal-mcp/terminal-mcp.sqlite3` |
-| Auth principals, clients, credentials | `/var/lib/terminal-mcp/auth.sqlite3` |
-| Fleet control | `/var/lib/terminal-mcp/fleet-control.sqlite3` |
-| Ограниченный кэш вывода | `/var/cache/terminal-mcp/output.sqlite3` |
-| Конфигурация | `/etc/terminal-mcp/terminal-mcp.env` |
-| Релизы / резервные копии | `/opt/terminal-mcp` / `/var/backups/terminal-mcp` |
+| `application/` | Независимые от транспорта сценарии и допуск |
+| `core/` | Правила слотов, локальной работы, задач и исполнения |
+| `mcp/`, `http/`, `fleet/` | Агентские, операторские и внутренние транспортные адаптеры |
+| `storage/` | SQLite, транзакции, журнал переходов и миграции |
+| `terminal/` | Локальное исполнение и управление процессами |
 
-MCP/Actions поддерживают `none`, `bearer`, `oauth` согласно конфигурации. OAuth metadata: `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`. Диагностика и контракты: `/health/live`, `/openapi.json`; Console: `/admin`; privacy: `/privacy`.
+Runtime хранит задачи, локальные сессии, сообщения и реестр ACS. Auth-база отдельно хранит principals, OAuth и pairing. Control-база хранит топологию Mesh. Вывод команд имеет отдельный ограниченный кэш. `node-identity.json` рядом с основной базой сохраняет самостоятельную идентичность установки. Ключи и номера сессий не включаются в публичную диагностику.
 
-Events transport diagnostics are off by default. Enable or disable the existing hot-reloaded
-`TERMINAL_MCP_DETAILED_LOGGING` flag in `runtime.env`; see [Events diagnostics](docs/events-diagnostics.md).
+Основные адреса: `/health/live`, `/openapi.json`, `/admin`, `/connect` и OAuth metadata под `/.well-known/`. Успешный сбор health и фактическое здоровье компонентов — разные поля. Детальное событийное логирование управляется горячей настройкой `TERMINAL_MCP_DETAILED_LOGGING`: [диагностика](docs/events-diagnostics.md).
 
-## Deployment и development
+## Установка и обновление
 
-Подготовку peer authentication, proof key, резервных копий, staging и шестиконнекторную приёмку выполняй по [Access Mesh deployment](docs/access-mesh-deployment.md). Installer `deploy/install.sh update` сам выполняет staging, compatibility checks, backup и activation; `stage` не является отдельной публичной командой installer.
+Новая установка сразу запускает Standalone с ACS и всеми тремя ролями. Не требуется вручную включать Mesh или задавать список доверенных участников. Независимая идентичность и локальные ключи создаются автоматически; пользователь выполняет pairing и выбирает топологию в приложении.
 
-```bash
-sudo ./deploy/install.sh install
-sudo ./deploy/install.sh update
-sudo ./deploy/install.sh doctor
-```
+| Операция | Данные |
+| --- | --- |
+| `deploy/install.sh install` | Новая установка; оставшееся управляемое состояние требует явного выбора update или clean deploy |
+| `deploy/install.sh update` | Сохраняет данные и выполняет однократные миграции |
+| `deploy/install.sh clean-deploy` | Удаляет управляемые данные, pairing, слоты, членство, секреты и резервные копии прежней установки |
+| `deploy/install.sh doctor` | Проверяет текущую установку и доступность современных адресов |
 
-Выбирай нужную операцию отдельно после её проверок. Split topology имеет собственные render/check/activate/rollback: [split-service guide](docs/architecture-split-service-cutover.md). Topology rollback и восстановление durable/schema/security state — разные процедуры.
+При горячем обновлении прежняя функциональность сессий не сохраняется. Данные переводятся однократно; невозможность безопасного переноса активной работы блокирует активацию с конкретной причиной. Возвращать прежний runtime поверх новых данных нельзя. Явный clean deploy не восстанавливает прежние резервные копии.
+
+Подробности: [установка и проверка Mesh](docs/access-mesh-deployment.md), [точный release workflow](docs/deployment-release.md), [Windows](docs/windows.md), [разделение API и executor](docs/architecture-split-service-cutover.md). Развёртывание требует отдельного разрешения; наличие изменений в исходниках не свидетельствует об обновлении действующих серверов.
+
+## Разработка
+
+Репозиторий: `https://github.com/U-ruRu/terminal-mcp.git`. Каноническая ветка: `integration/M3-functional-candidate`. Версия определяется в `src/terminal_mcp/version.py`. Python: 3.11 или новее.
+
+Перед работой выполни fetch и создай отдельную ветку/worktree от актуального origin. Не изменяй чужие незавершённые изменения. Порядок проверки и требования к свидетельству полного прогона: [testing](docs/testing.md).
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e '.[test]'
+.venv/bin/pip install -e '.[test,compact]'
+PYTHONPATH=src .venv/bin/python scripts/test.py --help
 .venv/bin/ruff check src tests
-.venv/bin/pytest -q
 python3 scripts/check_repository_privacy.py
 ```
 
-## Legacy compatibility
-
-Endpoint: `/mcp`.
-
-Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
-
-Legacy `/mcp` сохраняет совместимость со старыми клиентами, включая их session start/end/interrupt и Session Number binding. Этот контракт отделён от первичных Access/Executor/Coordinator V2 и не задаёт порядок работы новых коннекторов.
-
-## References
-
-- [Architecture](docs/ARCHITECTURE.md) и [runtime contract](docs/connector-runtime-contract.md).
-- [Tool reference](skills/terminal-operations/references/tool-contract.md), source skill `skills/terminal-operations/SKILL.md`, архив `dist/terminal-operations.skill`.
-- `src/terminal_mcp/mcp/access_mesh_schema_baselines_v2.json` — зафиксированные эффективные discovery schemas.
-- `PROJECT_CONTEXT.md` — локальный операторский контекст, исключённый из Git.
+Дополнительные документы: [архитектура](docs/ARCHITECTURE.md), [контракт коннекторов](docs/connector-runtime-contract.md), [примеры инструментов](skills/terminal-operations/references/tool-contract.md), [события Access](docs/mcp-events-session-number.md).

@@ -15,7 +15,6 @@ from terminal_mcp.application.ports import ApplicationUnitOfWorkPort
 from terminal_mcp.application.replication import (
     FleetProjectionApplication,
     FleetSourceApplication,
-    ReplicationApplication,
 )
 from terminal_mcp.application.requests import CmdRequest, ContextRequest
 from terminal_mcp.application.session_gate import SessionGate
@@ -37,17 +36,13 @@ class TerminalApplication:
         fleet_projection=None,
         projection_service=None,
         fleet_control=None,
-        managed_identity=None,
-        managed_sessions=None,
     ):
         self.service = service
         self.auth_mode = auth_mode
         self.policy_controller = policy_controller
         self.unit_of_work = unit_of_work
         self.policy = CapabilityPolicy()
-        self.session_gate = SessionGate(
-            service, managed_identity=managed_identity, managed_sessions=managed_sessions
-        )
+        self.session_gate = SessionGate(service)
         options = {"auth_mode": auth_mode, "policy": self.policy, "unit_of_work": unit_of_work}
         self.sessions = SessionApplication(service, self.session_gate, **options)
         self.observations = ObservationApplication(service, self.session_gate, **options)
@@ -57,7 +52,6 @@ class TerminalApplication:
         self.contexts = ContextApplication(service, self.session_gate, **options)
         self.health_capability = HealthApplication(service, self.session_gate, **options)
         self.operator_data = OperatorDataApplication(service)
-        self.replication = ReplicationApplication(replication) if replication else None
         self.fleet_source = FleetSourceApplication(fleet_source) if fleet_source else None
         self.fleet_projection = (
             FleetProjectionApplication(fleet_projection, projection_service)
@@ -65,31 +59,6 @@ class TerminalApplication:
             else None
         )
         self.fleet_control = FleetControlApplication(fleet_control) if fleet_control else None
-        self.managed_identity = managed_identity
-        self.managed_sessions = managed_sessions
-        self._operator = None
-        self._mesh = None
-
-    @property
-    def operator(self):
-        if self._operator is None:
-            from terminal_mcp.application.operator import OperatorApplication
-
-            self._operator = OperatorApplication(
-                self.service, self.policy_controller, self.managed_sessions
-            )
-        return self._operator
-
-    @property
-    def mesh(self):
-        if self._mesh is None:
-            from terminal_mcp.application.mesh import MeshApplication
-
-            backend = getattr(self.service, "persistent", None)
-            bridge = getattr(backend, "fleet_bridge", None)
-            self._mesh = MeshApplication(bridge, backend, session_gate=self.session_gate)
-        return self._mesh
-
     async def session(self, actor: ActorContext, **kwargs) -> dict:
         return await self.sessions.session(actor, **kwargs)
 

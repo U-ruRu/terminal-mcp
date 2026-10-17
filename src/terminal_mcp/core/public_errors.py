@@ -30,7 +30,7 @@ MAX_REVISION = (1 << 63) - 1
 ErrorKind = Literal[
     "validation", "access", "conflict", "transient", "missing", "policy", "internal"
 ]
-RecoveryAction = Literal["repair", "reauthenticate", "reconcile", "retry", "start_session", "stop"]
+RecoveryAction = Literal["repair", "reauthenticate", "reconcile", "retry", "stop"]
 ErrorOutcome = Literal["not_committed", "committed", "unknown"]
 
 
@@ -53,7 +53,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             invalid_mode invalid_state invalid_session_number invalid_session_attempt
             invalid_session_timestamp invalid_intent
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
-            mode_required access_code_required legacy_code_not_allowed invalid_connect_url
+            invalid_connect_url
             output_item_too_large execution_argument_invalid
         """,
         ),
@@ -63,12 +63,12 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             """
             unauthorized invalid_access_code invalid_code access_denied access_code_invalid
             access_code_expired sender_not_authorized message_forbidden capability_not_allowed
-            legacy_admission_disabled session_principal_mismatch session_authority_stale
+            session_principal_mismatch session_authority_stale
         """,
         ),
         (
             "access",
-            "start_session",
+            "repair",
             """
             session_required session_expired session_inactive session_not_active
             work_session_expired window_cooldown
@@ -112,7 +112,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         (
             "policy",
             "repair",
-            "policy_incompatible managed_session_required session_contract_conflict",
+            "policy_incompatible session_contract_conflict",
         ),
         (
             "internal",
@@ -146,8 +146,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "access",
             "reauthenticate",
             """
-            access_identity_not_found identity_not_bound permit_expired persistent_auth_required
-            persistent_scope_required selector_not_found
+            access_identity_not_found identity_not_bound persistent_auth_required
+            persistent_scope_required
             control_rejoin_credential_required invalid_pairing
         """,
         ),
@@ -155,7 +155,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "policy",
             "repair",
             """
-            access_mode_mismatch attachment_not_active slot_not_armed wrong_authority
+            attachment_not_active wrong_authority
             intent_required intent_stale
             control_authority_rehome_requires_standalone control_authority_required
             managed_access_policy_missing managed_control_not_adopted
@@ -218,7 +218,6 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "stop",
             """
             access_mesh_untrusted_issuer access_mesh_untrusted_peer access_mesh_deleted_slot
-            legacy_disabled
         """,
         ),
         (
@@ -294,7 +293,9 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "identity_metadata_invalid": "The connector supplied invalid provider identity metadata.",
         "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
-        "session_required": "Сначала запусти сессию",
+        "session_required": (
+            "Получи номер через Access и выполни session(attach) на этом Connector."
+        ),
         "session_expired": "Сессия закончилась",
         "session_number_unconfirmed": (
             "Unable to confirm a free session number on every configured server. "
@@ -331,10 +332,9 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "Use its original connection or start after that session ends."
         ),
         "window_cooldown": (
-            "The previous work window is cooling down. Call session.start after its rearm time."
+            "The session is cooling down. Start through Access after its rearm time."
         ),
         "policy_incompatible": "The requested operation is incompatible with the active policy.",
-        "managed_session_required": "Use the managed session path for this slot.",
     }
     result = {}
     for kind, recovery, codes in groups:
@@ -344,7 +344,6 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             )
     for code in (
         "capability_not_allowed",
-        "legacy_admission_disabled",
         "access_denied",
         "session_expired",
     ):
@@ -736,10 +735,9 @@ def error_from_exception(exc: BaseException) -> PublicError:
     from terminal_mcp.core.access_mesh_grants import AccessMeshError
     from terminal_mcp.core.managed_sessions import ManagedSessionError
     from terminal_mcp.core.provider_identity import ProviderIdentityError
-    from terminal_mcp.core.work_windows import WorkWindowError
 
     if isinstance(
-        exc, (AccessMeshError, ProviderIdentityError, WorkWindowError, ManagedSessionError)
+        exc, (AccessMeshError, ProviderIdentityError, ManagedSessionError)
     ):
         return public_error(exc.code)
     if isinstance(exc, PublicFailure):

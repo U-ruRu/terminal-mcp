@@ -1,19 +1,20 @@
 """Independent claim lifetime regressions on isolated temporary SQLite stores."""
 
 import asyncio
+import sqlite3
 from datetime import timedelta
 from types import SimpleNamespace
 
 import aiosqlite
 import pytest
 import pytest_asyncio
+from native_runtime_helpers import native_agent
 
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
-from terminal_mcp.storage.work_windows import WorkWindowStore
 
 NS = "lease-review"
 TASK = "isolated"
@@ -26,17 +27,9 @@ async def remote_case(tmp_path):
     output = tmp_path / "output.sqlite3"
     repo = SqliteRepository(tmp_path / "state.sqlite3", output)
     await repo.initialize()
-    slots = WorkWindowStore(repo.path, authority_node_id="local")
     now = utc_now()
-    for agent, selector in ((REMOTE, "ABCD"), (OTHER, "EFGH")):
-        await slots.create_slot(
-            agent,
-            agent,
-            selector,
-            authority_node_id="remote",
-            initial_arm_duration_seconds=1380,
-            now=utc_text(now),
-        )
+    native_agent(repo.path, REMOTE, now=now, session_id="ws_remote_review_a")
+    native_agent(repo.path, OTHER, code="5678", now=now)
     tasks = TaskStore(repo.path)
     await tasks.create_task(
         NS, TASK, "temporary lease test", cooperative=True, checkpoint={"retain": ["handoff", 7]}
@@ -45,6 +38,21 @@ async def remote_case(tmp_path):
 
 
 def lease(case, *, session="ws_remote_review_a", epoch=1, expires=None):
+    if session != "ws_remote_review_a":
+        with sqlite3.connect(case.path) as db:
+            db.execute(
+                "INSERT OR IGNORE INTO logical_agent_work_sessions("
+                "work_session_id,logical_agent_id,"
+                "session_epoch,authority_node_id,authority_epoch,started_at,hard_expires_at,"
+                "auth_generation,state) VALUES(?,?,?,'local',1,?,?,1,'active')",
+                (
+                    session,
+                    REMOTE,
+                    epoch,
+                    utc_text(case.now),
+                    utc_text(expires or case.now + timedelta(seconds=120)),
+                ),
+            )
     return {
         "work_session_id": session,
         "session_epoch": epoch,

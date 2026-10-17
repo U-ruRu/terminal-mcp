@@ -6,19 +6,13 @@ import json
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from starlette.routing import Mount
 
 from terminal_mcp.application import TerminalApplication
 from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
 from terminal_mcp.application.command_scheduler import CommandScheduler
-from terminal_mcp.application.managed_identity import (
-    ManagedGrantAuthorizer,
-    ManagedProviderResolver,
-)
-from terminal_mcp.application.managed_runtime import ManagedSessionRuntime
-from terminal_mcp.application.managed_sessions import ManagedSessionApplication
-from terminal_mcp.application.window_recovery import ManagedWindowRecovery
 from terminal_mcp.auth.credentials import CredentialManager
 from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.auth.identity_migration import (
@@ -35,13 +29,11 @@ from terminal_mcp.core.access_mesh_grants import SlotPolicy
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.persistent_execution import (
-    CompositePersistentExecutionFence,
     PersistentExecutionFence,
 )
-from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
-from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.persistent_policy import PersistentPolicyController
 from terminal_mcp.core.service import TerminalService
+from terminal_mcp.core.session_execution import SessionExecutionCoordinator
 from terminal_mcp.fleet.access_mesh import (
     AccessMeshReplication,
     PinnedAccessMeshPeerAuth,
@@ -53,13 +45,12 @@ from terminal_mcp.fleet.control_storage import FleetControlStore
 from terminal_mcp.fleet.event_mesh import LifecycleEventMesh, build_lifecycle_event_router
 from terminal_mcp.fleet.message_event_mesh import build_message_event_router
 from terminal_mcp.fleet.namespace import finish_namespace_transition
+from terminal_mcp.fleet.peer_auth import MeshPeerTransport
 from terminal_mcp.fleet.projection import FleetProjectionService
 from terminal_mcp.fleet.projection_storage import FleetProjectionStore
 from terminal_mcp.fleet.protocol import AUTHORITY_CAPABILITIES, SOURCE_CAPABILITIES
-from terminal_mcp.fleet.replication import FleetReplicationService
 from terminal_mcp.fleet.source import FleetSourceService
 from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
-from terminal_mcp.fleet.storage import FleetIdentityStore
 from terminal_mcp.http.access_mesh import build_access_mesh_operator_router
 from terminal_mcp.http.access_mesh_messages import build_access_mesh_message_router
 from terminal_mcp.http.actions import build_actions_router
@@ -88,10 +79,14 @@ from terminal_mcp.node_identity import ensure_node_identity
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
 from terminal_mcp.storage.access_mesh import AccessMeshStore
-from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
+from terminal_mcp.storage.mesh_runtime_migration import (
+    assert_runtime_migration_safe,
+    migrate_unified_runtime,
+    prior_persistent_defaults,
+)
+from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
-from terminal_mcp.storage.work_windows import WorkWindowStore
 from terminal_mcp.terminal.composition import build_execution
 from terminal_mcp.trace import TraceMiddleware
 from terminal_mcp.version import __release__, __version__
@@ -100,9 +95,12 @@ from terminal_mcp.version import __release__, __version__
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.browser_allowed_origins()
+    existing_runtime = settings.database_path.exists()
     fresh_identity_install = assert_identity_isolated(
         settings.database_path, settings.auth_database_path
     )
+    assert_runtime_migration_safe(settings.database_path)
+    migrated_defaults = prior_persistent_defaults(settings)
     ensure_node_identity(settings)
     execution = build_execution(settings)
     repo = SqliteRepository(
@@ -140,34 +138,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.queue_reconcile_sec,
     )
     agent_policy = AgentPolicy(
-        idle_ttl_seconds=settings.agent_idle_ttl_sec,
-        intent_ttl_seconds=settings.agent_intent_ttl_sec,
-        max_session_seconds=settings.agent_max_session_sec,
-        session_warning_after_seconds=settings.agent_session_warning_after_sec,
-        session_alert_enabled=settings.agent_session_alert_enabled,
-        session_alert_after_seconds=settings.agent_session_alert_after_sec,
-        session_alert_repeat_seconds=settings.agent_session_alert_repeat_sec,
-        session_alert_message=settings.agent_session_alert_message,
-        event_window_seconds=settings.agent_event_window_sec,
         command_preview_chars=settings.agent_command_preview_chars,
         history_default_minutes=settings.agent_history_default_minutes,
-        message_reminder_seconds=settings.message_reminder_sec,
-        message_reminder_calls=settings.message_reminder_calls,
-        post_finish_message_grace_seconds=settings.agent_post_finish_message_grace_sec,
         max_active_agents=settings.max_active_agents,
     )
     fleet_config = build_fleet_config(settings)
-    fleet_replication = (
-        FleetReplicationService(
-            fleet_config,
-            FleetIdentityStore(settings.database_path),
-            AgentStore(settings.database_path),
-            max_session_seconds=settings.agent_max_session_sec,
-            events=events,
-        )
-        if fleet_config
-        else None
-    )
+    fleet_replication = MeshPeerTransport(fleet_config) if fleet_config else None
     service = TerminalService(
         repo,
         terminal,
@@ -178,7 +154,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events,
         metrics,
         agent_policy,
-        None,
     )
     fleet_node_meta = None
     fleet_source = None
@@ -219,7 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet_projection_service = FleetProjectionService(
             fleet_config,
             fleet_projection,
-            local_source=fleet_source if projection_role == "owner" else None,
+            local_source=fleet_source,
             owner_node_id=settings.fleet_projection_owner_node_id,
             metrics=metrics,
             events=events,
@@ -227,8 +202,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     fleet_control = None
     if fleet_config is not None:
-        if fleet_config is None:
-            raise ValueError("fleet v1 authority requires configured fleet peer authentication")
         fleet_control = FleetControlStore(
             settings.effective_fleet_control_path(),
             fleet_id=settings.fleet_id,
@@ -241,73 +214,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     managed_authority_node_id = (
         fleet_config.instance_id if fleet_config else settings.fleet_instance_id
     )
-    persistent_store = WorkWindowStore(
-        settings.database_path, authority_node_id=managed_authority_node_id
-    )
+    persistent_store = PersistentAgentStore(settings.database_path)
     persistent_store.configure_observability(events, metrics)
     persistent_local_fence = PersistentExecutionFence(repo, terminal, service.task_store)
-    persistent_fleet = (
-        PersistentFleetBridge(
-            fleet_config,
-            persistent_store,
-            repo,
-            terminal,
-            service.task_store,
-            permit_ttl_ms=settings.fleet_permit_ttl_ms,
-            control_store=fleet_control,
-            control_node_id=(settings.fleet_control_node_id),
-            access_authority=auth_foundation,
-        )
-        if fleet_config
-        else None
-    )
-    if persistent_fleet:
-        persistent_fleet.execution_fence = persistent_local_fence
-        persistent_fence = CompositePersistentExecutionFence(
-            persistent_local_fence, persistent_fleet
-        )
-    else:
-        persistent_fence = persistent_local_fence
-    persistent_lifecycle = PersistentLifecycleCoordinator(
+    persistent_lifecycle = SessionExecutionCoordinator(
         persistent_store,
-        enabled=True,
-        authority_node_id=managed_authority_node_id,
         session_duration_seconds=settings.persistent_session_duration_sec,
         rearm_delay_seconds=settings.persistent_session_rearm_after_sec,
-        execution_fence=persistent_fence,
     )
-    service.persistent = PersistentBackend(
-        service, persistent_lifecycle, persistent_fleet, access_authority=auth_foundation
-    )
+    service.persistent = PersistentBackend(service, persistent_lifecycle)
     service.persistent_lifecycle = persistent_lifecycle
     persistent_policy_controller = PersistentPolicyController(
         settings, service, persistent_lifecycle
     )
-    managed_routes = persistent_fleet if fleet_config is not None else None
-    managed_identity = ManagedProviderResolver(persistent_store, routes=managed_routes)
-    managed_authorizer = ManagedGrantAuthorizer(
-        persistent_store, auth_foundation, routes=managed_routes
-    )
-    managed_sessions = ManagedSessionApplication(
-        persistent_store, managed_authorizer, persistent_fence
-    )
-    managed_recovery = ManagedWindowRecovery(persistent_store, managed_sessions)
-    managed_runtime = ManagedSessionRuntime(
-        managed_identity,
-        managed_sessions,
-        managed_recovery,
-        enabled=True,
-    )
 
     async def sync_namespace(namespace: str | None = None) -> None:
-        accepted = await asyncio.to_thread(finish_namespace_transition, settings)
-        if accepted is None:
-            return
-        if namespace is not None and accepted != namespace:
-            raise RuntimeError("namespace_transition_identity_mismatch")
-        for metadata in (fleet_node_meta, fleet_projection, fleet_control):
-            if metadata is not None:
-                metadata.fleet_id = accepted
+        guard = (
+            fleet_projection_service.namespace_transition()
+            if fleet_projection_service is not None
+            else contextlib.nullcontext()
+        )
+        async with guard as mark_applied:
+            accepted = await asyncio.to_thread(finish_namespace_transition, settings)
+            if accepted is None:
+                return
+            if namespace is not None and accepted != namespace:
+                raise RuntimeError("namespace_transition_identity_mismatch")
+            for metadata in (fleet_node_meta, fleet_projection, fleet_control):
+                if metadata is not None:
+                    metadata.fleet_id = accepted
+            if mark_applied is not None:
+                mark_applied()
 
     managed_fleet_control = (
         ManagedFleetControl(
@@ -319,7 +256,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             runtime_targets=(
                 fleet_replication,
                 fleet_projection_service,
-                persistent_fleet,
             ),
         )
         if fleet_control and fleet_config and fleet_replication
@@ -329,7 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     access_mesh_replication = None
     access_mesh_messages = None
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)
-    native_defaults = SlotPolicy(
+    native_defaults = migrated_defaults or SlotPolicy(
         settings.access_mesh_duration_sec,
         settings.access_mesh_cooldown_sec,
         True,
@@ -354,7 +290,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     service.access_mesh = access_mesh
     if managed_fleet_control is not None:
         managed_fleet_control.native_access = access_mesh
-    persistent_lifecycle.access_mesh = access_mesh
     if fleet_config and fleet_replication:
         access_mesh_replication = AccessMeshReplication(access_mesh, fleet_config)
         access_mesh.replication = access_mesh_replication
@@ -363,7 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             managed_fleet_control.runtime_targets += (access_mesh_replication,)
     access_mesh_messages = AccessMeshMessaging(
         access_mesh,
-        agent_store=service.agent_coordinator.store,
+        agent_store=service.agent_store,
         replication=access_mesh_replication,
     )
     service.access_mesh_messages = access_mesh_messages
@@ -379,8 +314,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet_projection=fleet_projection,
         projection_service=fleet_projection_service,
         fleet_control=managed_fleet_control,
-        managed_identity=managed_identity,
-        managed_sessions=managed_sessions,
     )
     service.application = application
     auth = AuthService(settings, oauth_store, credentials)
@@ -457,9 +390,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             authorization_checker=checked_subscription_access,
         )
         access_mesh_replication.lifecycle_events = lifecycle_event_mesh
-    # Connect the real managed-session operation path to the one-shot idle clock.
-    managed_sessions.activity_notifier = mcp_event_store.note_managed_activity
-    managed_sessions.attach_notifier = mcp_event_store.note_local_attach
+    # The native session path owns the one-shot idle clock.
     if access_mesh is not None:
         access_mesh.attach_notifier = mcp_event_store.note_local_attach
         access_mesh.activity_notifier = mcp_event_store.note_managed_activity
@@ -496,10 +427,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
 
+    async def migrate_runtime_state():
+        return await asyncio.to_thread(
+            migrate_unified_runtime,
+            mesh_store,
+            defaults=access_mesh.configured_defaults,
+            existing_installation=existing_runtime,
+            preserve_local_defaults=migrated_defaults is not None,
+        )
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Fail closed before initialising runtime services if legacy credentials
-        # still live in the resettable database. Migration requires an offline backup.
         # Finish an authenticated, committed Join/Detach interrupted before
         # its config/metadata write, before identity checks initialise stores.
         await sync_namespace()
@@ -510,6 +448,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await repo.initialize(
             preserve_active_commands=bool(getattr(execution, "reconnectable", False))
         )
+        await migrate_runtime_state()
         if fleet_node_meta:
             await fleet_node_meta.initialize()
         if fleet_projection:
@@ -605,6 +544,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.metrics = metrics
     app.state.events = events
     app.state.event_store = service.event_store
+    app.state.migrate_runtime_state = migrate_runtime_state
     app.state.fleet_replication = fleet_replication
     app.state.fleet_node_meta = fleet_node_meta
     app.state.fleet_source = fleet_source
@@ -613,13 +553,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.fleet_projection = fleet_projection
     app.state.fleet_projection_service = fleet_projection_service
     app.state.persistent_backend = service.persistent
-    app.state.managed_identity = managed_identity
-    app.state.managed_sessions = managed_sessions
-    app.state.managed_recovery = managed_recovery
-    app.state.managed_runtime = managed_runtime
     app.state.persistent_lifecycle = persistent_lifecycle
     app.state.persistent_policy_controller = persistent_policy_controller
-    app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
     if access_mesh:
         app.include_router(build_access_mesh_operator_router(application))
@@ -684,7 +619,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ws_ticket_store,
         )
     )
-    if settings.fleet_v1_public_enabled and fleet_projection:
+    if fleet_projection:
         app.include_router(
             build_console_fleet_router(
                 settings,
@@ -707,6 +642,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health/live", include_in_schema=False)
     async def live():
         return {"ok": True, "version": __version__, "release": __release__}
+
+    @app.get("/health/ready", include_in_schema=False)
+    async def ready():
+        try:
+            state = await asyncio.to_thread(access_mesh.registry_readiness)
+        except Exception:
+            state = {"ready": False, "reason": "mesh_registry_unavailable"}
+        return JSONResponse(
+            {"ok": state["ready"], "version": __version__, "release": __release__, **state},
+            status_code=200 if state["ready"] else 503,
+        )
 
     from terminal_mcp.operation_metadata import (
         action_is_consequential,

@@ -34,13 +34,13 @@ async def attach_claim_lease(db, claim_id: int, logical_agent_id: str, lease: di
             (session_id,),
         )
     ).fetchone()
-    # Remote owners are admitted by a verified short-lived Fleet permit. Their
-    # local lease deliberately has no FK to an authority-owned WorkSession row.
-    if session is not None and (
+    # Every current Mesh participant owns a native local work-session mirror.
+    if session is None or (
         session[0] != logical_agent_id
         or int(session[1]) != epoch
         or session[2] != "active"
         or utc_now() >= parse_utc(session[3])
+        or parse_utc(expires) > parse_utc(session[3])
     ):
         raise PersistentStoreError("session_not_active")
     old = await (
@@ -125,6 +125,14 @@ async def migrate_existing_claim_leases(db, *, now: str) -> None:
     An operator's durable claim without a matching managed claim event remains
     durable. Existing ownership is never rebound to the latest session by name.
     """
+    historical_bindings = await (
+        await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='logical_agent_session_bindings'"
+        )
+    ).fetchone()
+    if historical_bindings is None:
+        return
     await db.execute(
         "INSERT OR IGNORE INTO work_claim_leases(claim_id,logical_agent_id,work_session_id,"
         "session_epoch,hard_expires_at) "

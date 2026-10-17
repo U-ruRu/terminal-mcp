@@ -17,7 +17,6 @@ from terminal_mcp.core.persistent_admission import (
     VerifiedAdmissionContext,
     current_admission_context,
 )
-from terminal_mcp.http.fleet import build_fleet_router
 from terminal_mcp.http.fleet_control import build_fleet_control_router
 from terminal_mcp.http.fleet_v1 import (
     build_fleet_v1_projection_router,
@@ -57,34 +56,6 @@ class PeerAuth:
 
 
 HEADERS = {"X-Terminal-MCP-Peer": "peer", "Authorization": "Bearer mesh-test-key"}
-
-
-async def test_replication_peer_attribution_cannot_come_from_payload():
-    receiver = AsyncMock(return_value=True)
-    replication = SimpleNamespace(
-        config=SimpleNamespace(instance_id="local"),
-        authenticate=PeerAuth().authenticate,
-        receive_finish=receiver,
-    )
-    server = FastAPI()
-    server.include_router(build_fleet_router(replication))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/internal/fleet/session-finish",
-            headers=HEADERS,
-            json={
-                "agent_id": "agent",
-                "ended_at": "time",
-                "reason": "done",
-                "authenticated_peer_id": "forged",
-            },
-        )
-    assert response.json() == {"ok": True, "changed": True}
-    receiver.assert_awaited_once_with(
-        "agent", "time", "done", authenticated_peer_id="verified-peer"
-    )
 
 
 async def test_source_filter_projection_forwards_canonical_filters_over_http():

@@ -1,4 +1,4 @@
-"""Current Access-code storage and dedicated-key recovery boundaries."""
+"""Protected installation key boundaries survive retirement of old code issuers."""
 
 import sqlite3
 
@@ -12,33 +12,21 @@ from terminal_mcp.auth.foundation import AuthFoundationStore
 async def access(tmp_path):
     store = AuthFoundationStore(tmp_path / "auth.sqlite3")
     await store.initialize()
-    await store.register_access_slot("la_one", "secondary")
+    with sqlite3.connect(store.path) as db:
+        db.execute(
+            "CREATE TABLE auth_access_slots(logical_agent_id TEXT PRIMARY KEY,public_name TEXT,"
+            "slot_kind TEXT,authority_node_id TEXT,created_at TEXT,updated_at TEXT)"
+        )
+        db.execute(
+            "INSERT INTO auth_access_slots"
+            "(logical_agent_id,public_name,slot_kind,authority_node_id,"
+            "created_at,updated_at) VALUES('la_one','Archive','persistent','secondary','old','old')"
+        )
     return store
 
 
 @pytest.mark.asyncio
-async def test_issued_code_uses_distinct_keyed_index_and_verifier(access):
-    await access.issue_access_code("la_one", requested_code="0042")
-
-    with sqlite3.connect(access.path) as db:
-        stored = db.execute("SELECT code_index,verifier FROM auth_access_codes").fetchone()
-    assert stored == (access.access._index("0042"), access.access._verifier("0042"))
-    assert len(stored[0]) == len(stored[1]) == 64
-    assert stored[0] != stored[1]
-
-
-@pytest.mark.asyncio
-async def test_issued_code_preserves_leading_zeroes(access):
-    await access.issue_access_code("la_one", requested_code="0042")
-
-    resolved = await access.resolve_access_code("0042")
-
-    assert resolved["logical_agent_id"] == "la_one"
-
-
-@pytest.mark.asyncio
 async def test_missing_dedicated_key_refuses_current_access_data(access):
-    await access.issue_access_code("la_one", requested_code="0042")
     access.path.with_name(access.path.name + ".access-key").unlink()
 
     with pytest.raises(Exception, match="key is missing"):

@@ -33,7 +33,7 @@ class ActorContext:
     transport: str = "internal"
     request_id: str | None = None
     node_id: str = ""
-    endpoint_role: str = "legacy"
+    endpoint_role: str = "internal"
     contract_version: int = 1
     issuer_node_id: str | None = None
     slot_id: str | None = None

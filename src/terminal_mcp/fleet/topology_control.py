@@ -265,6 +265,29 @@ class TopologyControl:
             await self.store.complete_topology_transition(node_id, operation_id, "committed")
             return state
 
+    async def _rehome_committed_detach(self, state: dict) -> dict:
+        local = next(
+            (row for row in state.get("nodes", []) if row.get("node_id") == self.store.node_id),
+            None,
+        )
+        if (
+            local is not None
+            and local.get("state") == "draining"
+            and local.get("mesh_id") is None
+            and state["control_node_id"] != self.store.node_id
+        ):
+            transition = await self.store.topology_transition(self.store.node_id)
+            if (
+                transition
+                and transition["target_mesh_id"] is None
+                and transition["phase"] in {"prepared", "committed"}
+            ):
+                await self.store.claim_local_control_authority()
+                await self._complete_namespace()
+                state = await self.snapshot()
+                self._sync_control_node(self.store.control_node_id)
+        return state
+
     async def _finish_local_membership(self, state: dict) -> None:
         transition = await self.store.topology_transition(self.store.node_id)
         if transition is None or transition["phase"] not in {"prepared", "committed"}:
@@ -334,7 +357,7 @@ class TopologyControl:
 
     async def _recover_membership_changes(self) -> None:
         async with self._topology_lock:
-            state = await self.snapshot()
+            state = await self._rehome_committed_detach(await self.snapshot())
             for transition in await self.store.pending_topology_transitions():
                 node_id = transition["node_id"]
                 if node_id == self.store.node_id:

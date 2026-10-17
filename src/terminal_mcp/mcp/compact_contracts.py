@@ -32,7 +32,6 @@ ANNOTATIONS = Path(__file__).with_name("compact_annotations.json")
 SOURCE_FILES = (
     "src/terminal_mcp/mcp/role_contracts.py",
     "src/terminal_mcp/mcp/access_contracts.py",
-    "src/terminal_mcp/mcp/task_contract.py",
     "src/terminal_mcp/mcp/task_planning.py",
     "src/terminal_mcp/mcp/output_contracts.py",
     "src/terminal_mcp/mcp/role_outputs.py",

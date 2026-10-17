@@ -5,7 +5,6 @@ from terminal_mcp.auth.admission import verified_admission_context
 from terminal_mcp.core.persistent_admission import bind_admission_context, reset_admission_context
 
 MCP_PREFIXES = (
-    "/mcp",
     "/terminal-mcp/executor/v1/mcp",
     "/terminal-mcp/access/v1/mcp",
     "/terminal-mcp/coordinator/v1/mcp",
@@ -13,7 +12,6 @@ MCP_PREFIXES = (
 
 PUBLIC_PREFIXES = (
     "/.well-known/",
-    "/mcp/.well-known/",
     "/terminal-mcp/executor/v1/mcp/.well-known/",
     "/terminal-mcp/access/v1/mcp/.well-known/",
     "/terminal-mcp/coordinator/v1/mcp/.well-known/",
@@ -23,28 +21,8 @@ PUBLIC_PREFIXES = (
     "/redoc",
 )
 
-# In mixed deployments actions remain protected by the legacy static bearer token,
-# while the paired Console authenticates with its short-lived OAuth device token.
-# Keep that OAuth fallback narrowly scoped to the Console control plane: snapshot
-# reads plus Persistent slot/claim mutations. Agent execution/session/task routes
-# deliberately remain unavailable through this fallback.
-PAIRED_CONSOLE_PERSISTENT_MUTATIONS = frozenset(
-    {
-        "/actions/persistent/policy",
-        "/actions/persistent/slots/create",
-        "/actions/persistent/slots/migrate-access",
-        "/actions/persistent/slots/rotate-access-code",
-        "/actions/persistent/slots/rotate-selector",
-        "/actions/persistent/slots/play",
-        "/actions/persistent/slots/suspend",
-        "/actions/persistent/slots/delete",
-        "/actions/persistent/claims/release",
-        "/actions/persistent/claims/reassign",
-        "/actions/persistent/managed/policy",
-        "/actions/persistent/managed/window",
-        "/actions/persistent/managed/sessions/end",
-    }
-)
+# Paired applications can use their device OAuth identity on current Console
+# and Mesh controls even when agent ingress uses a static bearer credential.
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -176,10 +154,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return ["terminal:read", "terminal:execute"]
         if method.upper() == "GET" and path == "/actions/console/snapshot":
             return ["terminal:read"]
-        if method.upper() == "POST" and path == "/actions/persistent/managed/status":
-            return ["terminal:read"]
-        if method.upper() == "POST" and path in PAIRED_CONSOLE_PERSISTENT_MUTATIONS:
-            return ["terminal:read", "terminal:execute"]
         if path == "/actions/fleet/control" and method.upper() == "GET":
             return ["terminal:read"]
         if path == "/actions/fleet/control/enrollment" and method.upper() == "GET":
@@ -194,8 +168,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Application session/coordination guardrails remain authoritative.
         return ["terminal:read"]
 
-    def _deny(self, detail, path: str = "/mcp"):
-        resource_path = "/mcp"
+    def _deny(self, detail, path: str = "/terminal-mcp/access/v1/mcp"):
+        resource_path = "/terminal-mcp/access/v1/mcp"
         for prefix in MCP_PREFIXES:
             if path == prefix or path.startswith(f"{prefix}/"):
                 resource_path = prefix

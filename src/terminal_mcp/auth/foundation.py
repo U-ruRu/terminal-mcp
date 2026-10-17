@@ -53,10 +53,10 @@ class AuthFoundationStore:
         self.path = Path(path)
         self.passwords = PasswordHasher()
         self.sqlite_diagnostics = SqliteDiagnostics("auth")
-        from terminal_mcp.auth.access_authority import AccessCodeAuthority
+        from terminal_mcp.auth.access_key import AccessVerifierKeyStore
 
         key_path = access_key_path or self.path.with_name(self.path.name + ".access-key")
-        self.access = AccessCodeAuthority(self, key_path)
+        self._installation_key = AccessVerifierKeyStore(key_path)
 
     def configure_observability(self, events, metrics):
         self.sqlite_diagnostics.configure(events, metrics)
@@ -87,6 +87,20 @@ class AuthFoundationStore:
                     f"auth schema version {schema_version} is newer than supported version "
                     f"{AUTH_SCHEMA_VERSION}"
                 )
+            existing_tables = {
+                row[0]
+                for row in await (
+                    await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                ).fetchall()
+            }
+            # The immutable installation anchor also authenticates preserved
+            # identity history. Never regenerate it for an established store.
+            self._installation_key.load_or_create(
+                allow_create="auth_security_state" not in existing_tables
+                and not existing_tables.intersection(
+                    {"auth_access_slots", "auth_access_codes", "auth_access_code_tombstones"}
+                )
+            )
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS auth_security_state(
@@ -156,24 +170,6 @@ class AuthFoundationStore:
                 CREATE INDEX IF NOT EXISTS ix_auth_audit_created
                     ON auth_audit(created_at,id);
                 """
-            )
-            await self.access.initialize(db)
-            await db.execute(
-                "CREATE TABLE IF NOT EXISTS auth_provider_bindings("
-                "provider TEXT NOT NULL,binding_key TEXT NOT NULL,"
-                "logical_agent_id TEXT NOT NULL,created_at TEXT NOT NULL,"
-                "last_seen_at TEXT NOT NULL,"
-                "PRIMARY KEY(provider,binding_key),"
-                "FOREIGN KEY(logical_agent_id) REFERENCES auth_access_slots(logical_agent_id)"
-                ")"
-            )
-            await db.execute(
-                "CREATE INDEX IF NOT EXISTS ix_auth_provider_bindings_slot "
-                "ON auth_provider_bindings(logical_agent_id)"
-            )
-            await db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_provider_binding_slot "
-                "ON auth_provider_bindings(provider,logical_agent_id)"
             )
             await db.execute(f"PRAGMA user_version={AUTH_SCHEMA_VERSION}")
             now = _utc_now()
@@ -737,180 +733,6 @@ class AuthFoundationStore:
             }
             for row in rows
         ]
-
-    @staticmethod
-    def _provider_binding_input(provider: str, binding_key: str) -> tuple[str, str]:
-        provider = (provider or "").strip()
-        binding_key = (binding_key or "").strip().lower()
-        if (
-            not provider
-            or len(provider) > 32
-            or len(binding_key) != 64
-            or any(char not in "0123456789abcdef" for char in binding_key)
-        ):
-            raise ValueError("invalid provider binding")
-        return provider, binding_key
-
-    async def resolve_provider_binding(self, provider: str, binding_key: str) -> str | None:
-        provider, binding_key = self._provider_binding_input(provider, binding_key)
-        db = await self._connect()
-        try:
-            row = await (
-                await db.execute(
-                    "SELECT b.logical_agent_id FROM auth_provider_bindings b "
-                    "JOIN auth_access_slots s ON s.logical_agent_id=b.logical_agent_id "
-                    "WHERE b.provider=? AND b.binding_key=? AND s.status='active'",
-                    (provider, binding_key),
-                )
-            ).fetchone()
-            if row is not None:
-                await db.execute(
-                    "UPDATE auth_provider_bindings SET last_seen_at=? "
-                    "WHERE provider=? AND binding_key=?",
-                    (_utc_now(), provider, binding_key),
-                )
-                await db.commit()
-                return str(row[0])
-            return None
-        finally:
-            await db.close()
-
-    async def provider_last_seen(self, logical_agent_id: str) -> str | None:
-        logical_agent_id = _normalized(logical_agent_id, "logical_agent_id")
-        db = await self._connect()
-        try:
-            row = await (
-                await db.execute(
-                    "SELECT MAX(last_seen_at) FROM auth_provider_bindings WHERE logical_agent_id=?",
-                    (logical_agent_id,),
-                )
-            ).fetchone()
-            return str(row[0]) if row is not None and row[0] is not None else None
-        finally:
-            await db.close()
-
-    async def bind_provider_binding(
-        self,
-        provider: str,
-        binding_key: str,
-        logical_agent_id: str,
-        *,
-        principal_id: str | None = None,
-    ) -> str:
-        provider, binding_key = self._provider_binding_input(provider, binding_key)
-        logical_agent_id = _normalized(logical_agent_id, "logical_agent_id")
-        now = _utc_now()
-        db = await self._connect()
-        try:
-            await db.execute("BEGIN IMMEDIATE")
-            slot = await (
-                await db.execute(
-                    "SELECT status FROM auth_access_slots WHERE logical_agent_id=?",
-                    (logical_agent_id,),
-                )
-            ).fetchone()
-            if slot is None or slot[0] != "active":
-                raise AuthNotFoundError("active access slot does not exist")
-            existing = await (
-                await db.execute(
-                    "SELECT logical_agent_id FROM auth_provider_bindings "
-                    "WHERE provider=? AND binding_key=?",
-                    (provider, binding_key),
-                )
-            ).fetchone()
-            if existing is not None and existing[0] != logical_agent_id:
-                raise AuthConflictError("provider identity is already bound")
-            slot_binding = await (
-                await db.execute(
-                    "SELECT binding_key FROM auth_provider_bindings "
-                    "WHERE provider=? AND logical_agent_id=?",
-                    (provider, logical_agent_id),
-                )
-            ).fetchone()
-            if slot_binding is not None and slot_binding[0] != binding_key:
-                raise AuthConflictError("provider slot is already bound")
-            if existing is None:
-                await db.execute(
-                    "INSERT INTO auth_provider_bindings"
-                    "(provider,binding_key,logical_agent_id,created_at,last_seen_at) "
-                    "VALUES(?,?,?,?,?)",
-                    (provider, binding_key, logical_agent_id, now, now),
-                )
-                await self._bump_generation(db, now)
-                await self._audit(
-                    db,
-                    "provider_binding_create",
-                    "success",
-                    principal_id=principal_id,
-                    resource=logical_agent_id,
-                    details={"provider": provider, "binding_key": binding_key},
-                    now=now,
-                )
-            else:
-                await db.execute(
-                    "UPDATE auth_provider_bindings SET last_seen_at=? "
-                    "WHERE provider=? AND binding_key=?",
-                    (now, provider, binding_key),
-                )
-            await db.commit()
-            return logical_agent_id
-        except Exception:
-            await db.rollback()
-            raise
-        finally:
-            await db.close()
-
-    async def access_slot(self, logical_agent_id: str) -> dict | None:
-        return await self.access.get_slot(logical_agent_id)
-
-    async def access_slot_by_public_name(self, public_name: str) -> dict | None:
-        return await self.access.get_slot_by_public_name(public_name)
-
-    async def access_slots(
-        self,
-        *,
-        include_deleted: bool = False,
-        limit: int | None = None,
-        offset: int = 0,
-    ) -> list[dict]:
-        return await self.access.list_slots(
-            include_deleted=include_deleted,
-            limit=limit,
-            offset=offset,
-        )
-
-    async def register_access_slot(
-        self,
-        logical_agent_id: str,
-        authority_node_id: str,
-        *,
-        slot_kind: str = "persistent",
-        display_suffix: str | None = None,
-    ) -> dict:
-        return await self.access.register_slot(
-            logical_agent_id, authority_node_id, slot_kind=slot_kind, display_suffix=display_suffix
-        )
-
-    async def reserve_access_codes(self, codes, *, reason: str = "legacy_selector") -> int:
-        return await self.access.reserve_codes(codes, reason=reason)
-
-    async def issue_access_code(
-        self, logical_agent_id: str, *, forbidden_codes=(), requested_code: str | None = None
-    ) -> dict:
-        return await self.access.issue_code(
-            logical_agent_id, forbidden_codes=forbidden_codes, requested_code=requested_code
-        )
-
-    async def resolve_access_code(self, access_code: str) -> dict | None:
-        return await self.access.resolve_code(access_code)
-
-    async def retire_access_slot(self, logical_agent_id: str) -> dict:
-        return await self.access.retire_slot(logical_agent_id)
-
-    async def update_access_display_suffix(
-        self, logical_agent_id: str, display_suffix: str | None
-    ) -> dict:
-        return await self.access.update_display_suffix(logical_agent_id, display_suffix)
 
     async def audit_events(self, limit: int = 100) -> list[dict]:
         limit = max(1, min(int(limit), 1000))

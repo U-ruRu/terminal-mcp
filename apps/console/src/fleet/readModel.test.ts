@@ -183,6 +183,25 @@ test('orders servers by their current connection problem', () => {
   expect(model.servers.map((server) => server.instanceId)).toEqual(['offline', 'stale', 'live'])
 })
 
+test('keeps warning and draining sessions current while excluding cooldown and ended sessions', () => {
+  const value = snapshot('https://node.example', 'current-release', { agentName: 'Agent' })
+  value.agents = ['active', 'warning', 'draining', 'cooldown', 'ended'].map((status) => ({
+    ...value.agents[0],
+    name: status,
+    status,
+    intent: 'intent-' + status,
+    sessionRef: 'session-' + status,
+  }))
+
+  const model = buildFleetReadModel([instance('node', 'Node', 'live', value)])
+
+  expect(model.activeAgents.map(({ agent }) => agent.status)).toEqual(['active', 'draining', 'warning'])
+  expect(model.sessions.map((session) => session.sessionRef)).toEqual(['session-active', 'session-draining', 'session-warning'])
+  expect(model.summary.activeAgents).toBe(3)
+  expect(model.servers[0].activeAgentCount).toBe(3)
+  expect(model.servers[0].activeIntents).toEqual(['intent-active', 'intent-draining', 'intent-warning'])
+})
+
 test('collapses one shared session across origin and attachment while preserving the global budget', () => {
   const origin = instance(
     'origin',

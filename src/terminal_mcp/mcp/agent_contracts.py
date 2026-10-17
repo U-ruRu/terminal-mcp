@@ -7,6 +7,7 @@ Only one packaged agent-facing catalog is published for each role.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -36,7 +37,8 @@ def install_agent_contract(mcp, role: str, models: dict[str, type]) -> None:
     # Validate every tool before mutating any of the published metadata.
     for name, tool in tools.items():
         item = catalog[name]
-        if (tool.description or "") != item["base_description"]:
+        source_digest = hashlib.sha256((tool.description or "").encode()).hexdigest()
+        if source_digest != item["source_description_sha256"]:
             raise RuntimeError(f"Agent discovery description drift for {role}.{name}")
         input_hash = schema_digest(models[name].model_json_schema())
         if input_hash != item["strict_input_sha256"]:
@@ -49,5 +51,3 @@ def install_agent_contract(mcp, role: str, models: dict[str, type]) -> None:
         tool.description = catalog[name]["description"]
         tool.parameters = OBJECT_SCHEMA.copy()
         tool.fn_metadata.output_schema = OBJECT_SCHEMA.copy()
-
-    mcp.agent_schema_mode = "knowledge"

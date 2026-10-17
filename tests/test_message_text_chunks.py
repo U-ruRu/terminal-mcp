@@ -23,6 +23,7 @@ def _server(monkeypatch, node, identity="bob"):
 
     app = SimpleNamespace(
         service=service,
+        message=node.message,
         session_gate=SimpleNamespace(resolve=resolve, touch_provider=AsyncMock(return_value=None)),
     )
     monkeypatch.setattr(roles, "get_application", lambda *_args, **_kwargs: app)

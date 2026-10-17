@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 from terminal_mcp.core.service import TerminalService
@@ -13,17 +11,6 @@ async def create_runtime(tmp_path):
     terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
     service = TerminalService(repo, terminal, 5000)
     return repo, terminal, service
-
-
-async def wait_status(service, cmd_hash, statuses, attempts=300):
-    statuses = {statuses} if isinstance(statuses, str) else set(statuses)
-    result = None
-    for _ in range(attempts):
-        result = await service.read(cmd_hash, 1000, 0)
-        if result["status"] in statuses:
-            return result
-        await asyncio.sleep(0.01)
-    return result
 
 
 async def test_queue_claim_selects_oldest_waiting_command(tmp_path):
@@ -48,17 +35,3 @@ async def test_recovery_nonzero_exit_is_command_failure_not_plugin_error(tmp_pat
     assert result["lines"][0].endswith("command-error")
 
     await terminal.stop()
-
-
-async def register_queue_agent(service, label):
-    plan = {
-        "task_summary": f"{label} queue test",
-        "intent": "exercise durable queue lifecycle",
-        "details": ["exercise durable queue lifecycle"],
-        "work_scope": [],
-    }
-    proposed = await service.agent_start(**plan)
-    assert proposed["admission_required"] is True
-    result = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
-    assert result["ok"] is True
-    return result["self"]["agent_id"]

@@ -17,7 +17,6 @@ class Backend(PersistentBackend):
         self.service = SimpleNamespace(events=None, access_mesh=object())
         self.task_coordinator = TaskCoordinator(tasks)
         self.task_store = tasks
-        self.fleet_bridge = None
 
     @asynccontextmanager
     async def _operation_guard(self, logical_agent_id):
@@ -25,7 +24,7 @@ class Backend(PersistentBackend):
 
     async def _execution_authority(self, *args, **kwargs):
         # Admission is already granted; this test owns only the committed receipt.
-        return SimpleNamespace(), None
+        return SimpleNamespace()
 
 
 @pytest.mark.asyncio

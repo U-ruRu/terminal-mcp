@@ -20,7 +20,9 @@ SCHEMA_MANIFESTS = (
     "mcp/access_mesh_schema_baselines_v2.json",
     "mcp/role_schema_baselines_v1.json",
 )
-# Optional: absence in old packages must preserve their issued fingerprint.
+# Historical names above are read only when validating an installed release.
+# Current native catalogs are optional for older packages, preserving their issued fingerprint.
+CURRENT_SCHEMA_MANIFESTS = ("mcp/access_mesh_schema_baselines_knowledge_v1.json",)
 EVENT_SCHEMA_MANIFESTS = (
     "mcp/native_event_schema_baselines_v1.json",
     "mcp/mesh_event_schema_baselines_v1.json",
@@ -86,7 +88,7 @@ def schema_fingerprint(package: Path) -> str:
         path = package / name
         # Missing manifests are significant; never silently treat absence as a match.
         state[name] = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
-    for name in EVENT_SCHEMA_MANIFESTS:
+    for name in (*CURRENT_SCHEMA_MANIFESTS, *EVENT_SCHEMA_MANIFESTS):
         path = package / name
         if path.is_file():
             state[name] = event_contract_semantics(json.loads(path.read_text(encoding="utf-8")))

@@ -98,7 +98,7 @@ class _FastPathBackend(PersistentBackend):
         session = SimpleNamespace(
             hard_expires_at="2099-01-01T00:00:00Z", authority_node_id="node-a"
         )
-        return session, None
+        return session
 
     async def _task_refs(self, logical_agent_id):
         return []

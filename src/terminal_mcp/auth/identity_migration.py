@@ -108,10 +108,6 @@ FOUNDATION_TABLES = frozenset(
         "auth_clients",
         "auth_grants",
         "auth_audit",
-        "auth_access_slots",
-        "auth_access_codes",
-        "auth_access_code_tombstones",
-        "auth_provider_bindings",
     }
 )
 MIGRATION_SCHEMA = (

@@ -8,9 +8,6 @@ READ_ONLY_ACTIONS = frozenset(
         "getTerminalHealth",
         "getConsoleSnapshot",
         "getManagedFleetControl",
-        "listPersistentSlots",
-        "getPersistentSlot",
-        "getManagedWorkSessionStatus",
         "listAccessMeshSlots",
         "getAccessMeshSlot",
         "getAccessMeshDefaults",
@@ -18,13 +15,8 @@ READ_ONLY_ACTIONS = frozenset(
 )
 MUTATING_ACTIONS = frozenset(
     {
-        "startAgentSession",
         "mutateAccessMesh",
-        "coordinateAgent",
-        "messageAgent",
-        "finishAgentSession",
         "manageInstanceContext",
-        "mutateTask",
         "runCommand",
         "recoveryCommand",
         "cancelCommand",
@@ -39,24 +31,6 @@ MUTATING_ACTIONS = frozenset(
         "rotateManagedFleetTrust",
         "reconcileManagedFleetControl",
         "updatePersistentPolicy",
-        "createPersistentSlot",
-        "renamePersistentSlot",
-        "rotatePersistentSlotSelector",
-        "migratePersistentSlotAccess",
-        "rotatePersistentSlotAccessCode",
-        "playPersistentSlot",
-        "suspendPersistentSlot",
-        "deletePersistentSlot",
-        "startPersistentSession",
-        "endPersistentSession",
-        "runPersistentCommand",
-        "cancelPersistentCommand",
-        "mutatePersistentTask",
-        "releasePersistentClaim",
-        "reassignPersistentClaim",
-        "updateManagedSlotSessionPolicy",
-        "updateManagedWorkWindow",
-        "endManagedWorkSession",
     }
 )
 

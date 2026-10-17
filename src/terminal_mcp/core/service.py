@@ -3,11 +3,11 @@ import secrets
 from sqlite3 import Error as SqliteError
 from sqlite3 import IntegrityError
 
+from terminal_mcp.core.agent_history import AgentHistory
 from terminal_mcp.core.agent_policy import AgentPolicy
-from terminal_mcp.core.agents import AgentCoordinator
-from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
-from terminal_mcp.core.persistent_agents import ClaimOwner
-from terminal_mcp.core.tasks import VALUE_PRIORITY, TaskCoordinator
+from terminal_mcp.core.agent_views import AgentViews
+from terminal_mcp.core.orchestration import normalize_preview, public_agent_name, utc_text
+from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.host_resources import collect_host_resources
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.context import ContextStore
@@ -80,7 +80,6 @@ def _compact_context(context):
     truthy = (
         "session_expired",
         "registration_required",
-        "admission_required",
         "return_to_chat",
         "task_context_expired",
         "coordination_message_pending",
@@ -114,7 +113,6 @@ class TerminalService:
         events=None,
         metrics=None,
         agent_policy: AgentPolicy | None = None,
-        fleet_replication=None,
     ):
         self.repo = repo
         self.terminal = terminal
@@ -125,33 +123,17 @@ class TerminalService:
         self.events = events
         self.metrics = metrics
         self.agent_policy = agent_policy or AgentPolicy()
-        self.fleet_replication = fleet_replication
         self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
         self.context_store = ContextStore(repo.path) if hasattr(repo, "path") else None
         self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
         self.event_store = EventJournalStore(repo.path) if hasattr(repo, "path") else None
         self._last_health_signature = None
-        self.agent_coordinator = (
-            AgentCoordinator(
-                self.agent_store,
-                metrics,
-                self.agent_policy,
-                task_store=self.task_store,
-                foreign_session_resolver=(
-                    fleet_replication.resolve_session if fleet_replication else None
-                ),
-                local_instance_id=(
-                    fleet_replication.config.instance_id if fleet_replication else None
-                ),
-                session_update_notifier=(
-                    getattr(fleet_replication, "queue_session_update", None)
-                    if fleet_replication
-                    else None
-                ),
-            )
+        self.agent_history = (
+            AgentHistory(self.agent_store, self.agent_policy, task_store=self.task_store)
             if self.agent_store
             else None
         )
+        self.agent_views = AgentViews(self)
         self.task_coordinator = (
             TaskCoordinator(
                 self.task_store,
@@ -163,21 +145,6 @@ class TerminalService:
             if self.task_store
             else None
         )
-        if self.fleet_replication:
-            self.fleet_replication.bind_origin_finish_handler(self._finish_fleet_origin_session)
-
-    async def reconcile_agent_sessions(self):
-        if not self.agent_coordinator:
-            return {"examined": 0, "backfilled": 0, "expired": 0}
-        return await self.agent_coordinator.reconcile_sessions()
-
-    async def _operational_context(self, agent_id, tool):
-        if not agent_id or not self.agent_coordinator:
-            return {}
-        lifecycle = await self.agent_coordinator.touch_if_active(agent_id, tool)
-        if lifecycle:
-            return _compact_context(lifecycle)
-        return _compact_context(await self.awareness(agent_id, surface_messages=True))
 
     async def _task_scope_state(self, agent_id):
         refs = []
@@ -191,25 +158,18 @@ class TerminalService:
 
     async def awareness(self, agent_id=None, *, surface_messages=False):
         active_agents = (
-            await self.agent_coordinator.active_snapshot(exclude_agent_id=agent_id)
-            if self.agent_coordinator
+            await self.agent_views.active_snapshot(exclude_agent_id=agent_id)
+            if self.agent_history
             else []
         )
         _, task_scope_options = await self._task_scope_state(agent_id)
-        if not self.agent_coordinator or not agent_id:
-            return {
-                "agent_name": public_agent_name(agent_id),
-                "active_agents": active_agents,
-                "pending_messages": [],
-                "alert_messages": [],
-                "reply_required_messages": [],
-                "task_scope_options": task_scope_options,
-            }
         return {
+            "agent_name": public_agent_name(agent_id),
             "active_agents": active_agents,
+            "pending_messages": [],
+            "alert_messages": [],
+            "reply_required_messages": [],
             "task_scope_options": task_scope_options,
-            **await self.agent_coordinator.session_context(agent_id),
-            **await self.agent_coordinator.message_state(agent_id, surface=surface_messages),
         }
 
     async def _create_with_hash(
@@ -233,13 +193,6 @@ class TerminalService:
         raise RuntimeError("unable to allocate unique command hash")
 
     async def _resolve_queue(self, agent_id, requested_queue_id):
-        if agent_id and self.agent_coordinator:
-            return await self.agent_coordinator.resolve_queue(
-                agent_id,
-                requested_queue_id,
-                self.terminal.queue_workers,
-                self.terminal.least_loaded_queue,
-            )
         if requested_queue_id is not None:
             if requested_queue_id < 1 or requested_queue_id > self.terminal.queue_workers:
                 raise ValueError(f"queue_id must be between 1 and {self.terminal.queue_workers}")
@@ -247,27 +200,6 @@ class TerminalService:
         return await self.terminal.least_loaded_queue()
 
     async def run(self, cmd, agent_id=None, queue_id=None, task_scope=None):
-        gate_context = {}
-        if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.gate(
-                agent_id, "run", require_intent=True, surface_messages=True
-            )
-            if gate["blocked"]:
-                response = gate["response"]
-                response.setdefault("cmd_hash", None)
-                response.setdefault("queue_id", None)
-                response.setdefault("queue_position", None)
-                _, task_scope_options = await self._task_scope_state(agent_id)
-                response.update(
-                    {
-                        "active_agents": await self.agent_coordinator.active_snapshot(
-                            exclude_agent_id=agent_id
-                        ),
-                        "task_scope_options": task_scope_options,
-                    }
-                )
-                return response
-            gate_context = _compact_context(gate["context"])
         available_task_refs, task_scope_options = await self._task_scope_state(agent_id)
         selected_task_refs = []
         if task_scope not in task_scope_options:
@@ -298,7 +230,6 @@ class TerminalService:
                 "task_targets": [],
                 "task_scope_options": task_scope_options,
                 "error": error,
-                **gate_context,
             }
         if task_scope == "all":
             selected_task_refs = available_task_refs
@@ -323,8 +254,8 @@ class TerminalService:
                 stage = "enqueue"
                 await self.terminal.submit(command)
                 submitted = True
-            if agent_id and self.agent_coordinator:
-                await self.agent_coordinator.record_command(agent_id, "run", command.cmd_hash)
+            if agent_id and self.agent_history:
+                await self.agent_store.activity(agent_id, "run", utc_text(), command.cmd_hash)
                 if self.task_coordinator and selected_task_refs:
                     await self.task_coordinator.record_command(
                         agent_id, command.cmd_hash, "run", selected_task_refs
@@ -341,7 +272,6 @@ class TerminalService:
                 ],
                 "task_scope_options": task_scope_options,
                 "error": None,
-                **gate_context,
             }
         except asyncio.CancelledError:
             if command is not None and not submitted:
@@ -400,33 +330,11 @@ class TerminalService:
         return rendered
 
     async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None, agent_id=None):
-        gate_context = {}
-        if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.gate(agent_id, "read", surface_messages=True)
-            if gate["blocked"]:
-                return {
-                    "lines": [],
-                    "next_offset": 0,
-                    "overall_lines_count": None,
-                    "displayed_lines_count": 0,
-                    "cmd_hash": cmd_hash,
-                    "status": None,
-                    "exit_code": None,
-                    "queue_id": None,
-                    "queue_position": None,
-                    "output_truncated": None,
-                    "output_retained": None,
-                    "output_pruned_at": None,
-                    "output_bytes": None,
-                    **gate["response"],
-                }
-            gate_context = _compact_context(gate["context"])
         if self.runtime:
             await self.runtime.before_tool_call()
         limit = max(1, min(int(lines_count), MAX_READ_LINES))
         result = {
             "ok": True,
-            **gate_context,
             "lines": [],
             "next_offset": 0,
             "overall_lines_count": None,
@@ -496,8 +404,8 @@ class TerminalService:
                         result["next_offset"] = lines[-1].seq if lines else offset
                     agent_map = {}
                     hashes = [line.cmd_hash for line in lines]
-                    if self.agent_coordinator:
-                        agent_map = await self.agent_coordinator.store.command_agents(hashes)
+                    if self.agent_history:
+                        agent_map = await self.agent_history.store.command_agents(hashes)
                     queue_map = await self.repo.command_queue_ids(hashes)
                     result["lines"] = self._render(
                         lines, scoped=False, agent_map=agent_map, queue_map=queue_map
@@ -525,7 +433,7 @@ class TerminalService:
 
     async def recovery(self, cmd, agent_id=None):
         caller_agent_id = agent_id or ANONYMOUS_AGENT_ID
-        context = await self._operational_context(agent_id, "recovery")
+        context = {}
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -535,8 +443,8 @@ class TerminalService:
             command = await self._create_with_hash(
                 cmd, "running", caller_agent_id, "recovery", queue_id=None
             )
-            if agent_id and self.agent_coordinator:
-                await self.agent_coordinator.record_command(agent_id, "recovery", command.cmd_hash)
+            if agent_id and self.agent_history:
+                await self.agent_store.activity(agent_id, "recovery", utc_text(), command.cmd_hash)
             stage = "execute"
             duration_ms = await self.terminal.recovery(
                 command, timeout_seconds=_budget(RECOVERY_TIMEOUT_SECONDS)
@@ -598,7 +506,7 @@ class TerminalService:
             }
 
     async def cancel(self, cmd_hash, agent_id=None):
-        context = await self._operational_context(agent_id, "cancel")
+        context = {}
         if self.runtime:
             await self.runtime.before_tool_call()
         stage = "arbitrate"
@@ -700,7 +608,7 @@ class TerminalService:
             }
 
     async def health(self, auth_mode, agent_id=None):
-        context = await self._operational_context(agent_id, "health")
+        context = {}
         if self.runtime:
             await self.runtime.before_tool_call()
         timeout = 5 if self.health_command else HEALTH_TIMEOUT_SECONDS
@@ -910,70 +818,6 @@ class TerminalService:
                 )
             return result
 
-    async def _persistent_console_snapshot(self, policy: dict | None):
-        if policy is None:
-            return None
-        projection = {
-            "enabled": bool(policy.get("enabled")),
-            "available": False,
-            "policy": {key: value for key, value in policy.items() if key != "enabled"},
-            "slots": [],
-        }
-        if not projection["enabled"]:
-            return projection
-        backend = getattr(self, "persistent", None)
-        if backend is None:
-            projection["error"] = "policy_incompatible"
-            return projection
-        result = await backend.slot_list()
-        if not result.get("ok"):
-            projection["error"] = (
-                result.get("code") or result.get("error") or "persistent_unavailable"
-            )
-            return projection
-        projection["available"] = True
-        projection["server_now"] = result.get("server_now")
-        # Slot enrichment used to run serially. A busy authority with dozens of Persistent
-        # slots could therefore spend more than the Console client request deadline in
-        # this read-only projection, leaving the UI stuck on cached/stale data. Bound the
-        # fan-out so independent SQLite reads overlap without opening an unbounded number
-        # of connections. asyncio.gather preserves the authoritative slot-list order.
-        enrichment_limit = asyncio.Semaphore(8)
-
-        async def enrich_slot(item):
-            async with enrichment_limit:
-                slot = item.get("slot") or {}
-                logical_agent_id = slot.get("logical_agent_id")
-                claims = []
-                audit = []
-                attachments = []
-                if logical_agent_id and self.task_store:
-                    claims = await self.task_store.claims_for_owner(
-                        ClaimOwner.logical_agent(logical_agent_id)
-                    )
-                    claims = [
-                        {
-                            **claim,
-                            "priority": VALUE_PRIORITY.get(int(claim.get("priority", 0)), "P3"),
-                        }
-                        for claim in claims
-                    ]
-                if logical_agent_id:
-                    audit = await backend.lifecycle.store.audit_events(logical_agent_id, limit=50)
-                work_session = item.get("work_session")
-                if logical_agent_id and work_session:
-                    attachments = await backend.lifecycle.store.attachments_for_session(
-                        logical_agent_id,
-                        work_session["work_session_id"],
-                        int(work_session["session_epoch"]),
-                    )
-                return {**item, "claims": claims, "audit": audit, "attachments": attachments}
-
-        projection["slots"] = list(
-            await asyncio.gather(*(enrich_slot(item) for item in (result.get("slots") or [])))
-        )
-        return projection
-
     async def console_snapshot(
         self,
         auth_mode,
@@ -982,7 +826,7 @@ class TerminalService:
         history_minutes=60,
         persistent_policy=None,
     ):
-        if not self.event_store or not self.agent_coordinator or not self.task_coordinator:
+        if not self.event_store or not self.agent_history or not self.task_coordinator:
             return {
                 "ok": False,
                 "high_water_seq": 0,
@@ -997,7 +841,6 @@ class TerminalService:
                 "tasks": {},
                 "contexts": {},
                 "communications": [],
-                "persistent": await self._persistent_console_snapshot(persistent_policy),
                 "error": "console snapshot unavailable",
             }
 
@@ -1005,16 +848,12 @@ class TerminalService:
         # Snapshot reads may observe newer state, so clients must apply replay idempotently.
         high_water_seq = await self.event_store.high_water_seq()
 
-        # Fetch remote Persistent slots while independent Console views load.
-        # TaskGroup also cancels the fetch if the mobile client disconnects.
-        async with asyncio.TaskGroup() as group:
-            persistent_future = group.create_task(
-                self._persistent_console_snapshot(persistent_policy)
-            )
+        # Independent read projections share the mobile initial-snapshot deadline.
+        async with asyncio.TaskGroup():
             # Independent read-only projections share the mobile initial-snapshot deadline.
             health, agents, contexts = await asyncio.gather(
                 self.health(auth_mode),
-                self.agent_coordinator.overview(
+                self.agent_views.overview(
                     agent_id=None,
                     show_details=True,
                     show_intents=False,
@@ -1054,13 +893,13 @@ class TerminalService:
                 "tasks": task_items,
             }
 
-            # Bound parallel per-session reads; an active fleet can contain dozens
+            # Bound parallel per-session reads; an active Mesh can contain dozens
             # of sessions, and serial journal lookups exhaust the Android timeout.
             communication_limit = asyncio.Semaphore(8)
 
             async def read_communication(session):
                 async with communication_limit:
-                    detail = await self.agent_coordinator.overview(
+                    detail = await self.agent_views.overview(
                         agent_id=None,
                         target=session["name"],
                         target_agent_id=session.get("agent_id"),
@@ -1101,7 +940,6 @@ class TerminalService:
                 "replay_from_seq": high_water_seq,
                 "duplicate_events_possible": True,
             }
-        persistent = persistent_future.result()
         return {
             "ok": True,
             "high_water_seq": high_water_seq,
@@ -1111,53 +949,8 @@ class TerminalService:
             "tasks": tasks,
             "contexts": contexts,
             "communications": communications,
-            "persistent": persistent,
             "error": None,
         }
-
-    async def coordinate(self, agent_id, step=None, intent=None, show_details=False):
-        if not self.agent_coordinator:
-            return {"ok": False, "error": "agent coordination unavailable"}
-        result = await self.agent_coordinator.coordinate(
-            agent_id, step=step, intent=intent, show_details=show_details
-        )
-        _, result["task_scope_options"] = await self._task_scope_state(agent_id)
-        if result.get("ok") and self.fleet_replication:
-            self.fleet_replication.schedule_local_sync(agent_id)
-        return result
-
-    async def message(
-        self,
-        agent_id,
-        text=None,
-        target=None,
-        message_hash=None,
-        require_reply=False,
-        alert=False,
-        namespace=None,
-        task_id=None,
-    ):
-        if not self.agent_coordinator:
-            return {"ok": False, "error": "agent coordination unavailable"}
-        result = await self.agent_coordinator.message(
-            agent_id,
-            text=text,
-            target=target,
-            message_hash=message_hash,
-            require_reply=require_reply,
-            alert=alert,
-            namespace=namespace,
-            task_id=task_id,
-        )
-        result.update(
-            _compact_context(
-                {
-                    **await self.agent_coordinator.session_context(agent_id),
-                    **await self.agent_coordinator.message_state(agent_id, surface=True),
-                }
-            )
-        )
-        return result
 
     async def agents(
         self,
@@ -1169,10 +962,12 @@ class TerminalService:
         show_commands=False,
         command_hash=None,
         since_minutes=None,
+        history=False,
+        target_session_ref=None,
     ):
-        if not self.agent_coordinator:
+        if not self.agent_history:
             return {"ok": False, "error": "agent coordination unavailable"}
-        result = await self.agent_coordinator.overview(
+        result = await self.agent_views.overview(
             agent_id=agent_id,
             target=target,
             show_details=show_details,
@@ -1180,6 +975,8 @@ class TerminalService:
             show_commands=show_commands,
             command_hash=command_hash,
             since_minutes=since_minutes,
+            history=history,
+            target_session_ref=target_session_ref,
         )
         if agent_id:
             _, result["task_scope_options"] = await self._task_scope_state(agent_id)
@@ -1288,57 +1085,3 @@ class TerminalService:
             reveal_agent_ids=reveal_agent_ids,
             **({"include_all_events": True} if include_all_events and task_id else {}),
         )
-
-    async def task(self, agent_id, **kwargs):
-        if not self.task_coordinator or not self.agent_coordinator:
-            return {"ok": False, "error": "task coordination unavailable", "warnings": []}
-        gate = await self.agent_coordinator.gate(agent_id, "task", surface_messages=True)
-        if gate["blocked"]:
-            response = gate["response"]
-            response.setdefault("warnings", [])
-            response.setdefault("task", None)
-            return response
-        result = await self.task_coordinator.mutate(agent_id, **kwargs)
-        result.update(_compact_context(gate["context"]))
-        return result
-
-    async def _finish_fleet_origin_session(self, agent_id, ended_at, reason):
-        if not self.agent_store:
-            return False
-        session = await self.agent_store.get_session(agent_id)
-        if session is None:
-            return False
-        if self.fleet_replication:
-            source = session.get("source_instance_id")
-            if source and source != self.fleet_replication.config.instance_id:
-                return False
-        if session["state"] == "active":
-            changed = await self.agent_store.end(
-                agent_id,
-                "finished",
-                reason,
-                ended_at,
-            )
-            if changed and self.task_coordinator:
-                await self.task_coordinator.release_agent_claims(
-                    agent_id, reason="fleet_agent_finish"
-                )
-            return bool(changed)
-        return session["state"] in {"finished", "forced"}
-
-    async def agent_finish(self, agent_id):
-        if not self.agent_coordinator:
-            return {"ok": False, "error": "agent coordination unavailable"}
-        pending = await self.agent_coordinator.message_state(agent_id, surface=True)
-        pending_communication = await self.agent_coordinator.message_obligation_summary(agent_id)
-        result = await self.agent_coordinator.finish(agent_id)
-        if self.task_coordinator and result.get("finished"):
-            await self.task_coordinator.release_agent_claims(agent_id, reason="agent_finish")
-        if result.get("finished") and self.fleet_replication:
-            queued_foreign = await self.fleet_replication.queue_finish(agent_id)
-            if not queued_foreign:
-                self.fleet_replication.schedule_local_sync(agent_id)
-        result.update(_compact_context(pending))
-        if any(pending_communication.values()):
-            result["pending_communication"] = pending_communication
-        return result

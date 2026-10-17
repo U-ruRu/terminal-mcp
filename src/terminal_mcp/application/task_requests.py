@@ -29,7 +29,6 @@ from terminal_mcp.application.input_limits import (
     require_serialized_json_limit,
 )
 
-AccessCode = Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
 Namespace = Annotated[str, Field(min_length=1, max_length=120)]
 TaskId = Annotated[str, Field(min_length=1, max_length=120)]
 TaskRef = Annotated[str, Field(min_length=1, max_length=512)]
@@ -106,7 +105,6 @@ TaskDependencies = Annotated[list[TaskDependency], Field(max_length=100)]
 
 
 class TaskIdentityRequest(StrictTaskModel):
-    code: AccessCode | None = None
     namespace: Namespace
     task_id: TaskId
 
@@ -133,7 +131,6 @@ class TaskCreateRequest(StrictTaskModel):
     )
 
     action: Literal["create"]
-    code: AccessCode | None = None
     namespace: Namespace
     task_id: TaskId | None = None
     isolation_hint: Annotated[str, Field(min_length=1, max_length=160)]
@@ -338,10 +335,9 @@ TASK_ACTIONS = {
 }
 
 
-def task_request_to_backend(request: TaskRequest) -> tuple[str, str, str | None, dict[str, object]]:
+def task_request_to_backend(request: TaskRequest) -> tuple[str, str | None, dict[str, object]]:
     data = request.model_dump(exclude_none=True)
     action = data.pop("action")
-    code = data.pop("code", None)
     namespace = data.pop("namespace")
     task_id = data.pop("task_id", None)
-    return code, namespace, task_id, {"action": action, **data}
+    return namespace, task_id, {"action": action, **data}

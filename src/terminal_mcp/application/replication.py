@@ -8,92 +8,6 @@ from __future__ import annotations
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.mesh import MeshApplication, MeshApplicationError
-from terminal_mcp.fleet.identity import SignedAgentIdentity
-
-
-class ReplicationApplication:
-    """Actor-aware application boundary over existing Fleet domain services."""
-
-    def __init__(self, replication):
-        self._replication = replication
-
-    async def receive_identity(self, actor: ActorContext, *, payload: dict):
-        MeshApplication._require_peer(actor)
-        with actor.bind():
-            try:
-                envelope = SignedAgentIdentity.from_dict(payload)
-                status = await self._replication.receive(
-                    envelope, authenticated_peer_id=actor.peer_node_id
-                )
-            except (TypeError, ValueError) as exc:
-                raise MeshApplicationError("invalid_request", str(exc)) from exc
-            return {"ok": True, "status": status}
-
-    async def update_session(self, actor: ActorContext, *, payload: dict):
-        MeshApplication._require_peer(actor)
-        with actor.bind():
-            agent_id = payload.get("agent_id")
-            source_instance_id = payload.get("source_instance_id")
-            activity_at = payload.get("activity_at")
-            intent = payload.get("intent")
-            step = payload.get("step")
-            intent_updated_at = payload.get("intent_updated_at")
-            if not all(
-                isinstance(value, str) and value
-                for value in (agent_id, source_instance_id, activity_at)
-            ):
-                raise MeshApplicationError(
-                    "invalid_request", "session update payload is incomplete"
-                )
-            if intent is not None and (not isinstance(intent, str)):
-                raise MeshApplicationError(
-                    "invalid_request", "session update intent must be a string"
-                )
-            if step is not None and (not isinstance(step, int)):
-                raise MeshApplicationError(
-                    "invalid_request", "session update step must be an integer"
-                )
-            if intent_updated_at is not None and (not isinstance(intent_updated_at, str)):
-                raise MeshApplicationError(
-                    "invalid_request", "session update intent_updated_at must be a string"
-                )
-            try:
-                changed = await self._replication.receive_session_update(
-                    agent_id,
-                    source_instance_id,
-                    activity_at,
-                    intent=intent,
-                    step=step,
-                    intent_updated_at=intent_updated_at,
-                    authenticated_peer_id=actor.peer_node_id,
-                )
-            except (TypeError, ValueError) as exc:
-                raise MeshApplicationError("invalid_request", str(exc)) from exc
-            return {"ok": True, "changed": changed}
-
-    async def finish_session(self, actor: ActorContext, *, payload: dict):
-        MeshApplication._require_peer(actor)
-        with actor.bind():
-            agent_id = payload.get("agent_id")
-            ended_at = payload.get("ended_at")
-            reason = payload.get("reason")
-            if not all(isinstance(value, str) and value for value in (agent_id, ended_at, reason)):
-                raise MeshApplicationError("invalid_request", "finish payload is incomplete")
-            try:
-                changed = await self._replication.receive_finish(
-                    agent_id, ended_at, reason, authenticated_peer_id=actor.peer_node_id
-                )
-            except (TypeError, ValueError) as exc:
-                raise MeshApplicationError("invalid_request", str(exc)) from exc
-            return {"ok": True, "changed": changed}
-
-    async def read_identities(
-        self, actor: ActorContext, *, agent_id: str | None = None, limit: int = 500
-    ):
-        MeshApplication._require_peer(actor)
-        with actor.bind():
-            identities = await self._replication.list_identities(agent_id=agent_id, limit=limit)
-            return {"ok": True, "identities": identities}
 
 
 class FleetSourceApplication:
@@ -271,9 +185,14 @@ class FleetProjectionApplication:
         self._projection = projection
         self._projection_service = projection_service
 
+    async def _refresh_local(self):
+        if self._projection_service is not None:
+            await self._projection_service.refresh_local()
+
     async def manifest(self, actor: ActorContext):
         MeshApplication._require_peer(actor)
         with actor.bind():
+            await self._refresh_local()
             result = await self._projection.meta()
             result["capabilities"] = (
                 self._projection_service.capabilities if self._projection_service else []
@@ -284,6 +203,7 @@ class FleetProjectionApplication:
         MeshApplication._require_peer(actor)
         with actor.bind():
             try:
+                await self._refresh_local()
                 return await self._projection.replica_snapshot()
             except Exception as exc:
                 raise MeshApplicationError("conflict", str(exc)) from exc
@@ -298,6 +218,7 @@ class FleetProjectionApplication:
     ):
         MeshApplication._require_peer(actor)
         with actor.bind():
+            await self._refresh_local()
             meta = await self._projection.meta()
             if projection_epoch is not None and projection_epoch != meta["projection_epoch"]:
                 return {
@@ -313,6 +234,7 @@ class FleetProjectionApplication:
     async def runtime_overlays(self, actor: ActorContext):
         MeshApplication._require_peer(actor)
         with actor.bind():
+            await self._refresh_local()
             snapshot = await self._projection.snapshot()
             return {
                 "projection_epoch": snapshot["projection_epoch"],

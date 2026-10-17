@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build/check exact future MCP tools/list contracts; no network, no deployment."""
+"""Compile the current MCP discovery catalog and offline strict-schema evidence."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -162,7 +163,9 @@ def main() -> int:
             key = role + "." + item["name"]
             catalog[role][item["name"]] = {
                 "description": item["description"],
-                "base_description": before[item["name"]]["description"],
+                "source_description_sha256": hashlib.sha256(
+                    before[item["name"]]["description"].encode()
+                ).hexdigest(),
                 "strict_input_sha256": generated["coverage"][key]["strict_input_sha256"],
                 "strict_output_sha256": generated["coverage"][key]["strict_output_sha256"],
             }

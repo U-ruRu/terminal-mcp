@@ -1,87 +1,153 @@
-# Access Mesh V2: deployment and acceptance
+# Unified Mesh installation and upgrade
 
-Release contract: **0.14.4**. This procedure targets **FirstByte and BacLOUD only**. Secondary hosts source, isolated tests and coordination. Main/Tokyo are outside this rollout. A passed source suite is preparation evidence, not proof of an installed release.
+The normative architecture is [mesh-product-contract.md](mesh-product-contract.md).
+Every installation provides Access, Execution and Coordination. A clean node is
+Standalone: it has a local registration namespace and no Mesh membership.
+Pairing lets the user application create a Mesh, join an existing Mesh, detach,
+move a node, or appoint a different primary.
 
-## 1. Freeze the candidate and prepare recovery
+## Source acceptance and deployment are separate
 
-Freeze one immutable release SHA after integrating runtime, task ownership/receipts, messaging, metadata and documentation. Run the complete regression suite, Ruff and the repository privacy check on that SHA. Verify the packaged `dist/terminal-operations.skill` matches both source files and the effective schema manifest exposes Access2/Executor10/Coordinator8.
+First integrate and validate one immutable source commit. The supported source
+gate is the complete Python test workflow, the complete Console test suite,
+TypeScript/build, lint and generated-contract checks. Record the exact source
+SHA and its full test report. A passed test fixture is evidence for its isolated
+scenario; it does not assert that a live server has been upgraded.
 
-Record each target's current version/SHA, active release path, deployment mode, service units, config ownership, public origins and current health. Stage release files separately from the active release. Preserve permissions for `/etc/terminal-mcp/terminal-mcp.env` and all secret-bearing configuration; keep secrets out of command output and evidence attachments.
+Deployment is a separately authorized operation. The release workflow in
+[deployment-release-workflow.md](deployment-release-workflow.md) builds an exact
+commit, verifies the acceptance receipt, inventories the existing installation,
+takes consistent offline snapshots and journals migration/activation. A failed
+activation does not authorize restoring older credentials or security state.
+Follow the recorded recovery phase and durable schema constraints.
 
-Use consistent SQLite backup/snapshot procedures for durable runtime, auth and Fleet control state. Record `/var/lib/terminal-mcp/terminal-mcp.sqlite3`, `/var/lib/terminal-mcp/auth.sqlite3`, `/var/lib/terminal-mcp/fleet-control.sqlite3`, the existing release/configuration, and their restoration policy. The output cache `/var/cache/terminal-mcp/output.sqlite3` is independently retained. An ordinary filesystem copy of a live SQLite file is not a sufficient substitute for a consistent backup.
+## First installation and explicit clean deploy
 
-Access revocation, code-rotation/tombstone and newer security state are rollback-excluded data. Plan recovery with that state intact. The installer performs schema/security compatibility checks; an older binary cannot be forced into service just because a topology rollback succeeds. The `--allow-downgrade` option is not permission to bypass durable compatibility checks.
+The Linux installer distinguishes an empty installation from an explicit reset:
 
-## 2. Validate local identity and authenticated mesh configuration
+    sudo ./deploy/install.sh install
+    sudo ./deploy/install.sh clean-deploy
+    sudo ./deploy/install.sh doctor
 
-Access Mesh uses the environment prefix `TERMINAL_MCP_`. For each target validate:
+Use install only for an empty managed state. It refuses retained installation
+state instead of treating it as a fresh deployment. Provide the administrative
+password through the installer environment, with normal secret handling.
 
-| Setting | Required meaning |
+Clean-deploy is an explicit destructive reset of the selected installation. It
+first validates the managed path inventory and stages the replacement binary.
+Only then does it stop the managed services and remove the previous runtime,
+auth, slot and topology databases; pairing and connector bindings; local node
+credentials; managed configuration and VPN sidecars; output/cache state; and
+backups of that installation. It preserves unrelated paths and the separately
+staged replacement. It has no automatic restore path to the discarded state.
+External configured database files and their managed sidecars are included in
+the inventory; arbitrary directory deletion is rejected.
+
+The Windows installer uses the explicit CleanInstall option for the same reset
+boundary. A normal update preserves current state. Native Windows process,
+service and ACL acceptance must run on Windows.
+
+The new process generates a durable independent node identity and local proof
+material when they are absent. It exposes all three MCP endpoints immediately.
+It does not create a Mesh, discover a former Mesh from backup, or require an
+enable-Mesh switch. The user pairs the application again after a clean deploy.
+
+## Hot update
+
+A hot update preserves the installation identity, pairing, application history
+and valid current registrations. It runs the one-time schema/runtime migrations
+before admitting agent writes. Existing configuration does not select an older
+agent runtime: former mode flags have no implementation behind them.
+
+The migration converts old temporary-slot labels and encrypted issuance receipts
+to the current representation. It materializes former local agent registrations
+as native slots while preserving identity, session epoch, start time, deadline
+and applicable policy. Old agent-session permissions are retired in the same
+transaction and cannot be imported again after a future Mesh move. Active work
+that cannot be attributed safely, an incomplete old session transition, or an
+ambiguous old topology blocks activation with a specific error.
+
+For an existing multi-issuer Mesh, the primary obtains bounded immutable exports
+from every required old member before publishing the authoritative union.
+Registration history, inactive slots and historical issuer identity survive.
+An offline required member or conflicting active number blocks completion;
+the primary does not silently choose one registration or issue an alternative
+local registry. The migration resumes from durable receipts after interruption.
+
+Activation requires /health/ready to return ready=true for the expected release.
+A process with a pending registry union or topology fence returns HTTP 503 there;
+/health/live remains a liveness check, including for pre-upgrade versions.
+
+The offline release verifier compares all protected old application columns and
+rows with the resulting stores. Only named, independently checked conversions
+are permitted. Encryption is checked by authenticated plaintext comparison,
+so re-encryption does not hide changed code, policy, identity or deadline.
+Unrelated task, command, pairing and configuration changes fail preservation.
+
+The update process must not be combined with a membership change. After the
+migration has completed, ordinary app-authorized topology operations use their
+own fences and journals. A retained local pairing is sufficient to request
+those operations; manual trust lists or former Mesh names add no approval step.
+
+## Endpoints and registration
+
+Every node exposes the same paths and tool catalog:
+
+| Role | Endpoint | Session actions |
+| --- | --- | --- |
+| Access | /terminal-mcp/access/v1/mcp | start, end |
+| Execution | /terminal-mcp/executor/v1/mcp | attach, intent |
+| Coordination | /terminal-mcp/coordinator/v1/mcp | attach, intent |
+
+Access also exposes get_events. Execution has ten tools and Coordination eight.
+Inputs and outputs use universal object schemas, with strict server validation
+and structured errors. The retired /mcp route and old role-session actions are
+not installation options.
+
+An Access Connector on any Mesh member forwards registration to the current
+primary. Its issued four-digit session number works on all members of that Mesh.
+A Standalone node issues and checks its own local numbers without a peer.
+Configured OAuth/bearer transport authentication remains required independently
+of the number. Do not record live numbers, provider identifiers or secrets in
+acceptance logs.
+
+## Policies and topology acceptance
+
+A Mesh has one common inherited slot policy. Any authenticated operator entry
+point reaches the current primary; individual slots may explicitly override the
+parent. Standalone uses the same model locally.
+
+Before a membership change, verify absence of active slots and running agents in
+the affected area, including authoritative source state and local execution.
+When C leaves X, C clears its old local replicas, attachments and Mesh authority.
+The full registry on the remaining X members stays unchanged. A Move obtains
+fresh enrollment for C after detach and adopts Y's registry and policy. It
+never imports X's registrations into Y.
+
+When the primary leaves a nonempty Mesh, the application first appoints a
+successor. The complete registry and common policy are transferred under a
+durable fence and an authenticated, revision-bound handoff. Retry or restart
+resumes that operation without creating two writable primaries. The departing
+node retains independent identity and pairing.
+
+## Minimum evidence
+
+Use existing atomic tests and the small HTTP/real-store integration scenarios.
+The acceptance record must identify evidence for these distinct responsibilities:
+
+| Boundary | Required observation |
 | --- | --- |
-| `ACCESS_MESH_ENABLED` | Enable the V2 catalogs/runtime deliberately. Default is false. |
-| `PERSISTENT_AGENTS_ENABLED` | Enable the native identity/session storage used by both slot kinds. |
-| `FLEET_INSTANCE_ID` | A stable, unique local node id. |
-| `ACCESS_MESH_PEERS_JSON` | Explicit unique remote peer ids; FirstByte lists BacLOUD, BacLOUD lists FirstByte, matching configured ids. |
-| `FLEET_PEERS_JSON` | Authenticated Fleet definitions covering those ids. |
-| `ACCESS_MESH_PROOF_KEY` | At least 32 bytes, provisioned securely and consistently for the trust configuration. Never print it. |
-| `ACCESS_MESH_LEGACY_ENABLED` | Explicit policy for legacy slot issuance. |
-| `ACCESS_MESH_DURATION_SEC`, `ACCESS_MESH_COOLDOWN_SEC` | Initial policy defaults. Runtime defaults are 1200 and 60 seconds. |
-| `ACCESS_MESH_WARNING_SEC`, `ACCESS_MESH_DRAINING_SEC` | Initial thresholds, default 120 and 30 seconds; each smaller than duration. |
+| Catalog | Same tools, inputs, outputs and errors for Standalone, one-member and multi-member Mesh |
+| Registry | Issue via a nonprimary Access; attach on another member; independent Mesh rejection |
+| Topology | App-authorized create/join/detach/move, active-work rejection, durable replay and recovery |
+| Source preservation | Exact source registry rows survive C's departure, including rows issued through C |
+| Primary handoff | All registry data and policy survive; stale handoff certificates cannot regain authority |
+| Local isolation | Departed bindings and slots fail; destination registrations work; old message content has no routing authority |
+| Policy | Common inheritance, per-slot override and destination policy after Join |
+| Installation | Empty install, explicit managed reset, safe one-time hot conversion and refusal of ambiguous state |
+| Load | No remote replication or periodic peer reconciliation for Standalone; bounded catchup and retries |
 
-Peer ids must be distinct, exclude the local node and be present in authenticated Fleet configuration. Validate proof/trust configuration without placing keys in the repository. Per-slot and durable operator defaults can differ from initial environment defaults; read the operator defaults/slot views when validating effective policy.
-
-Verify ingress and transport authentication for all six MCP URLs, plus the authenticated internal Fleet paths. Access session issuance is separate from role attach. A four-digit session number is sensitive binding material, not a replacement for OAuth/bearer transport security.
-
-## 3. Install and activate under the release gate
-
-Choose the installer path appropriate to the existing topology. Public installer commands are:
-
-```bash
-sudo ./deploy/install.sh update
-sudo ./deploy/install.sh doctor
-```
-
-`update` stages the candidate, checks compatibility/downgrade policy, takes its configured backup and activates/probes the release. There is no standalone public `install.sh stage` command. Review candidate/configuration/backup evidence before issuing update. Use a separate source/build staging directory when preparation must occur without activation.
-
-For an existing Unix executor split, follow [the split-service procedure](architecture-split-service-cutover.md) and its guardrails. The API remains `terminal-mcp.service`, executor `terminal-mcp-executor.service`, socket `/run/terminal-mcp/executor.sock`. Topology render/check and approved activation are explicit steps; do not mix unreviewed split migration with a feature rollout.
-
-Activate FirstByte, check its actual version, local services, local storage and Access/Executor/Coordinator discovery, then activate BacLOUD and repeat. Mixed-version nodes are a transition risk for replicated task/session/identity data; new local messages never use peer message delivery. A mixed-version stage is not a passed acceptance result. Confirm both servers run the exact intended SHA before testing cross-node behavior.
-
-After both activations, verify issuer grant catchup, deadline/revocation propagation, local message lifecycle/expiry and health components. Confirm legacy message/receipt outbox rows have terminal reasons rather than delivery ACKs, without new retry attempts; old messages are ignored and unrelated Mesh replication continues to converge. Never roll back to a binary that re-enables the retired message worker while pending legacy rows still exist; use a separately approved compatible rollback build. Monitor retries/errors and cleanup backlog. Health collection ok is distinct from overall healthy/status. Preserve the deployment journal and installer compatibility decisions.
-
-## 4. Native acceptance matrix
-
-Use independent trusted connector identities for independent agents. Use disposable test slots/tasks and isolated commands; record only public names, hashes, revisions, timestamps and redacted evidence. The minimum matrix is:
-
-| Area | Native checks on FirstByte and BacLOUD |
-| --- | --- |
-| Discovery | Access2, Executor10, Coordinator8 at the exact three paths; object-only input/output schemas, strict runtime repair, real annotations/action matrix and bounded outputs. |
-| Both issuers | Create a legacy slot from each Access; operator-provision and activate persistent; attach the returned issuer/session number once to both roles/nodes. Same code digits from different issuers resolve independently. Wrong issuer, code or binding fails before effects. |
-| Lifecycle | Duration/cooldown/rearm; warning/draining; deadline shortening/extension; end; suspend/resume; rotate/delete; new local epoch and exact execution/claim cleanup. Test a short disposable policy instead of modifying production agents. |
-| Task ownership | Claim preserves ready; explicit state enters in_progress; release and expiry preserve each explicit state/checkpoint/result. Legacy releases at end; persistent release_on_end behavior is explicit. Stale revision/owner, repeated cleanup and successor-claim races leave correct ownership and atomic receipts. |
-| Commands | Launch/read/cancel/recovery with correct task attribution; code-free reads of another agent's local hash; hashless all-agent journal, paging and retained-output behavior. Queue/admission/fencing remain valid. |
-| First-contact messages | With two previously unmessaged agents attached locally, exercise recipients → direct send → inbox → ACK → reply → history on that same server for notify/ack/alert. Assert stable local message IDs, task associations, independent reply lifetime, content/author/receipt fidelity, and that an unknown remote-only recipient fails before mutation. |
-| Local messages | Repeat the cycle independently on FirstByte and BacLOUD, including one LogicalAgent attached on both nodes. Confirm distinct message IDs and local states, no cross-node message requests. Legacy `:meshmsg:` history is intentionally hidden (including ACK and reply), even if its parent author is now local; only new `:localmsg:` parents can be replied to. |
-| Broadcast and obligations | Broadcast reaches unique active recipients attached to the current node and creates no peer delivery. Replicated or remote-only identities are not recipients. Notify surfacing, explicit ACK, alert reply and command gate use the same local obligations and 24-hour retention boundary. |
-| Partition/restart | Pause only the disposable test peer path under an approved isolated test plan. Local recipients/send/read/ACK/reply remain node-local and create no peer message work. Legacy message outbox jobs remain terminal after restart; restore connectivity only for the independent grant/session/task/event replication paths. A partition cannot make an unknown grant attach succeed. |
-| Boundaries | Oversized local message/output requests produce truthful outcomes and no partial mutation. Legacy scope=fleet and legacy peer message endpoints terminate with feature_disabled without queueing work. Test opaque cursor scopes, replay with reused ids/different payload, output fallbacks and operator revision/idempotency errors. |
-| Mobile/operator | Read slots/defaults, create immutable kinds, per-slot policy, current-cycle deadline, end, suspend/resume/rotate/delete via authenticated `/actions/access/*`; no shell command surface. |
-
-Primary paths on each target:
-
-```text
-/terminal-mcp/access/v1/mcp
-/terminal-mcp/executor/v1/mcp
-/terminal-mcp/coordinator/v1/mcp
-```
-
-Legacy `/mcp` compatibility is an additional check, not a substitute for these six connectors. A local unit harness proves its isolated scenario; real HTTP/MCP tests prove adapter/transport integration; deployment evidence proves the running target.
-
-## 5. Completion and rollback decision
-
-Record candidate SHA/version, source full-suite evidence, installed SHA on both nodes, role/schema digests, local and bidirectional acceptance results, health, catchup/outbox/cleanup state, and the handling of disposable resources. Preserve result/checkpoint data. Close dependent tasks only when their own acceptance criteria and this release gate are satisfied.
-
-If activation fails, use the installer decision and captured deployment journal to choose a compatible recovery. Split topology rollback restores the captured units/configuration, not an earlier database/security history. Restore application data only through an explicit consistency/security recovery plan, preserving newer revocations and issuer provenance. Re-run health and native acceptance after recovery; a successful process start alone is not recovery acceptance.
-
-
-OAuth and console identity preservation on clean start: [OAuth identity isolation runbook](oauth-identity-isolation-runbook.md). Do not clean the working DB until its six legacy OAuth/console relations have been transferred to protected auth.sqlite3.
+A source completion report records the published canonical SHA, functional
+commits, test reports, preservation of concurrent changes and cleanup of owned
+worktrees. Live rollout and its connector checks require their own authorization
+and evidence.

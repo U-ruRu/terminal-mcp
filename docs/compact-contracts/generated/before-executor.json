@@ -813,7 +813,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Run a recovery command under the current managed session. Attach this connector once; writes use its local work cycle.",
+      "description": "Run a recovery command under the current Access session. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "properties": {
           "command": {
@@ -1372,7 +1372,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.",
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; messages expire 24 hours after created_at. Writes use an attached local work cycle.",
       "inputSchema": {
         "properties": {
           "action": {
@@ -1412,7 +1412,7 @@
           },
           "scope": {
             "default": "local",
-            "description": "local | fleet"
+            "description": "local"
           },
           "target": {
             "default": null,

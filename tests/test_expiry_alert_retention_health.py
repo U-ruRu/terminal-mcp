@@ -63,12 +63,14 @@ async def test_young_alert_storage_failure_is_reported(mesh_pair, monkeypatch):
 def lifecycle_app(size):
     slots = [SimpleNamespace(logical_agent_id=f"agent-{i:03}") for i in range(size)]
     store = SimpleNamespace(
+        namespace_id="health-fixture",
         trusted_issuers=frozenset(),
         defaults=lambda: None,
         local_slots=lambda after: [s for s in slots if s.logical_agent_id > after][:50],
         canonical_slot=lambda slot: slot,
         local_identity=lambda slot, now: {},
         pending_cleanup=lambda limit: [],
+        registry_readiness=lambda: {"ready": True, "reason": None},
     )
     app = AccessMeshApplication(store, task_store=None, execution_fence=None)
     app.cleanup = AsyncMock()

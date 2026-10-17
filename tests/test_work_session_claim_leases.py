@@ -1,39 +1,26 @@
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from native_runtime_helpers import native_agent
 
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
-from terminal_mcp.storage.persistent_agents import PersistentStoreError
+from terminal_mcp.storage.persistent_agents import PersistentAgentStore, PersistentStoreError
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
-from terminal_mcp.storage.work_windows import WorkWindowStore
 
 
 @pytest_asyncio.fixture
 async def lease_case(tmp_path):
     repo = SqliteRepository(tmp_path / "runtime.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
-    sessions = WorkWindowStore(repo.path, authority_node_id="home")
+    sessions = PersistentAgentStore(repo.path)
     now = utc_now()
-    for agent, selector in [("la_one", "ABCD"), ("la_two", "EFGH")]:
-        await sessions.create_slot(
-            agent,
-            agent,
-            selector,
-            authority_node_id="home",
-            initial_arm_duration_seconds=1380,
-            now=utc_text(now),
-        )
-    session = await sessions.start_managed_session(
-        "la_one",
-        role="executor",
-        contract_version=1,
-        principal_id="principal",
-        auth_generation=1,
-        now=now,
-    )
+    _, identity = native_agent(repo.path, "la_one", now=now, session_id="lease-session")
+    native_agent(repo.path, "la_two", code="5678", now=now)
+    session = SimpleNamespace(session=await sessions.get_work_session(identity["work_session_id"]))
     tasks = TaskStore(repo.path)
     await tasks.create_task("lease-test", "task", "claim lease", checkpoint={"keep": "checkpoint"})
     return sessions, tasks, session, now
@@ -49,8 +36,15 @@ def lease(snapshot):
 
 async def stop(sessions, snapshot, now, reason="session_end"):
     args = ("la_one", snapshot.session.work_session_id, snapshot.session.session_epoch)
-    await sessions.begin_managed_stop(*args, principal_id="principal", reason=reason, now=now)
-    return await sessions.finish_managed_stop(*args, principal_id="principal", now=now)
+    tasks = TaskStore(sessions.path)
+    async with sessions._connect() as db:
+        await db.execute(
+            "UPDATE logical_agent_work_sessions SET state='ended' WHERE work_session_id=?",
+            (snapshot.session.work_session_id,),
+        )
+        await db.commit()
+    await tasks.fence_claim_session(*args, reason=reason, now=utc_text(now))
+    return await tasks.release_work_session_claims(*args, reason=reason, now=utc_text(now))
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Literal
@@ -341,9 +342,7 @@ async def resolve_task_names(
     application, task: dict, detail: str, history_kind: str = "events"
 ) -> dict:
     """Read the established Access authority; never allocate identities in a projection."""
-    backend = getattr(application.service, "persistent", None)
-    authority = getattr(backend, "access_authority", None)
-    bridge = getattr(backend, "fleet_bridge", None)
+    mesh = getattr(application.service, "access_mesh", None)
     cache = {}
 
     async def name(value):
@@ -351,18 +350,8 @@ async def resolve_task_names(
             return value
         if value in cache:
             return cache[value]
-        slot = None
-        if authority is not None:
-            slot = await authority.access_slot(value)
-        if slot is None and bridge is not None:
-            slot = await bridge.get_access_slot(value)
-        if slot and slot.get("public_name"):
-            suffix = slot.get("display_suffix")
-            cache[value] = slot["public_name"] + (f" {suffix}" if suffix else "")
-        else:
-            # Historical/system labels remain intact. Missing native Mesh names are
-            # an explicit rollout blocker; do not invent an alias or mutate storage.
-            cache[value] = value
+        slot = await asyncio.to_thread(mesh.store.slot_for_agent, value) if mesh else None
+        cache[value] = mesh.store.human_name(slot) if slot else value
         return cache[value]
 
     result = dict(task)

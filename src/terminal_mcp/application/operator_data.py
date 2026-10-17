@@ -8,11 +8,9 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import CapabilityPolicy, canonical_application_result
 
 OperatorOperation = Literal[
-    "message",
     "agents",
     "context",
     "tasks",
-    "task",
     "run",
     "recovery",
     "read",
@@ -22,11 +20,9 @@ OperatorOperation = Literal[
 ]
 OPERATOR_OPERATIONS: frozenset[str] = frozenset(
     {
-        "message",
         "agents",
         "context",
         "tasks",
-        "task",
         "run",
         "recovery",
         "read",
@@ -51,13 +47,11 @@ class OperatorDataApplication:
             "read": "commands",
             "cancel": "commands",
             "recovery": "commands",
-            "task": "tasks",
             "tasks": "tasks",
             "context": "contexts",
-            "message": "messages",
             "health": "health",
         }[operation]
-        if not CapabilityPolicy().allows(actor, capability):
+        if actor.endpoint_role != "operator" or not CapabilityPolicy().allows(actor, capability):
             from terminal_mcp.core.public_errors import public_error
 
             return public_error("capability_not_allowed").as_dict()

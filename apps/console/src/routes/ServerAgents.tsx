@@ -1,5 +1,6 @@
 import { Link, Navigate, useParams } from 'react-router-dom'
 
+import { hasCurrentAgentSession } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { formatDuration } from '../i18n/duration'
@@ -7,9 +8,22 @@ import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
 import { activityRoute, agentRoute, taskRoute } from '../navigation/routes'
 
-const agentStateKeys: Record<string, MessageKey> = { active: 'agents.state.active' }
+const agentStateKeys: Record<string, MessageKey> = {
+  idle: 'slots.state.idle',
+  armed: 'slots.state.armed',
+  active: 'slots.state.active',
+  warning: 'slots.state.warning',
+  draining: 'slots.state.draining',
+  stopping: 'slots.state.stopping',
+  cooldown: 'slots.state.cooldown',
+  ended: 'slots.state.ended',
+  expired: 'slots.state.expired',
+  suspended: 'slots.state.suspended',
+  deleting: 'slots.state.deleting',
+  deleted: 'slots.state.deleted',
+}
 function localizedAgentState(t: (key: MessageKey) => string, state: string): string {
-  return t(agentStateKeys[state] ?? 'common.unknown')
+  return t(agentStateKeys[state] ?? 'slots.state.unknown')
 }
 
 export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) {
@@ -36,7 +50,7 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
   }
 
   if (selected) {
-    const hasCurrentSession = selected.logicalSessionStatus === 'active' || (!('logicalSessionStatus' in selected) && selected.status === 'active')
+    const hasCurrentSession = hasCurrentAgentSession(selected)
     const relatedTasks = tasks.filter((task) =>
       task.owner?.agentId === selected.agentId ||
       (task.participants ?? []).some((participant) => participant.agentId === selected.agentId),
@@ -49,7 +63,7 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
             <h2 id="agent-title">{selected.name}</h2>
             <p className="muted">{t('agents.exactSession')} {selected.agentId}</p>
           </div>
-          <span className={'status status-' + instance.runtime.status}>{hasCurrentSession ? localizedAgentState(t, selected.status) : selected.status}</span>
+          <span className={'status status-' + instance.runtime.status}>{localizedAgentState(t, selected.status)}</span>
         </div>
         <article className="panel">
           <h3>{hasCurrentSession ? t('agents.currentSession') : t('agents.lastKnownState')}</h3>

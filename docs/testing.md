@@ -97,22 +97,22 @@ requirements only. Deployment approval and live acceptance remain separate from
 this source test result. The source-only critical gate in
 `scripts/stab_release_gate.sh` likewise keeps its exact-SHA, clean-checkout and
 pinned SQLite ABI requirements. Its explicit targets refer to the current storage,
-command, task, message, Fleet and execution owners; a missing target blocks the
+command, task, message, Mesh and execution owners; a missing target blocks the
 gate. Neither a scoped source gate nor a node liveness check replaces full evidence.
 
 ## Current test scope
 
 The cleanup removes duplicate obligations, legacy import/signature guarantees,
-retired Fleet identity replication and old-schema/rolling-compatibility scenarios.
+retired identity replication and old-schema/rolling-compatibility scenarios.
 It also removes source-text assertions, nested test-runner suites, stress loops,
 benchmarks and chains that exercised several independent operations. A versioned
-filename alone does not establish that its behavior is obsolete: the current Fleet
+filename alone does not establish that its behavior is obsolete: the current Mesh
 projection/source modules still own current functionality.
 
 A retained test exercises one current outcome. Existing lower-level owners replace
 repeated workflow assertions: task storage owns its durable state, Access Mesh
-message storage owns ACK/reply state, and persistent lifecycle owns permits and
-session fencing. Fleet control, projection and recovery are tested at their own
+message storage owns ACK/reply state, and native Access lifecycle owns work-session
+fencing. Mesh control, projection and recovery are tested at their own
 store boundaries with neighboring nodes injected. Native execution checks retain
 the operating-system boundary needed for process cancellation, socket/peer fencing
 and bounded output. Failure guards remain when they protect current authorization,
@@ -128,7 +128,7 @@ prove correctness.
 ## Isolation and report retention
 
 Every run uses temporary SQLite databases, runtime configuration, output, working
-directories, sockets, Fleet metadata and Mesh state. Inherited `TERMINAL_MCP_*`
+directories, sockets, Mesh metadata and Mesh state. Inherited `TERMINAL_MCP_*`
 settings are removed. No test-state fallback uses production paths. Reports retain
 Python/dependency versions, exact argv, source identity, phase timings, per-test
 outcomes and hashes of evidence. Existing report directories are never overwritten.

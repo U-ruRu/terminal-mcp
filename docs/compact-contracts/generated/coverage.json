@@ -25,7 +25,7 @@
       }
     ],
     "strict_input_sha256": "bb540a5a6f35027a9698b1418e2786abbd8f6af7c4e14d8109681052ddb50519",
-    "strict_output_sha256": "2b4ec4289a48c7a8b6cded14512404a76430a60ff04782244ae14675bed11d94"
+    "strict_output_sha256": "166dbe2c5f5d849fcb80fa03814b46738324acd0a5d32a1bbf6124f4a22540ff"
   },
   "access.session": {
     "action_models": {},
@@ -52,7 +52,7 @@
       }
     ],
     "strict_input_sha256": "ad65cbe81e04672c5b25d30bc67d46d42967016c971c82a158bf9be6b3f5da18",
-    "strict_output_sha256": "c7e8dabf7d2d08af4fa160a434733c0d8cbb3aa90ca90fcba40e32ed35c64d63"
+    "strict_output_sha256": "ca3e0e7237dda8759d8e6c8e632bae8f7bb50ecf086c65da3eb6b43a141624d8"
   },
   "coordinator.agent_observe": {
     "action_models": {},
@@ -74,7 +74,7 @@
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "81581d2ab243c53902f1e33d6bd27df82a28a7f40f3bb979cdf3bdd02b265535",
-    "strict_output_sha256": "3c0b19dd2261ee357c72829d3a365340e11f1dfa7177a470daf04ce20acd43d5"
+    "strict_output_sha256": "f6e51c7e794c4543190cde8885c5253497fd63183d0af12320f1a88484afee97"
   },
   "coordinator.health": {
     "action_models": {},
@@ -93,7 +93,7 @@
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
-    "strict_output_sha256": "5e5e2309f0a40b526675b91a86ed3cf1f6a4f9f5ce4fbf70e285ee434119a9e4"
+    "strict_output_sha256": "6970a6f41f34df105c0eae140aae747e70bde861e8fe29da56634d17d94345c6"
   },
   "coordinator.message": {
     "action_models": {},
@@ -101,7 +101,9 @@
     "conditions": [
       "ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
-    "exact_input_fallbacks": [],
+    "exact_input_fallbacks": [
+      "$/properties/scope"
+    ],
     "input_fields": [
       "scope",
       "action",
@@ -135,9 +137,9 @@
         "text": "send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden)."
       },
       {
-        "anchor": "Legacy scope='fleet' requests return",
+        "anchor": "this server only. Message recipients require a current local attachment; ",
         "source": "src/terminal_mcp/mcp/roles.py",
-        "text": "Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours."
+        "text": "Messages use local attachments and expire after 24 hours; scope is always local."
       },
       {
         "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")",
@@ -150,8 +152,8 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "39274d2050c1d4a84acb9d0a70833fb5197d9703e29f4416e971b9d28ada8c5e",
-    "strict_output_sha256": "7820762f16b6d382d68bb3f1c5901e75bfe07403b0335b56705b52c1242319f6"
+    "strict_input_sha256": "98d1f14d1274161695f6f789efa15770ac734ebd89532d191e10e8b8f5fd9a05",
+    "strict_output_sha256": "a5ef2a6390329c1f1bb737a23e1cdede9f689c61360e125f670a12097a24371c"
   },
   "coordinator.session": {
     "action_models": {},
@@ -178,7 +180,7 @@
       }
     ],
     "strict_input_sha256": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
-    "strict_output_sha256": "b760ea6cb86ba05037a655b9cb3418e4a0a3bb17a5b8a27d2f9ff09c070a3c07"
+    "strict_output_sha256": "beb3a052817488c759e16d474933e5e87c315a7404dddc58e0ac9ee936da6848"
   },
   "coordinator.task_get": {
     "action_models": {},
@@ -211,7 +213,7 @@
       }
     ],
     "strict_input_sha256": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
-    "strict_output_sha256": "e435c757accaaf882ac54947a75bdf15bdf0175027c46b94b0e6c757d305e6fa"
+    "strict_output_sha256": "251daa991ad52ed933809adb493058aa20a6b8b897b5ddc291d532218da9ddc1"
   },
   "coordinator.task_graph": {
     "action_models": {},
@@ -238,7 +240,7 @@
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "809e8474ffcd4d62a05127feb7e46a4150668886bd382cd9a68ac6171c511fb6",
-    "strict_output_sha256": "a77634d5e8b7fb61d74385374a276e64fd1a615a328de07d5db7466c25f70a37"
+    "strict_output_sha256": "69c26e8834d9f5bd388869ff2ffbe564f254a19e20ae4cd71d5e45d87a42edce"
   },
   "coordinator.task_list": {
     "action_models": {},
@@ -268,7 +270,7 @@
       }
     ],
     "strict_input_sha256": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
-    "strict_output_sha256": "b69647ba6a614931ad3fadac2e761cf9afce91e3badc95519278ec5e5f7290e7"
+    "strict_output_sha256": "f008a9156b51bca9820246032ac3c54265613c03c231b030d156ea2662138671"
   },
   "coordinator.task_manage": {
     "action_models": {
@@ -317,7 +319,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskArchiveRequest",
-        "source_schema_sha256": "80c994809c2a92e426d262fd9f606ee98289f1e7b25c1f6c111524e78222e063"
+        "source_schema_sha256": "61a0558ece671aa0150389cc3adc8e170e2c7f1cbd09245cb8603bd669091384"
       },
       "checkpoint": {
         "allowed": [
@@ -365,7 +367,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskCheckpointRequest",
-        "source_schema_sha256": "2ac076014022f5a80cce43c15ba84c523e394c84434168bccd35c4d763a8f837"
+        "source_schema_sha256": "1c41af3c91c370d01d6ec7bf717f8f5cc3d5729ffbd83d65d1db885b327f89e4"
       },
       "comment": {
         "allowed": [
@@ -413,7 +415,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskCommentRequest",
-        "source_schema_sha256": "24d73341362e42a129ca275c921fbd078cf91fb6f256320203c9b6151b1e9d37"
+        "source_schema_sha256": "f38a18181efa01d9456c95460bbd7d9731e2421da2515a8e5f72a251905152b3"
       },
       "create": {
         "allowed": [
@@ -460,7 +462,7 @@
           "namespace"
         ],
         "source": "terminal_mcp.application.task_requests.TaskCreateRequest",
-        "source_schema_sha256": "cdcf142869819e693d15152ccd1957104a6346f34813dc2b71edf536b6e0a9d5"
+        "source_schema_sha256": "c03c7a9378796e8bb88ef0c466c1fd5747280656e205f8945dfdb7697f5c58f7"
       },
       "relate": {
         "allowed": [
@@ -509,7 +511,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskRelateRequest",
-        "source_schema_sha256": "e25cfe5a3cef357081f37df25a7875817a2d3e68accc7d92a4322a427c15bf7b"
+        "source_schema_sha256": "39a90257b1e6288fe1ba457d89a3a71cb7ab44df1fc7ca8f87e4b27bc4fbdc68"
       },
       "review": {
         "allowed": [
@@ -558,7 +560,7 @@
           "verdict"
         ],
         "source": "terminal_mcp.application.task_requests.TaskReviewRequest",
-        "source_schema_sha256": "ea334133cd953154b48c04cf921236b4b6daf6fecf6d77dbebac8d364e350917"
+        "source_schema_sha256": "3a26c68d9c56f2ff1a013227daa91f7fa24566b4ecf92723f759e5b8181a17ae"
       },
       "state": {
         "allowed": [
@@ -606,7 +608,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskStateRequest",
-        "source_schema_sha256": "601876ae57e5ea56443db67a62922d3ab642dd4d1477e4d13580c2fa79af0cbf"
+        "source_schema_sha256": "6f085f159ab777e05fe39d01352544b26c8d3bfbd60a02ab49a3e7ee146db10b"
       },
       "unrelate": {
         "allowed": [
@@ -655,7 +657,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskUnrelateRequest",
-        "source_schema_sha256": "250dd9b66d9af8160924dab8cb88ffc5cc35613ff2a1d70b0abb8ace89712fdd"
+        "source_schema_sha256": "33847fbb4d559905eeaedf40430aa7bef870c3025c78680b8d139dc5b926111b"
       },
       "update": {
         "allowed": [
@@ -703,7 +705,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskUpdateRequest",
-        "source_schema_sha256": "8f9f6ffd9699226b591e43d44b48b176c0490cfc43787cddd51a627bf7d33a8e"
+        "source_schema_sha256": "8c88232ce40722d5e600f62ea5043f70b42f656909b5b57f57d4be9d6248e55e"
       }
     },
     "baseline_description_preserved": true,
@@ -831,7 +833,7 @@
       }
     ],
     "strict_input_sha256": "dac0417375adab7c6951517317975ac95efb2bbad9f309957b9cad399408ff8d",
-    "strict_output_sha256": "8315433084e0cd8cf0d51026d43606fdee03972ca01afb815d789b3b80d1705f"
+    "strict_output_sha256": "a007714824483d3b1e36ce48e447496fb933b594c4a5af21a3c5d3a39a52c694"
   },
   "executor.command_cancel": {
     "action_models": {},
@@ -852,7 +854,7 @@
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
-    "strict_output_sha256": "4d0c0d1a077b8090f043dccdf60659f88df7e8bf5eecde42548cf03bef6c0ae3"
+    "strict_output_sha256": "753029ba0b21353ef4091ff680e7003883cb975be99b81c8c38cd5164cd1f3e2"
   },
   "executor.command_read": {
     "action_models": {},
@@ -873,7 +875,7 @@
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "6caae35abafd494d83e6ac8491a7018504df059cad5539697582a8f95c236693",
-    "strict_output_sha256": "0fc3dd3295ace336a4b64464c6a046c97476860442c123e76805f1eac470bc62"
+    "strict_output_sha256": "d0412d1f500d578e0f1fd2bd1df447546a768bbf1cf6bd757443184527cd1e5c"
   },
   "executor.command_recovery": {
     "action_models": {},
@@ -894,7 +896,7 @@
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
-    "strict_output_sha256": "4d0c0d1a077b8090f043dccdf60659f88df7e8bf5eecde42548cf03bef6c0ae3"
+    "strict_output_sha256": "753029ba0b21353ef4091ff680e7003883cb975be99b81c8c38cd5164cd1f3e2"
   },
   "executor.command_run": {
     "action_models": {},
@@ -923,7 +925,7 @@
       }
     ],
     "strict_input_sha256": "390368c4b1e019241027cc9e6f81be36a7d8bc0f1a681d91a9a148ac2a917f34",
-    "strict_output_sha256": "e4fd539aaf5e270310687d6be1017c6ae4be4dbbb7913706b59e5bd167ba87b9"
+    "strict_output_sha256": "4f92ba92ebb8c36090506925b62c03c53b1af6805f9aba46e7fe613130456558"
   },
   "executor.message": {
     "action_models": {},
@@ -931,7 +933,9 @@
     "conditions": [
       "ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
-    "exact_input_fallbacks": [],
+    "exact_input_fallbacks": [
+      "$/properties/scope"
+    ],
     "input_fields": [
       "scope",
       "action",
@@ -965,9 +969,9 @@
         "text": "send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden)."
       },
       {
-        "anchor": "Legacy scope='fleet' requests return",
+        "anchor": "this server only. Message recipients require a current local attachment; ",
         "source": "src/terminal_mcp/mcp/roles.py",
-        "text": "Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours."
+        "text": "Messages use local attachments and expire after 24 hours; scope is always local."
       },
       {
         "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")",
@@ -980,8 +984,8 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "39274d2050c1d4a84acb9d0a70833fb5197d9703e29f4416e971b9d28ada8c5e",
-    "strict_output_sha256": "7820762f16b6d382d68bb3f1c5901e75bfe07403b0335b56705b52c1242319f6"
+    "strict_input_sha256": "98d1f14d1274161695f6f789efa15770ac734ebd89532d191e10e8b8f5fd9a05",
+    "strict_output_sha256": "a5ef2a6390329c1f1bb737a23e1cdede9f689c61360e125f670a12097a24371c"
   },
   "executor.session": {
     "action_models": {},
@@ -1008,7 +1012,7 @@
       }
     ],
     "strict_input_sha256": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
-    "strict_output_sha256": "b760ea6cb86ba05037a655b9cb3418e4a0a3bb17a5b8a27d2f9ff09c070a3c07"
+    "strict_output_sha256": "beb3a052817488c759e16d474933e5e87c315a7404dddc58e0ac9ee936da6848"
   },
   "executor.task_claim": {
     "action_models": {
@@ -1031,7 +1035,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskClaimRequest",
-        "source_schema_sha256": "8705a3222692aaf55c2ef7ff6ecb42f1cf899fa56be614ac50aefd7bc740064f"
+        "source_schema_sha256": "4b7c03bdac6e1b85208c686de5d01d9db36554b443729d98889f5de5e0317b14"
       },
       "release": {
         "allowed": [
@@ -1051,7 +1055,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskReleaseRequest",
-        "source_schema_sha256": "d2ea315a0904c0941effbf007aa6d689049f83d54e85d8ca334810e131acf50f"
+        "source_schema_sha256": "76a40d36fb0588c5fce072ab76712957e2279a8b565ca004b9ef2b1bf1650c96"
       }
     },
     "baseline_description_preserved": true,
@@ -1093,7 +1097,7 @@
       }
     ],
     "strict_input_sha256": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
-    "strict_output_sha256": "d7d6d69d4dd78edd4d43f1b116ad00449cb54e21ad6f53d82f6fe34f6adb8beb"
+    "strict_output_sha256": "1933cd4937a3c4329b86017af52c05e1c598b8224283e40be83ab1bc13b62731"
   },
   "executor.task_comment": {
     "action_models": {
@@ -1115,7 +1119,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskCheckpointRequest",
-        "source_schema_sha256": "2ac076014022f5a80cce43c15ba84c523e394c84434168bccd35c4d763a8f837"
+        "source_schema_sha256": "1c41af3c91c370d01d6ec7bf717f8f5cc3d5729ffbd83d65d1db885b327f89e4"
       },
       "comment": {
         "allowed": [
@@ -1134,7 +1138,7 @@
           "task_id"
         ],
         "source": "terminal_mcp.application.task_requests.TaskCommentRequest",
-        "source_schema_sha256": "24d73341362e42a129ca275c921fbd078cf91fb6f256320203c9b6151b1e9d37"
+        "source_schema_sha256": "f38a18181efa01d9456c95460bbd7d9731e2421da2515a8e5f72a251905152b3"
       }
     },
     "baseline_description_preserved": true,
@@ -1167,7 +1171,7 @@
       }
     ],
     "strict_input_sha256": "947fa128f5f553c22321bd7d86845b374dac515d1dcd97a0146c4652493e9039",
-    "strict_output_sha256": "097732bcc089a4bd8473301b87b0706f48e3fc72e187fe35e8dba3f8fcdaa2d1"
+    "strict_output_sha256": "9f524a932ac28ce7049b9bc77391e14e5c16bdc71a26c3d6a6edda52a0b94d1b"
   },
   "executor.task_list": {
     "action_models": {},
@@ -1197,7 +1201,7 @@
       }
     ],
     "strict_input_sha256": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
-    "strict_output_sha256": "b69647ba6a614931ad3fadac2e761cf9afce91e3badc95519278ec5e5f7290e7"
+    "strict_output_sha256": "f008a9156b51bca9820246032ac3c54265613c03c231b030d156ea2662138671"
   },
   "executor.task_state": {
     "action_models": {},
@@ -1228,6 +1232,6 @@
       }
     ],
     "strict_input_sha256": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",
-    "strict_output_sha256": "cee11de4a8466be1505a7a27726879c5273db7d2f4476c659e6d8c7878edab88"
+    "strict_output_sha256": "6e76a14f3ca5250cfedb573634406fc38fe717f8ad0f7f5475f9ab8920ed4fe1"
   }
 }

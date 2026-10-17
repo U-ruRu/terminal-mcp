@@ -32,7 +32,7 @@ class ObservationApplication(ApplicationCapability):
     async def observe(
         self,
         actor: ActorContext,
-        subject: Literal["sessions", "tasks", "namespaces"] = "sessions",
+        subject: Literal["tasks", "namespaces"] = "tasks",
         namespace: str | None = None,
         task_id: str | None = None,
         lane: TaskLane | None = None,
@@ -47,6 +47,8 @@ class ObservationApplication(ApplicationCapability):
         _defer_full_task_budget: bool = False,
         _all_task_events: bool = False,
     ) -> dict:
+        if subject not in {"tasks", "namespaces"}:
+            return _read_error("input_validation_failed", "unsupported observation subject")
         if actor.endpoint_role == "executor":
             if subject != "tasks" or task_id is not None or detail != "summary":
                 return public_error("capability_not_allowed").as_dict()
@@ -63,7 +65,6 @@ class ObservationApplication(ApplicationCapability):
             if resolution.failure is not None:
                 return resolution.failure
 
-        backend = self.backend
         filters = {
             "namespace": namespace,
             "task_id": task_id,
@@ -79,40 +80,6 @@ class ObservationApplication(ApplicationCapability):
             offset = decode_cursor(cursor, scope)
         except InvalidCursor as exc:
             return _read_error("invalid_cursor", str(exc))
-
-        if subject == "sessions":
-            if backend is None:
-                return {
-                    "ok": False,
-                    "code": "policy_incompatible",
-                    "error": "policy_incompatible",
-                }
-            result = await backend.access_observe_slots(
-                limit=limit + 1,
-                offset=offset,
-            )
-            if not result.get("ok"):
-                return result
-            rows = list(result.get("sessions") or [])
-            if detail == "summary":
-                rows = [
-                    {
-                        "public_name": item.get("public_name"),
-                        "mode": item.get("mode"),
-                        "authority_node_id": item.get("authority_node_id"),
-                        "session_state": item.get("session_state", "inactive"),
-                    }
-                    for item in rows
-                ]
-            try:
-                page, _unused_cursor = bounded_page(rows, limit=limit, cursor=None, scope=scope)
-            except InvalidCursor as exc:
-                return _read_error("invalid_cursor", str(exc))
-            except OutputItemTooLarge as exc:
-                return _read_error("output_item_too_large", str(exc))
-            has_more = len(page) < len(rows)
-            next_cursor = encode_cursor(offset + len(page), scope) if has_more else None
-            return {"ok": True, "sessions": page, "next_cursor": next_cursor}
 
         if subject == "namespaces":
             store = getattr(self.service, "task_store", None)

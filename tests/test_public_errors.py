@@ -178,11 +178,13 @@ def test_coordination_error_keeps_only_bounded_next_action_messages():
     assert "secret" not in repr(result)
 
 
-def test_missing_session_directs_the_agent_to_start_one():
+def test_missing_session_directs_the_agent_to_access_and_attach():
     required = public_error("session_required")
 
-    assert required.retry == "start_session"
-    assert required.message == "Сначала запусти сессию"
+    assert required.retry == "repair"
+    assert required.message == (
+        "Получи номер через Access и выполни session(attach) на этом Connector."
+    )
 
 
 def test_unconfirmed_control_mutation_requires_reconciliation_even_with_an_idempotency_key():

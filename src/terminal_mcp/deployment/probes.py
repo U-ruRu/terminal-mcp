@@ -55,8 +55,15 @@ class ProbeClient:
             raise ReleaseError("probe_client_blocked_by_cdn")
         return response
 
-    def health(self, url: str, expected_release: str | None = None) -> dict:
-        response = self.request("GET", checked_url(url))
+    def health(
+        self, url: str, expected_release: str | None = None, *, readiness: bool = False
+    ) -> dict:
+        url = checked_url(url)
+        if readiness:
+            parts = urlsplit(url)
+            require(parts.path in {"/health/live", "/health/ready"}, "invalid_readiness_url")
+            url = parts._replace(path="/health/ready").geturl()
+        response = self.request("GET", url)
         require(response.status_code == 200, "health_http_failure")
         try:
             value = response.json()
@@ -66,6 +73,8 @@ class ProbeClient:
             value.get("ok") is True and isinstance(value.get("release"), str),
             "health_application_failure",
         )
+        if readiness:
+            require(value.get("ready") is True, "application_not_ready")
         if expected_release is not None:
             require(value["release"] == expected_release, "live_release_mismatch")
         return {"ok": True, "release": value["release"], "version": value.get("version")}
@@ -96,8 +105,7 @@ class ProbeClient:
             )
         results = []
         for method, path, expected in routes:
-            kwargs = {"json": {"code": "0000"}} if method == "POST" else {}
-            response = self.request(method, base + path, **kwargs)
+            response = self.request(method, base + path)
             require(response.status_code == expected, "ingress_route_failure:" + path)
             if path.startswith("/.well-known/"):
                 try:

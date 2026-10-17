@@ -75,8 +75,8 @@ class MeshLocalSession(_Strict):
     logical_agent_id: str
     authority_node_id: str
     public_name: str
-    mode: Literal["legacy", "persistent"]
-    slot_kind: Literal["legacy", "persistent"]
+    mode: Literal["temporary", "persistent"]
+    slot_kind: Literal["temporary", "persistent"]
     slot_state: Literal["active", "suspended", "deleted"]
     session_lifecycle: MeshCycle
     cleanup_pending: bool

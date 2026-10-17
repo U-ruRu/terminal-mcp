@@ -1,32 +1,35 @@
-# Authorized Mesh namespace transitions
+# Авторизованные переходы Mesh
 
-Fleet ID is public namespace metadata. It does not authenticate a node or operator.
-An autonomous node may join a Mesh with a different Fleet ID through the existing
-Console/APK operator enrollment and authenticated controller replication flow.
-Matching Fleet IDs do not authorize enrollment either.
+Нормативные правила заданы в [продуктовом контракте](mesh-product-contract.md). Один узел входит не более чем в один Mesh. Имя или идентификатор прежнего пространства не даёт полномочий и не создаёт запрета на перемещение.
 
-The receiving node verifies the management peer and its existing enrollment ingress
-credential before accepting a new controller. A controller with active members or
-an attached follower cannot be silently rehomed. Node IDs, signing identity, OAuth
-storage and the node-local Access bootstrap key remain unchanged.
+## Полномочия и проверка работы
 
-The accepted snapshot and a pending namespace intent commit in the control database.
-The server then updates its env file and source/projection namespace metadata.
-Startup and reconcile finish interrupted writes idempotently. Detach restores the
-autonomous namespace saved on first enrollment; the existing detach flow rotates
-the ingress credential, so a subsequent Join retrieves a fresh enrollment descriptor.
-Source stream generation and stored session/domain data are preserved.
+Пользовательское приложение с действующим pairing выбирает топологию. Каждый изменяемый узел проверяет авторизацию приложения, криптографическую идентичность участников и согласованность операции. Старый Mesh не выдаёт дополнительного разрешения на уход. Проверка авторитетного реестра исходного Mesh нужна для безопасности активной работы, а не для решения о членстве.
 
-APK reads `namespace_transition_supported` from the receiving server. An older
-server without that capability is rejected before a different-namespace transition
-can detach the node. Controllers can retain the existing enrollment/snapshot wire
-contract; only the receiver needs the new namespace transition support.
+Перед сменой пространства закрывается допуск новых операций. Проверяются активные слоты, локальные рабочие сессии, команды в очереди или исполнении и незавершённая очистка. Одна отстающая реплика не является достаточным доказательством отсутствия активной регистрации. Блокировка возвращает `mesh_active_work` и оставляет членство прежним.
 
-Switch between independent controllers is an explicit Detach followed by Join.
-APK stores only the public destination intent before Detach. It confirms autonomy
-by a direct target read before Join. An uncertain result or interrupted application
-keeps that intent for the user to resume with Apply. It never stores enrollment
-tokens in the intent, automatically replays an ambiguous Detach, or claims that
-the two controllers committed an atomic transaction. Fresh reads verify completion.
-If the destination is unavailable after Detach, the node remains autonomous until
-the user resumes the requested Join.
+## Join и Detach
+
+Join использует enrollment descriptor, полученный приложением через авторизованный API целевого узла. Назначенная топология автоматически устанавливает взаимное доверие. Отдельные списки ручного одобрения и режим Mesh не требуются.
+
+Detach выполняет переход control-состояния и ACS через устойчивый журнал. Только на отделяемом узле очищаются прежние слоты, реплики, привязки и полномочия; затем создаётся новое пустое автономное пространство. Независимая идентичность и pairing сохраняются. Транспортные полномочия прежнего членства прекращаются. Исходный общий реестр не отзывается, не фильтруется по историческому издателю и не редактируется из-за ухода узла.
+
+## Move и выбор основного
+
+Move между независимыми Mesh состоит из подтверждённого отделения и присоединения к назначению. Приложение сохраняет публичное намерение переноса перед первым изменением. После Detach оно заново получает enrollment descriptor: прежний транспортный токен уже недействителен. Если назначение временно недоступно, узел остаётся автономным, а намерение позволяет продолжить переход.
+
+Перед уходом основного сервера с оставшимися участниками приложение назначает преемника через `POST /actions/fleet/control/primary`. Запрос содержит `node_id` и стабильный `operation_id`; Console также передаёт ожидаемую ревизию топологии, необязательную в API. Повтор подтверждает завершённую операцию до проверки CAS и возвращает актуальное control-состояние.
+
+Передача основного блокирует допуск в затронутом Mesh, переносит полный реестр и его политику, проверяет целостность и подтверждает новую authority подписанной цепочкой от прежней. Исторический issuer остаётся происхождением записи, а право изменять реестр получает новый основной сервер. `mesh_primary_handoff_pending` означает, что журнал ещё требует завершения; это не разрешение очистить уходящий узел.
+
+## Восстановление и изоляция
+
+Control-база и ACS могут зафиксировать разные части перехода перед остановкой процесса. При старте восстановление журнала выполняется до применения политики и открытия допуска. Повторное применение завершённого шага не повторяет очистку, передачу или выпуск полномочий.
+
+Запрос привязывается к пространству, в котором прошёл авторизацию. Проверка сохраняется до транзакционного commit, поэтому запрос прежнего Mesh, задержавшийся на блокировке SQLite, не записывает данные после Move. На отделяемом узле не остаётся интервала, когда допустимы оба пространства.
+
+Команды и прикладная история сохраняются согласно правилам хранения. Содержание прежних сообщений изолировано от активных inbox, получателей и репликации нового пространства. Слоты исходного Mesh не импортируются в назначение.
+
+Проверки реализации включают отдельные сценарии active-work refusal, сохранения исходного реестра, повторного выполнения, потери ответа и восстановления реальных control/ACS хранилищ. Это проверки исходников; развёртывание и его приёмка оформляются отдельно.
+
+Управляющее приложение может обращаться к любому текущему участнику Mesh с действующим pairing. Участник передаёт авторитетные изменения основному серверу и возвращает подтверждённый результат.

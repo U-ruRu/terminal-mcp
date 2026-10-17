@@ -80,7 +80,7 @@ python -m terminal_mcp.deployment.driver rollback \
   --approved-gates
 ```
 
-Rollback restores the captured topology files, permissions and service configuration. Durable application, auth and fleet databases retain their current state. Schema and Access security/revocation compatibility remain separate checks; topology rollback does not authorize replacing newer durable security state.
+Rollback restores the captured topology files, permissions and service configuration. Durable application, auth and Mesh databases retain their current state. Schema and Access security/revocation compatibility remain separate checks; topology rollback does not authorize replacing newer durable security state.
 
 ## Runtime invariants
 

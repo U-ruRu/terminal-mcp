@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from terminal_mcp.fleet.access_mesh import PinnedAccessMeshPeerAuth, build_access_mesh_router
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
-from terminal_mcp.fleet.replication import FleetReplicationService
+from terminal_mcp.fleet.peer_auth import MeshPeerTransport
 
 
 def test_mesh_snapshot_accepts_pinned_bootstrap_after_fleet_rotation():
@@ -25,7 +25,7 @@ def test_mesh_snapshot_accepts_pinned_bootstrap_after_fleet_rotation():
         1.0,
         "managed-local-key",
     )
-    mutable_fleet = FleetReplicationService(base, None, None, max_session_seconds=1380)
+    mutable_fleet = MeshPeerTransport(base)
     pinned_mesh_auth = PinnedAccessMeshPeerAuth(base)
     mutable_fleet.config = managed
 

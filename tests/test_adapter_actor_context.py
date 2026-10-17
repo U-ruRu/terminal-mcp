@@ -1,7 +1,5 @@
 """Adapter actor identity comes only from verified admission and server trace."""
 
-from types import SimpleNamespace
-
 from test_application_boundary import Service, actor
 
 from terminal_mcp.adapters.actor import actor_for
@@ -14,7 +12,6 @@ def test_actor_factory_uses_verified_identity_and_server_trace():
     trace_token = current_trace_id.set("server-trace")
     try:
         service = Service()
-        service.persistent.lifecycle = SimpleNamespace(authority_node_id="node-a")
         value = actor_for(service, transport="mcp", endpoint_role="executor", contract_version=1)
         assert value.principal_id == "owner"
         assert value.node_id == "node-a"

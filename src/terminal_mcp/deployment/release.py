@@ -20,6 +20,7 @@ from terminal_mcp.deployment._release_common import (
     utc,
 )
 from terminal_mcp.deployment.artifact import approve, build
+from terminal_mcp.deployment.migration_preservation import receipt_cipher
 from terminal_mcp.deployment.update import (
     NodeDriver,
     Update,
@@ -56,6 +57,7 @@ async def migrate_stores(profile: dict, backup: Path) -> dict:
 
     state = app.state
     await state.service.repo.initialize(preserve_active_commands=True)
+    await state.migrate_runtime_state()
     for name in (
         "fleet_node_meta",
         "fleet_projection",
@@ -69,14 +71,18 @@ async def migrate_stores(profile: dict, backup: Path) -> dict:
             await store.initialize()
     if fresh:
         initialize_fresh_identity(Path(stores["runtime"]), Path(stores["auth"]))
-    # Never start sessions, issue codes, rewrite policies, renew deadlines,
-    # reconcile topology/trust or start background replication in the migrator.
+    # One-time conversion preserves existing identities, policy and deadlines.
+    # Never open a new work cycle, reconcile peers or start background workers.
     snap = read_json(backup / "snapshot.json")
     for name, data in snap["stores"].items():
         old = backup / data["backup"]
         require(sha256(old) == data["sha256"], "backup_tampered")
         if name != "output":
-            preserved_rows(old, Path(data["path"]))
+            preserved_rows(
+                old,
+                Path(data["path"]),
+                cipher=receipt_cipher(Path(stores["runtime"])) if name == "runtime" else None,
+            )
     for path, data in snap["configs"].items():
         require(sha256(Path(path)) == data["sha256"], "protected_configuration_changed")
     return schema_versions(stores)

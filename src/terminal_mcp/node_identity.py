@@ -11,7 +11,10 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
+import socket
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -23,12 +26,49 @@ def local_namespace(node_id: str) -> str:
     )
 
 
+def _prior_node_id(settings) -> str:
+    """Preserve the local authority name of a pre-ACS standalone installation."""
+    if settings.fleet_instance_id.strip():
+        return settings.fleet_instance_id.strip()
+    if settings.fleet_node_id.strip():
+        return settings.fleet_node_id.strip()
+    path = settings.database_path
+    hostname = socket.gethostname()
+    if path.exists() and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", hostname):
+        db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='logical_agents'"
+            ).fetchone()
+            if (
+                exists
+                and db.execute(
+                    "SELECT 1 FROM logical_agents WHERE authority_node_id=? LIMIT 1", (hostname,)
+                ).fetchone()
+            ):
+                return hostname
+        finally:
+            db.close()
+    return "node-" + secrets.token_hex(12)
+
+
 def _identity(path: Path, settings) -> dict[str, str]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
+        database = settings.database_path
+        if database.exists():
+            with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as db:
+                established = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='unified_runtime_migration'"
+                ).fetchone()
+                if established:
+                    raise ValueError(
+                        "durable node identity is missing from an established install"
+                    ) from None
         data = {
-            "node_id": settings.fleet_instance_id.strip() or "node-" + secrets.token_hex(12),
+            "node_id": _prior_node_id(settings),
             "signing_private_key": settings.fleet_signing_private_key.strip()
             or base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
             "access_proof_key": settings.access_mesh_proof_key or secrets.token_urlsafe(48),
@@ -45,6 +85,12 @@ def _identity(path: Path, settings) -> dict[str, str]:
                 # Publish complete content once. Concurrent constructors use the
                 # same winning identity, never a partially written credential.
                 os.link(temporary, path)
+                if os.name != "nt":
+                    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
             except FileExistsError:
                 return _identity(path, settings)
         finally:
@@ -76,7 +122,3 @@ def ensure_node_identity(settings) -> None:
     settings.fleet_control_node_id = (
         settings.fleet_control_node_id.strip() or settings.fleet_node_id
     )
-    # Source/control are always present, including an autonomous node. These
-    # values describe available protocols, not a second agent runtime.
-    settings.fleet_v1_source_enabled = True
-    settings.fleet_v1_authority_enabled = True

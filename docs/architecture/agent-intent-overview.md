@@ -1,9 +1,9 @@
 # Local agent overview and call-boundary intent freshness
 
-## Scope and compatibility
+## Scope
 
 Coordinator `agent_observe` is an authoritative view of this execution server's
-existing attached slots and latest local WorkSession. It is not a fleet view.
+existing attached slots and latest local WorkSession. The view is local to this node.
 The result declares `scope: "local"` and `server_id`. Call the Coordinator on
 each server for that server's state. No new Mesh transport or identity registry
 is introduced. OAuth, Access issuance, grants and recipient authorization are
@@ -38,7 +38,7 @@ call; it does not prove that an already-running command has stopped.
 
 Access `session(action="start")` issues a session number; it is not a declaration
 of work intent. Executor/Coordinator `session(action="attach", session_number=...)`
-keeps the old attach receipt and accepts optional initial `intent`. Before the
+keeps the current attach receipt and accepts optional initial `intent`. Before the
 first domain write, declare an intent, either on initial attach or with
 `session(action="intent", intent="Review the selected task")`. Refresh uses the
 existing connector binding and forbids resubmitting a session number.
@@ -58,7 +58,7 @@ servers. Each new local WorkSession starts with missing intent.
 
 ## Deterministic enforcement
 
-The public Access Mesh V2 Executor/Coordinator MCP boundary observes intent
+The public Executor/Coordinator MCP boundary observes intent
 before request validation and before any domain mutation. Initial missing
 intent immediately rejects a domain write with `intent_required`. Read and safe
 cleanup paths remain available under their original authorization/lifecycle rules.
@@ -89,8 +89,7 @@ created. Old live sessions therefore require an initial declaration before writi
 No background call or heartbeat is forced. Reading an existing long-running
 command neither refreshes intent nor starts another command. Reconcile its
 `cmd_hash` before considering a retry. A blocked retry does not erase prior
-receipts or imply that an earlier ambiguous command did not execute. Existing
-legacy coordinate/task-lease behavior is preserved outside the V2 MCP boundary.
+receipts or imply that an earlier ambiguous command did not execute.
 
 ## Verification
 

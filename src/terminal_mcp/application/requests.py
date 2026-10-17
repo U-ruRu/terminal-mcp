@@ -1,8 +1,7 @@
 """Transport-independent command and context request contracts.
 
-The Access-code variants are compatibility inputs retained until the managed
-identity migration. Authenticated principal/provider/endpoint metadata never
-belongs in these models.
+Execution identity comes from the current native attachment. Authenticated
+principal/provider/endpoint metadata never belongs in these models.
 """
 
 from typing import Annotated, Literal
@@ -33,7 +32,6 @@ class _StrictRequest(BaseModel):
 
 class CmdReadRequest(_StrictRequest):
     action: Literal["read"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     cmd_hash: Annotated[str, Field(min_length=1, max_length=MAX_HASH_CHARS)]
     limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
     cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None
@@ -41,7 +39,6 @@ class CmdReadRequest(_StrictRequest):
 
 class CmdRunRequest(_StrictRequest):
     action: Literal["run"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     command: Annotated[str, Field(min_length=1, max_length=MAX_COMMAND_CHARS)]
     queue_id: Annotated[int | None, Field(ge=1, le=MAX_QUEUE_ID)] = None
     task_scope: Annotated[str, Field(min_length=1, max_length=MAX_TASK_SCOPE_CHARS)] = "none"
@@ -49,13 +46,11 @@ class CmdRunRequest(_StrictRequest):
 
 class CmdCancelRequest(_StrictRequest):
     action: Literal["cancel"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     cmd_hash: Annotated[str, Field(min_length=1, max_length=MAX_HASH_CHARS)]
 
 
 class CmdRecoveryRequest(_StrictRequest):
     action: Literal["recovery"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     command: Annotated[str, Field(min_length=1, max_length=MAX_COMMAND_CHARS)]
 
 
@@ -74,7 +69,6 @@ class ContextListRequest(_StrictRequest):
 
 class ContextCreateRequest(_StrictRequest):
     action: Literal["create"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     summary: Annotated[str, Field(min_length=1, max_length=MAX_CONTEXT_SUMMARY_CHARS)]
     content: Annotated[str, Field(min_length=1, max_length=MAX_CONTEXT_CONTENT_CHARS)]
     primary: bool = False
@@ -82,7 +76,6 @@ class ContextCreateRequest(_StrictRequest):
 
 class ContextUpdateRequest(_StrictRequest):
     action: Literal["update"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     context_id: Annotated[int, Field(ge=1, le=MAX_SQLITE_INTEGER)]
     summary: Annotated[str | None, Field(min_length=1, max_length=MAX_CONTEXT_SUMMARY_CHARS)] = None
     content: Annotated[str | None, Field(min_length=1, max_length=MAX_CONTEXT_CONTENT_CHARS)] = None
@@ -91,7 +84,6 @@ class ContextUpdateRequest(_StrictRequest):
 
 class ContextDeleteRequest(_StrictRequest):
     action: Literal["delete"]
-    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     context_id: Annotated[int, Field(ge=1, le=MAX_SQLITE_INTEGER)]
 
 

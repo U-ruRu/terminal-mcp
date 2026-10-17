@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from terminal_mcp.core.persistent_backend import PersistentBackend
-from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleError
+from terminal_mcp.core.session_execution import SessionExecutionError
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 
@@ -24,8 +24,8 @@ class ReplayBackend(PersistentBackend):
 
     async def _execution_authority(self, *args, **kwargs):
         if not self.authorized:
-            raise PersistentLifecycleError("stale_session")
-        return None, None
+            raise SessionExecutionError("stale_session")
+        return None
 
     async def _audit(self, *args, **kwargs):
         pass
@@ -43,7 +43,6 @@ async def make_backend(tmp_path):
     repo = SqliteRepository(tmp_path / "state.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
     store = PersistentAgentStore(repo.path)
-    await store.create_slot("la-test", "ReplayTest", "R123", authority_node_id="firstbyte")
     return ReplayBackend(store)
 
 

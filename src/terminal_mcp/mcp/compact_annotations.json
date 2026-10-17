@@ -41,9 +41,9 @@
       "anchor": "def validate_mode(self):"
     },
     {
-      "text": "Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours.",
+      "text": "Messages use local attachments and expire after 24 hours; scope is always local.",
       "source": "src/terminal_mcp/mcp/roles.py",
-      "anchor": "Legacy scope='fleet' requests return"
+      "anchor": "this server only. Message recipients require a current local attachment; "
     },
     {
       "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack. Send mode defaults to notify. mode=notify marks read_at automatically on first recipient display, so acknowledged=true means read/handled and does not prove an explicit ACK. mode=ack requires action=ack to set read_at. mode=alert requires a reply to release its reply obligation; action=ack alone does not satisfy it. Either alert=true or require_reply=true promotes notify/ack to alert. first_seen_at records first display; read_at records notify auto-read or explicit ACK; replied_at records actual reply. Repeated ACK is idempotent and creates no new message.",

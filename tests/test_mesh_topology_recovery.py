@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import asdict
+from unittest.mock import AsyncMock
 
 from test_fleet_control_hardening import PolicyProbe, keypair
 from test_fleet_control_storage import POLICY
@@ -164,3 +165,42 @@ async def test_hot_control_scope_conversion_preserves_existing_acs_registry(tmp_
     assert control.fleet_id == "old-domain"
     assert access.store.namespace_id == "mesh-a"
     assert access.store.registry_slot("pre-upgrade") == before
+
+
+async def test_restart_rehomes_a_committed_follower_detach_before_scope_cleanup(
+    mesh_pair, tmp_path
+):
+    source, target, _, _ = mesh_pair
+    access_path = tmp_path / "detach-access.db"
+    target.native_access = native_access(access_path, "target")
+    target.native_access.store.install_registry_scope(mesh_id="mesh-a", authority_id="source")
+    seed_inactive_slot(target.native_access.store, "source", "retired-on-target")
+    await target.prepare_local_transition(
+        operation_id="detach-crash",
+        target_mesh_id=None,
+        target_authority_id="target",
+        coordinator_id="source",
+    )
+    await source.store.detach_managed_node("target")
+    snapshot = await source._internal_replication_snapshot(await source.snapshot())
+    await target._accept_replica(snapshot, source_node_id="source")
+    assert (await target.store.managed_node("target"))["state"] == "draining"
+
+    reopened = FleetControlStore(
+        target.store.path, fleet_id="mesh-a", node_id="target", control_node_id="source"
+    )
+    await reopened.initialize()
+    recovered = ManagedFleetControl(
+        reopened, target.config, PolicyProbe(), public_base_url="https://target.example"
+    )
+    recovered.native_access = native_access(access_path, "target")
+    recovered._transition_peer_call = AsyncMock(return_value={"ok": True, "status": "completed"})
+
+    state = await recovered.reconcile_local()
+
+    assert not state["managed"]
+    assert state["control_node_id"] == "target"
+    assert recovered.native_access.store.namespace_id == "local-target"
+    assert recovered.native_access.store.registry_slot("retired-on-target") is None
+    recovered.native_access.store.assert_registry_ready()
+    assert (await reopened.topology_transition("target"))["phase"] == "completed"

@@ -28,12 +28,11 @@ from terminal_mcp.storage.sqlite_observability import (
     cancellation_safe_connection,
     observed_connection,
 )
-from terminal_mcp.storage.work_windows import install_work_window_schema
 
-# Revision 25 fences the Access inheritance/current-window/code-generation
-# migration. Keep this literal aligned with core.access_mesh_grants and retain
+# Revision 26 retires old agent admission and introduces the one-time unified
+# runtime migration receipt. Keep aligned with core.access_mesh_grants and retain
 # its static form for scripts/release_version.py's schema fingerprint.
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 HEALTH_INTEGRITY_CACHE_SECONDS = 30.0
 HEALTH_INTEGRITY_TIMEOUT_SECONDS = 3.0
 
@@ -263,9 +262,9 @@ class SqliteRepository:
                 raise RuntimeError(
                     f"database schema {current_version} is newer than supported {SCHEMA_VERSION}"
                 )
-            # Access can be disabled while the repository upgrades. Preserve
+            # Preserve
             # the old "no row means configured defaults" interpretation before
-            # stamping 25, including a partially upgraded six-column table.
+            # stamping the current revision, including a partial six-column table.
             # Use the actual version, not the earlier migration origin below:
             # a fresh Access constructor can legitimately have origin zero.
             if current_version < 25:
@@ -655,7 +654,6 @@ class SqliteRepository:
             from terminal_mcp.storage.execution_references import migrate_execution_references
 
             await migrate_execution_references(db)
-            await install_work_window_schema(db)
             await install_event_journal(db)
             legacy_output_migrated = await self._migrate_legacy_output(db)
             if not preserve_active_commands:
@@ -1582,7 +1580,6 @@ class SqliteRepository:
         logical_agent_id=None,
         work_session_id=None,
         session_epoch=None,
-        persistent_permit=None,
     ):
         attempts = 1 if cmd_hash is not None else 32
         for _ in range(attempts):
@@ -1640,43 +1637,6 @@ class SqliteRepository:
                                 logical_agent_id,
                                 work_session_id,
                                 session_epoch,
-                            ),
-                        )
-                    if persistent_permit is not None:
-                        if not logical_agent_id or not work_session_id or session_epoch is None:
-                            raise ValueError("persistent permit requires exact command attribution")
-                        await db.execute(
-                            "INSERT INTO persistent_command_permits("
-                            "command_hash,logical_agent_id,work_session_id,session_epoch,authority_node_id,"
-                            "authority_epoch,node_attachment_id,node_instance_id,scope,hard_expires_at,"
-                            "permit_expires_at,signature,created_at,revoked_at,gate_revision,operation,"
-                            "ttl_ms,slot_revision,principal_id) "
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)",
-                            (
-                                h,
-                                logical_agent_id,
-                                work_session_id,
-                                session_epoch,
-                                persistent_permit["authority_node_id"],
-                                int(persistent_permit["authority_epoch"]),
-                                persistent_permit["node_attachment_id"],
-                                persistent_permit["node_instance_id"],
-                                persistent_permit["scope"],
-                                persistent_permit["hard_expires_at"],
-                                persistent_permit["permit_expires_at"],
-                                persistent_permit["signature"],
-                                persistent_permit["issued_at"],
-                                int(persistent_permit.get("gate_revision", 1)),
-                                str(
-                                    persistent_permit.get("operation") or persistent_permit["scope"]
-                                ),
-                                int(persistent_permit.get("ttl_ms", 10000)),
-                                (
-                                    int(persistent_permit["slot_revision"])
-                                    if persistent_permit.get("slot_revision") is not None
-                                    else None
-                                ),
-                                persistent_permit.get("principal_id"),
                             ),
                         )
                     await db.commit()
@@ -1760,34 +1720,30 @@ class SqliteRepository:
                     )
                 ).fetchone()
                 if attribution and attribution[0] is not None:
-                    allowed = await (
-                        await db.execute(
-                            "SELECT 1 FROM logical_agent_work_sessions s "
-                            "JOIN logical_agents a ON a.logical_agent_id=s.logical_agent_id "
-                            "WHERE s.logical_agent_id=? AND s.work_session_id=? AND s.session_epoch=? "
-                            "AND s.state='active' AND a.state='active' "
-                            "AND s.authority_epoch=a.authority_epoch AND s.hard_expires_at>?",
-                            (attribution[0], attribution[1], attribution[2], now),
-                        )
-                    ).fetchone()
-                    if allowed is None:
+                    try:
                         allowed = await (
                             await db.execute(
-                                "SELECT 1 FROM persistent_command_permits p "
-                                "WHERE p.command_hash=? AND p.logical_agent_id=? "
-                                "AND p.work_session_id=? AND p.session_epoch=? "
-                                "AND p.scope='run' AND p.revoked_at IS NULL "
-                                "AND p.permit_expires_at>? AND p.hard_expires_at>?",
-                                (
-                                    cmd_hash,
-                                    attribution[0],
-                                    attribution[1],
-                                    attribution[2],
-                                    now,
-                                    now,
-                                ),
+                                "SELECT 1 FROM logical_agent_work_sessions s "
+                                "JOIN logical_agents a ON a.logical_agent_id=s.logical_agent_id "
+                                "JOIN access_mesh_native_owners n ON n.logical_agent_id=a.logical_agent_id "
+                                "JOIN access_mesh_local_sessions l ON l.issuer_id=n.issuer_id "
+                                "AND l.slot_id=n.slot_id AND l.work_session_id=s.work_session_id "
+                                "AND l.session_epoch=s.session_epoch "
+                                "WHERE s.logical_agent_id=? AND s.work_session_id=? AND s.session_epoch=? "
+                                "AND s.state='active' AND a.state='active' "
+                                "AND s.authority_epoch=a.authority_epoch AND s.hard_expires_at>?",
+                                (attribution[0], attribution[1], attribution[2], now),
                             )
                         ).fetchone()
+                    except aiosqlite.OperationalError as exc:
+                        if str(exc) not in {
+                            "no such table: access_mesh_native_owners",
+                            "no such table: access_mesh_local_sessions",
+                        }:
+                            raise
+                        # A separately starting executor cannot admit an old
+                        # queue row before native registry initialization.
+                        allowed = None
                     if allowed is None:
                         await db.execute(
                             "UPDATE commands SET status='cancelled',error='persistent.session_fenced',"

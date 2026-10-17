@@ -63,11 +63,16 @@ def build_console_fleet_router(
                 headers={"Cache-Control": "no-store"},
             )
 
+    async def refresh_local():
+        if projection_service is not None:
+            await projection_service.refresh_local()
+
     @router.get("/console/fleet/v1/probe", include_in_schema=False)
     async def probe(request: Request):
         denied = await authorize(request)
         if isinstance(denied, JSONResponse):
             return denied
+        await refresh_local()
         meta = await projection.meta()
         snapshot = await projection.snapshot()
         return JSONResponse(
@@ -94,6 +99,7 @@ def build_console_fleet_router(
         denied = await authorize(request)
         if isinstance(denied, JSONResponse):
             return denied
+        await refresh_local()
         return JSONResponse(
             await projection.snapshot(),
             headers={"Cache-Control": "no-store"},
@@ -104,6 +110,7 @@ def build_console_fleet_router(
         denied = await authorize(request)
         if isinstance(denied, JSONResponse):
             return denied
+        await refresh_local()
         return JSONResponse(
             await projection.events(since=body.since, limit=body.limit),
             headers={"Cache-Control": "no-store"},
@@ -238,6 +245,7 @@ def build_console_fleet_router(
             await websocket.close(code=4400, reason="invalid_cursor")
             return
 
+        await refresh_local()
         meta = await projection.meta()
         if requested_epoch and requested_epoch != meta["projection_epoch"]:
             await websocket.accept()
@@ -254,11 +262,15 @@ def build_console_fleet_router(
         await websocket.accept()
         try:
             while True:
+                await refresh_local()
                 page = await projection.events(
                     since=cursor,
                     limit=settings.console_ws_batch_size,
                 )
-                if page.get("reset_required"):
+                if (
+                    page.get("reset_required")
+                    or page["projection_epoch"] != meta["projection_epoch"]
+                ):
                     await websocket.send_json({"type": "reset_required", **page})
                     await websocket.close(code=4409, reason="projection_cursor_expired")
                     return

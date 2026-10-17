@@ -11,22 +11,16 @@ from terminal_mcp.api_models import (
     ContextAction,
     ContextResponse,
     HealthResponse,
-    MessageResponse,
     ReadResponse,
     RecoveryResponse,
-    ReviewDimension,
-    ReviewVerdict,
     RunResponse,
-    TaskAction,
     TaskLane,
-    TaskMutationResponse,
     TaskOperationalStatus,
-    TaskPriority,
     TasksResponse,
     TaskState,
 )
 from terminal_mcp.application import get_application
-from terminal_mcp.core.orchestration import public_agent_name, validate_message_routing
+from terminal_mcp.core.orchestration import public_agent_name
 from terminal_mcp.core.service import (
     DEFAULT_READ_LINES,
     MAX_READ_LINES,
@@ -51,49 +45,10 @@ class OptionalAgentRequest(StrictRequest):
     agent_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
-class MessageRequest(AgentRequest):
-    text: str | None = Field(default=None, min_length=1, max_length=500)
-    target: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=64,
-        description="Public agent name, or 'broadcast' to send to all other active agents. ALERT requires an explicit destination.",
-    )
-    message_hash: str | None = Field(default=None, min_length=8, max_length=8)
-    require_reply: bool = False
-    alert: bool = Field(
-        default=False,
-        description="ALERT requires an explicit destination: target, target='broadcast', or namespace+task_id.",
-    )
-    namespace: str | None = Field(default=None, min_length=1, max_length=120)
-    task_id: str | None = Field(default=None, min_length=1, max_length=120)
-
-    @model_validator(mode="after")
-    def validate_message(self):
-        if self.message_hash is not None:
-            if (
-                self.target is not None
-                or self.require_reply
-                or self.alert
-                or self.namespace is not None
-                or self.task_id is not None
-            ):
-                raise ValueError("acknowledgement/reply inherits target and message policy")
-        elif self.text is None:
-            raise ValueError("sending requires text")
-        routing_error = validate_message_routing(
-            target=self.target,
-            namespace=self.namespace,
-            task_id=self.task_id,
-            alert=self.alert,
-        )
-        if routing_error:
-            raise ValueError(routing_error)
-        return self
-
-
 class AgentsRequest(OptionalAgentRequest):
     target: str | None = Field(default=None, min_length=1, max_length=64)
+    history: bool = False
+    target_session_ref: str | None = Field(default=None, min_length=1, max_length=128)
     show_details: bool = False
     show_intents: bool = False
     show_commands: bool = False
@@ -138,78 +93,6 @@ class TasksRequest(StrictRequest):
     cursor: int | None = Field(default=None, ge=0)
 
 
-class TaskRequest(AgentRequest):
-    action: TaskAction
-    namespace: str = Field(min_length=1, max_length=120)
-    task_id: str | None = Field(default=None, max_length=120)
-    title: str | None = Field(default=None, max_length=200)
-    lane: TaskLane | None = None
-    priority: TaskPriority | None = None
-    state: TaskState | None = Field(
-        default=None,
-        description=(
-            "Workflow state change for an existing task; requires the caller to be its current live owner."
-        ),
-    )
-    description: str | None = Field(default=None, max_length=8000)
-    next_action: str | None = Field(default=None, max_length=2000)
-    isolation_hint: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=160,
-        description="Required for action=create; stored verbatim after trimming and never interpreted.",
-    )
-    resource_context: dict[str, object] | None = None
-    cooperative: bool | None = Field(
-        default=None,
-        description=(
-            "Controls concurrent participation, not task visibility. The first live claimant "
-            "is owner; later live claimants are participants when cooperative=true."
-        ),
-    )
-    checkpoint: str | dict[str, object] | list[object] | None = None
-    candidate_ref: str | None = Field(default=None, max_length=200)
-    input_refs: list[TaskRef] | None = Field(default=None, max_length=64)
-    output_refs: list[TaskRef] | None = Field(default=None, max_length=64)
-    dimensions: list[ReviewDimension] | None = Field(default=None, max_length=3)
-    verdict: ReviewVerdict | None = None
-    evidence: dict[str, object] | None = None
-    result: str | dict[str, object] | list[object] | None = None
-    tags: list[str] | None = Field(default=None, max_length=50)
-    dependencies: list[dict[str, str]] | None = Field(default=None, max_length=100)
-    force: bool = Field(
-        default=False,
-        description="Conscious dependency override for claim or terminal completion when genuinely necessary.",
-    )
-    force_reason: str | None = Field(
-        default=None,
-        max_length=2000,
-        description="Required justification when force=true; force never overrides ownership.",
-    )
-    claim_intent: str | None = Field(default=None, max_length=160)
-    blocker_reason: str | None = Field(default=None, max_length=4000)
-    release_reason: str | None = Field(
-        default=None,
-        max_length=4000,
-        description="Required for release and retained as durable handoff history.",
-    )
-    archive_note: str | None = Field(default=None, max_length=4000)
-    comment_text: str | None = Field(default=None, max_length=4000)
-    relation_kind: str | None = Field(default=None, max_length=64)
-    related_namespace: str | None = Field(default=None, max_length=120)
-    related_task_id: str | None = Field(default=None, max_length=120)
-    note: str | None = Field(default=None, max_length=2000)
-    expected_revision: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def validate_isolation_hint(self):
-        if self.action == "create" and self.isolation_hint is None:
-            raise ValueError("isolation_hint is required for action=create")
-        if self.action != "create" and self.isolation_hint is not None:
-            raise ValueError("isolation_hint is accepted only for action=create")
-        return self
-
-
 class RunRequest(AgentRequest):
     cmd: str = Field(
         min_length=1, description="Script supplied to the configured shell through stdin."
@@ -243,31 +126,6 @@ def build_actions_router(service, auth_mode="none"):
     router = APIRouter(prefix="/actions", tags=["terminal-actions"])
 
     @router.post(
-        "/message",
-        operation_id="messageAgent",
-        response_model=MessageResponse,
-        response_model_exclude_none=True,
-    )
-    async def message(body: MessageRequest):
-        return await observed(
-            service,
-            "rest",
-            "message",
-            get_application(service).operator_data.call(
-                actor_for(service, transport="http", endpoint_role="operator"),
-                "message",
-                body.agent_id,
-                text=body.text,
-                target=body.target,
-                message_hash=body.message_hash,
-                require_reply=body.require_reply,
-                alert=body.alert,
-                namespace=body.namespace,
-                task_id=body.task_id,
-            ),
-        )
-
-    @router.post(
         "/agents",
         operation_id="listActiveAgents",
         response_model=AgentOverviewResponse,
@@ -288,6 +146,8 @@ def build_actions_router(service, auth_mode="none"):
                 show_commands=body.show_commands,
                 command_hash=body.command_hash,
                 since_minutes=body.since_minutes,
+                history=body.history,
+                target_session_ref=body.target_session_ref,
             ),
         )
 
@@ -339,28 +199,6 @@ def build_actions_router(service, auth_mode="none"):
                 show_archived=body.show_archived,
                 limit=body.limit,
                 cursor=body.cursor,
-            ),
-        )
-
-    @router.post(
-        "/task",
-        operation_id="mutateTask",
-        response_model=TaskMutationResponse,
-        response_model_exclude_none=True,
-    )
-    async def task(body: TaskRequest):
-        payload = body.model_dump(exclude={"agent_id", "action", "namespace"}, exclude_none=True)
-        return await observed(
-            service,
-            "rest",
-            "task",
-            get_application(service).operator_data.call(
-                actor_for(service, transport="http", endpoint_role="operator"),
-                "task",
-                body.agent_id,
-                action=body.action,
-                namespace=body.namespace,
-                **payload,
             ),
         )
 

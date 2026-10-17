@@ -79,13 +79,31 @@ def _oauth_anchor_required(auth_path: Path) -> bool:
         return True
 
 
+def _node_identity_required(settings: Settings) -> bool:
+    if settings.database_path.with_name("node-identity.json").exists():
+        return True
+    if not settings.database_path.exists():
+        return False
+    try:
+        with sqlite3.connect(
+            settings.database_path.resolve().as_uri() + "?mode=ro", uri=True
+        ) as db:
+            return (
+                db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='unified_runtime_migration'"
+                ).fetchone()
+                is not None
+            )
+    except sqlite3.Error:
+        return True
+
+
 def _fleet_state_required(settings: Settings) -> bool:
     return any(
         (
-            settings.fleet_v1_source_enabled,
-            settings.fleet_v1_authority_enabled,
             settings.fleet_v1_projection_enabled,
-            settings.fleet_v1_public_enabled,
+            settings.database_path.with_name("node-identity.json").exists(),
             settings.effective_fleet_control_path().exists(),
             settings.effective_fleet_node_meta_path().exists(),
         )
@@ -111,6 +129,15 @@ def authoritative_backup_members(settings: Settings) -> tuple[BackupMember, ...]
             True,
             True,
             10,
+        ),
+        BackupMember(
+            "node_identity",
+            settings.database_path.with_name("node-identity.json"),
+            "Independent node identity and native Access proof and transport keys.",
+            "secret",
+            _node_identity_required(settings),
+            True,
+            15,
         ),
         BackupMember(
             "runtime_database",

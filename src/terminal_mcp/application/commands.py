@@ -62,7 +62,6 @@ class CommandApplication(ApplicationCapability):
             "logical_agent_id": identity["logical_agent_id"],
             "work_session_id": identity["work_session_id"],
             "session_epoch": identity["session_epoch"],
-            "access_code": request.code,
         }
         if request.action == "run":
             return await self.backend.run(
@@ -90,10 +89,9 @@ class CommandApplication(ApplicationCapability):
                 pass
         if (
             request.action == "read"
-            and request.code is None
             and (
                 getattr(self.gate, "access_mesh", None) is not None
-                or (not actor.provider_metadata and actor.endpoint_role in {"legacy", "internal"})
+                or (not actor.provider_metadata and actor.endpoint_role == "internal")
             )
         ):
             scope = {
@@ -115,17 +113,17 @@ class CommandApplication(ApplicationCapability):
             )
             result.update(read_message_state or {})
             return _finish_cmd_read_page(result, start=start, scope=scope)
-        if request.action == "read" and request.code is None and actor.provider_metadata:
+        if request.action == "read" and actor.provider_metadata:
             resolution = await self.gate.provider_identity(actor, ManagedOperation.COMMAND_READ)
             identity, failure = resolution.identity, resolution.failure
         else:
             identity, failure = await self.gate.identity(
-                actor, request.code, ManagedOperation(f"command.{request.action}")
+                actor, None, ManagedOperation(f"command.{request.action}")
             )
         if failure is not None:
             return failure
         backend = self.backend
-        if request.action == "read" and request.code is None and actor.provider_metadata:
+        if request.action == "read" and actor.provider_metadata:
             message_state = read_message_state or {}
         else:
             message_state, failure = await self.gate.command_state(actor, identity, request.action)
@@ -170,7 +168,6 @@ class CommandApplication(ApplicationCapability):
                 logical_agent_id=identity["logical_agent_id"],
                 work_session_id=identity["work_session_id"],
                 session_epoch=identity["session_epoch"],
-                access_code=request.code,
             )
             result.update(message_state)
             return _with_session_lifecycle(result, identity)

@@ -344,7 +344,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -909,7 +908,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -1653,7 +1651,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -2505,7 +2502,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -3040,11 +3036,8 @@
           "type": "boolean"
         },
         "scope": {
+          "const": "local",
           "default": "local",
-          "enum": [
-            "local",
-            "fleet"
-          ],
           "title": "Scope",
           "type": "string"
         },
@@ -4611,7 +4604,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -5276,7 +5268,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -6316,7 +6307,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -7519,7 +7509,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -8267,7 +8256,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -9638,7 +9626,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -12538,7 +12525,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -14440,7 +14426,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -16655,7 +16640,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -17403,7 +17387,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -17935,11 +17918,8 @@
           "type": "boolean"
         },
         "scope": {
+          "const": "local",
           "default": "local",
-          "enum": [
-            "local",
-            "fleet"
-          ],
           "title": "Scope",
           "type": "string"
         },
@@ -19506,7 +19486,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -20171,7 +20150,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -20778,7 +20756,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -21459,7 +21436,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -22175,7 +22151,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",
@@ -22872,7 +22847,6 @@
                 "reauthenticate",
                 "reconcile",
                 "retry",
-                "start_session",
                 "stop"
               ],
               "title": "Retry",

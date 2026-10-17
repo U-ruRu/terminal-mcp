@@ -90,7 +90,7 @@ this repair. No credential rotation is performed here.
 
 1. Stage and verify the exact new release SHA. Stop terminal-mcp.service and
    ALL other workers that might write either database; confirm exit. Preserve
-   a protected backup of runtime config/env, Access verifier key, Fleet databases,
+   a protected backup of runtime config/env, Access verifier key, Mesh databases,
    service release metadata and signing configuration. Never log secret values.
 2. Set PY to the candidate Python executable containing the migration module,
    MAIN to absolute working database path, AUTH to absolute protected auth
@@ -142,7 +142,7 @@ output-cache SQLite and their WAL/SHM sidecars into a NEW protected quarantine:
 Clean refuses stale legacy OAuth tables, missing auth storage, path aliases,
 or an existing quarantine directory, and restores moved working files if an
 intermediate move fails. It preserves auth.sqlite3, any auth WAL/SHM, Access
-key, configuration, Fleet state and release pointers. On restart the new app
+key, configuration, Mesh state and release pointers. On restart the new app
 recreates fresh working data and output cache. The old clients remain valid.
 NEVER delete the entire working directory, protected auth or key material.
 

@@ -38,8 +38,6 @@ class SessionStatus(BaseModel):
     agent_name: str | None = None
     session_expired: bool | None = None
     registration_required: bool | None = None
-    admission_required: bool | None = None
-    proposed_agent_id: str | None = None
     return_to_chat: bool | None = None
     session_status: str | None = None
     session_started_at: str | None = None
@@ -48,12 +46,6 @@ class SessionStatus(BaseModel):
     session_warning: str | None = None
     session_end_reason: str | None = None
     task_context_expired: bool | None = None
-    task_age_seconds: int | None = Field(
-        default=None, description="Compatibility alias for task_context_age_seconds."
-    )
-    max_task_age_seconds: int | None = Field(
-        default=None, description="Compatibility alias for task_context_ttl_seconds."
-    )
     task_context_age_seconds: int | None = Field(
         default=None, description="Canonical age of the current task context in seconds."
     )
@@ -355,6 +347,10 @@ class AgentSelf(BaseModel):
 
 class ActiveAgent(BaseModel):
     name: str
+    agent_id: str | None = None
+    logical_agent_id: str | None = None
+    work_session_id: str | None = None
+    session_epoch: int | None = None
     status: str | None = None
     session_age_seconds: int | None = None
     idle_seconds: int
@@ -387,6 +383,15 @@ class MessageJournalEntry(BaseModel):
 
 class AgentSessionRecord(BaseModel):
     name: str
+    agent_id: str | None = None
+    logical_agent_id: str | None = None
+    work_session_id: str | None = None
+    session_ref: str | None = None
+    session_epoch: int | None = None
+    origin_instance_id: str | None = None
+    session_started_at: str | None = None
+    session_remaining_seconds: int | None = None
+    intent_state: str | None = None
     status: str
     last_activity: str
     last_activity_at: str
@@ -450,51 +455,6 @@ class AgentOverviewResponse(SessionStatus):
     error: str | None = None
 
 
-class CoordinateResponse(SessionStatus):
-    ok: bool
-    step: int | None = None
-    intent: str | None = None
-    detail: str | None = None
-    other_details: list[str] = Field(default_factory=list)
-    active_agents: list[str] | None = None
-    error: str | None = None
-
-
-class MessageResponse(SessionStatus):
-    ok: bool
-    message_hash: str | None = None
-    reply_message_hash: str | None = None
-    namespace: str | None = None
-    task_id: str | None = None
-    delivered_to: list[str] = Field(default_factory=list)
-    seen_by: list[str] = Field(default_factory=list)
-    read_by: list[str] = Field(default_factory=list)
-    replied_by: list[str] = Field(default_factory=list)
-    inactive_recipients: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Recipients whose exact Agent Session is inactive, separate from receipt state."
-        ),
-    )
-    error: str | None = None
-
-
-class PendingCommunicationSummary(BaseModel):
-    unacknowledged: list[str] = Field(default_factory=list)
-    reply_required: list[str] = Field(default_factory=list)
-    alerts: list[str] = Field(default_factory=list)
-
-
-class AgentFinishResponse(SessionStatus):
-    ok: bool
-    finished: bool | None = None
-    pending_communication: PendingCommunicationSummary | None = Field(
-        default=None,
-        description="Outstanding communication summary retained when agent_finish is allowed.",
-    )
-    error: str | None = None
-
-
 class ConsoleSnapshotConsistency(BaseModel):
     mode: Literal["cursor_first_at_least_once"] = "cursor_first_at_least_once"
     high_water_seq: int = Field(ge=0)
@@ -511,5 +471,4 @@ class ConsoleSnapshotResponse(BaseModel):
     tasks: dict[str, object]
     contexts: dict[str, object]
     communications: list[dict[str, object]] = Field(default_factory=list)
-    persistent: dict[str, object] | None = None
     error: str | None = None

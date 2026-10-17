@@ -24,6 +24,65 @@ def pending(store):
 
 
 @pytest.mark.asyncio
+async def test_activation_health_waits_for_registry_union_and_topology_commit(tmp_path):
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        mesh, replication = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        await mesh.start()
+        try:
+            assert (await mesh.health_components())["access_mesh"]["ok"]
+            pending(mesh.store)
+            assert mesh.registry_readiness() == {
+                "ready": False,
+                "reason": "mesh_registry_migrating",
+            }
+            health = (await mesh.health_components())["access_mesh"]
+            assert health == {
+                "ok": False,
+                "status": "degraded",
+                "reason": "mesh_registry_migrating",
+            }
+            assert not replication.native_trust_status()["ready"]
+            complete_upgrade(mesh.store)
+            assert (await mesh.health_components())["access_mesh"]["ok"]
+            assert replication.native_trust_status()["ready"]
+            mesh.store.begin_topology_transition("move")
+            assert mesh.registry_readiness() == {
+                "ready": False,
+                "reason": "mesh_transition_pending",
+            }
+            assert not (await mesh.health_components())["access_mesh"]["ok"]
+            mesh.store.abort_topology_transition("move")
+            assert mesh.registry_readiness()["ready"]
+        finally:
+            await mesh.stop()
+
+
+@pytest.mark.asyncio
+async def test_preserved_attachment_cannot_authorize_work_before_union_completes(tmp_path):
+    from terminal_mcp.core.managed_sessions import ManagedOperation
+
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        primary, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        member, replication = await node(tmp_path, "bacloud", "firstbyte", routes, client)
+        member.replication = replication
+        await primary.issue(actor(), code="1234", kind="persistent")
+        for mesh in (primary, member):
+            await mesh.attach(actor(), session_number="1234")
+        for mesh in (primary, member):
+            slot = mesh.store.attached_slot(mesh.connection_key(actor()))
+            pending(mesh.store)
+            for operation in (ManagedOperation.COMMAND_RUN, ManagedOperation.COMMAND_READ):
+                with pytest.raises(AccessMeshError, match="mesh_registry_migrating"):
+                    await mesh.resolve(actor(), operation)
+            assert mesh.store.attached_slot(mesh.connection_key(actor())) == slot
+            # The independent recovery/export path must stay available to the
+            # primary's union, while ordinary tool admission remains closed.
+            assert mesh.store.export_registry()["tables"]["access_mesh_slot_replicas"]
+
+
+@pytest.mark.asyncio
 async def test_pending_union_preserves_slot_revisions_until_policy_completion(tmp_path):
     from terminal_mcp.storage.sqlite import SqliteRepository
 

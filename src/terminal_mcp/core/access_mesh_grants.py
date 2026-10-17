@@ -24,7 +24,7 @@ from typing import Literal
 
 # Keep aligned with storage.sqlite.SCHEMA_VERSION. The release fingerprint
 # requires that storage constant to remain a literal integer.
-ACCESS_MESH_SCHEMA_VERSION = 25
+ACCESS_MESH_SCHEMA_VERSION = 26
 
 EventKind = Literal[
     "SlotIssued",

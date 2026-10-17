@@ -12,7 +12,6 @@ async def store(tmp_path):
     repo = SqliteRepository(tmp_path / "db.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
     store = PersistentAgentStore(repo.path)
-    await store.create_slot("logical-1", "Alpha", "A123", authority_node_id="node-a")
     return repo.path, store
 
 

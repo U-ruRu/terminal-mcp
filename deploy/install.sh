@@ -40,7 +40,10 @@ if [ -f "${UNIT_FILE}.d/50-local-executor.conf" ] && [ "$CMD" != doctor ] && [ "
   exit 46
 fi
 SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
-HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
+HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/ready}
+# A retained health URL must not bypass readiness after the candidate starts.
+READINESS_URL=${HEALTH_URL%/health/live}
+READINESS_URL=${READINESS_URL%/health/ready}/health/ready
 HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
 PUBLIC_INGRESS_TIMEOUT_SEC=${TERMINAL_MCP_PUBLIC_INGRESS_TIMEOUT_SEC:-10}
 CANONICAL_CONSOLE_ORIGINS=${TERMINAL_MCP_CANONICAL_CONSOLE_ORIGINS:-https://localhost}
@@ -85,15 +88,6 @@ TERMINAL_MCP_OAUTH_REQUIRED_SCOPES="${TERMINAL_MCP_OAUTH_REQUIRED_SCOPES:-termin
 TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"
 TERMINAL_MCP_BEARER_CREDENTIALS_JSON="[]"
 TERMINAL_MCP_OAUTH_USERS_JSON="[]"
-TERMINAL_MCP_AGENT_IDLE_TTL_SEC="${TERMINAL_MCP_AGENT_IDLE_TTL_SEC:-300}"
-TERMINAL_MCP_AGENT_INTENT_TTL_SEC="${TERMINAL_MCP_AGENT_INTENT_TTL_SEC:-180}"
-TERMINAL_MCP_AGENT_MAX_SESSION_SEC="${TERMINAL_MCP_AGENT_MAX_SESSION_SEC:-1500}"
-TERMINAL_MCP_AGENT_SESSION_WARNING_AFTER_SEC="${TERMINAL_MCP_AGENT_SESSION_WARNING_AFTER_SEC:-1200}"
-TERMINAL_MCP_AGENT_SESSION_ALERT_ENABLED="${TERMINAL_MCP_AGENT_SESSION_ALERT_ENABLED:-true}"
-TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC="${TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC:-1380}"
-TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC="${TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC:-60}"
-TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE="${TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE:-Ваша сессия закончилась. У пользователя для вас новая задача. Завершите сессию и немедленно вернитесь в чат к пользователю, чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу.}"
-TERMINAL_MCP_AGENT_EVENT_WINDOW_SEC="${TERMINAL_MCP_AGENT_EVENT_WINDOW_SEC:-180}"
 TERMINAL_MCP_AGENT_COMMAND_PREVIEW_CHARS="${TERMINAL_MCP_AGENT_COMMAND_PREVIEW_CHARS:-160}"
 TERMINAL_MCP_AGENT_HISTORY_DEFAULT_MINUTES="${TERMINAL_MCP_AGENT_HISTORY_DEFAULT_MINUTES:-60}"
 TERMINAL_MCP_MESSAGE_REMINDER_SEC="${TERMINAL_MCP_MESSAGE_REMINDER_SEC:-180}"
@@ -101,10 +95,6 @@ TERMINAL_MCP_MESSAGE_REMINDER_CALLS="${TERMINAL_MCP_MESSAGE_REMINDER_CALLS:-5}"
 TERMINAL_MCP_MAX_ACTIVE_AGENTS="${TERMINAL_MCP_MAX_ACTIVE_AGENTS:-8}"
 TERMINAL_MCP_QUEUE_WORKERS="${TERMINAL_MCP_QUEUE_WORKERS:-4}"
 TERMINAL_MCP_QUEUE_RECONCILE_SEC="${TERMINAL_MCP_QUEUE_RECONCILE_SEC:-1.0}"
-TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC:-1380}"
-TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC:-1200}"
-TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC:-1320}"
-TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC="${TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC:-180}"
 ENV
   chmod 600 "$ENV_FILE"
 }
@@ -153,16 +143,6 @@ ensure_env_defaults(){
   ensure_env TERMINAL_MCP_OUTPUT_RETENTION_TARGET_BYTES "${TERMINAL_MCP_OUTPUT_RETENTION_TARGET_BYTES:-201326592}"
   ensure_env TERMINAL_MCP_OUTPUT_RETENTION_MAX_BYTES "${TERMINAL_MCP_OUTPUT_RETENTION_MAX_BYTES:-268435456}"
   ensure_env TERMINAL_MCP_OUTPUT_RETENTION_MAX_ROWS "${TERMINAL_MCP_OUTPUT_RETENTION_MAX_ROWS:-1000000}"
-  ensure_env TERMINAL_MCP_AGENT_SESSION_WARNING_AFTER_SEC "${TERMINAL_MCP_AGENT_SESSION_WARNING_AFTER_SEC:-1200}"
-  ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_ENABLED "${TERMINAL_MCP_AGENT_SESSION_ALERT_ENABLED:-true}"
-  ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC:-1380}"
-  ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC:-60}"
-  ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE "${TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE:-Ваша сессия закончилась. У пользователя для вас новая задача. Завершите сессию и немедленно вернитесь в чат к пользователю, чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу.}"
-  ensure_env TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED "${TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED:-false}"
-  ensure_env TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC:-1380}"
-  ensure_env TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC:-1200}"
-  ensure_env TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC:-1320}"
-  ensure_env TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC:-180}"
   chmod 600 "$ENV_FILE"
 }
 
@@ -227,9 +207,6 @@ check_public_console_ingress(){
     return 1
   fi
 
-  fleet_v1_public_enabled=$(read_env_value TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED)
-  case "${fleet_v1_public_enabled,,}" in
-    true|1|yes|on)
       while IFS='|' read -r method route json_body; do
         [ -n "$route" ] || continue
         if [ -n "$json_body" ]; then
@@ -243,7 +220,7 @@ check_public_console_ingress(){
           status=$(public_status "$method" "${public_base_url%/}${route}" -H "Origin: $console_origin")
         fi
         if [ "$status" != "401" ]; then
-          echo "Public Fleet v1 Console route check failed: $method $route returned ${status:-request_error}, expected 401" >&2
+          echo "Public Mesh Console route check failed: $method $route returned ${status:-request_error}, expected 401" >&2
           return 1
         fi
       done <<'ROUTES'
@@ -256,8 +233,6 @@ POST|/console/fleet/v1/namespaces|{}
 GET|/console/fleet/v1/task-graph?namespace=ingress-probe&task_id=ingress-probe|
 POST|/console/fleet/v1/ws-ticket|
 ROUTES
-      ;;
-  esac
 }
 
 configure_console_caddy(){
@@ -834,7 +809,7 @@ activate(){
   new=$1; old=$(readlink -f "$ROOT/current" 2>/dev/null || true)
   ln -sfn "$new" "$ROOT/current"; $SYSTEMCTL daemon-reload; $SYSTEMCTL restart terminal-mcp
   for _ in $(seq 1 "$HEALTH_TIMEOUT_SEC"); do
-    if curl -fsS "$HEALTH_URL" >/dev/null; then
+    if curl -fsS "$READINESS_URL" >/dev/null; then
       if check_public_mesh_ingress && check_public_console_ingress; then
         install_cli_link
         if [ -f "$new/CANONICAL_RELEASE.json" ]; then

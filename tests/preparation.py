@@ -98,9 +98,8 @@ def immutable_schema_models() -> tuple[type, ...]:
 
     from terminal_mcp.mcp.role_contracts import ROLE_TOOL_MODELS
     from terminal_mcp.mcp.role_outputs import ROLE_OUTPUT_MODELS, RoleFailure
-    from terminal_mcp.mcp.task_contract import TaskToolArguments
 
     wire = [
         RootModel[model.__success_type__ | RoleFailure] for model in ROLE_OUTPUT_MODELS.values()
     ]
-    return tuple(dict.fromkeys([*ROLE_TOOL_MODELS.values(), TaskToolArguments, *wire]))
+    return tuple(dict.fromkeys([*ROLE_TOOL_MODELS.values(), *wire]))

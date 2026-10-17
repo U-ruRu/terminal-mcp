@@ -327,8 +327,13 @@ class AccessMeshReplication:
 
     def native_trust_status(self) -> dict:
         """Operator-safe Native Access readiness, no peer credentials or secrets."""
+        registry = self.mesh.registry_readiness()
         if not getattr(self.mesh, "managed_trust_enabled", False):
-            return {"state": "autonomous", "ready": True, "peers": {}}
+            return {
+                "state": "autonomous" if registry["ready"] else "pending",
+                **registry,
+                "peers": {},
+            }
         expected = set(self.store.trusted_issuers) - {self.store.local_node_id}
         actual = {peer.instance_id for peer in self.peers}
         installed = getattr(self.store, "managed_proof_ready", True)
@@ -341,11 +346,13 @@ class AccessMeshReplication:
             for node_id in sorted(expected)
         }
         ready = bool(
-            installed and expected == actual and all(v == "verified" for v in states.values())
+            registry["ready"] and installed and expected == actual
+            and all(v == "verified" for v in states.values())
         )
         return {
             "state": "ready" if ready else "pending",
             "ready": ready,
+            "reason": registry["reason"],
             "mesh_id": getattr(self.mesh, "managed_trust_mesh_id", None),
             "peers": states,
             "missing_transport": sorted(expected - actual),
@@ -861,10 +868,10 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         authenticated(x_terminal_mcp_peer, authorization)
         if payload or not mesh.registry_authoritative:
             raise HTTPException(400, "invalid registry status request")
-        await asyncio.to_thread(mesh.store.assert_registry_ready)
+        readiness = await asyncio.to_thread(mesh.registry_readiness)
         return {
             "ok": True,
-            "ready": not mesh.store.registry_upgrade_pending,
+            **readiness,
             "namespace_id": mesh.store.namespace_id,
         }
 

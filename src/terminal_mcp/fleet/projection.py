@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import asynccontextmanager, nullcontext
 from typing import Any
 
 import httpx
@@ -64,6 +65,11 @@ class FleetProjectionService:
         self.events = events
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
+        self._started = False
+        self._retiring_tasks: set[asyncio.Task] = set()
+        self._sync_lock = asyncio.Lock()
+        self._autonomous_cache_ready = False
+        self._namespace_suspended = False
         self._local_source_node_id: str | None = None
 
     @property
@@ -124,39 +130,125 @@ class FleetProjectionService:
             )
 
     async def start(self) -> None:
-        if self._task is not None:
-            return
+        self._started = True
         self._stopped.clear()
-        self._task = asyncio.create_task(self._loop(), name="fleet-v1-projection")
+        self._start_worker()
 
-    async def stop(self) -> None:
-        self._stopped.set()
-        task = self._task
-        self._task = None
+    def _start_worker(self) -> None:
+        if (
+            self._started and self.config.peers and self._task is None
+            and not self._namespace_suspended
+        ):
+            self._task = asyncio.create_task(self._loop(), name="mesh-projection")
+
+    def _retire_worker(self) -> None:
+        task, self._task = self._task, None
         if task is not None:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            self._retiring_tasks.add(task)
+            task.add_done_callback(self._retiring_tasks.discard)
+
+    def apply_managed_fleet_config(self, config) -> None:
+        """Topology supplies the current peers before startup and after every change."""
+        if config == self.config and not self._namespace_suspended:
+            return
+        self.config = config
+        self._autonomous_cache_ready = False
+        self._namespace_suspended = False
+        # Stop an old-peer request immediately; no empty periodic worker remains
+        # after Detach. The replacement waits for any cancelled sync to unwind.
+        self._retire_worker()
+        self._start_worker()
+
+    @asynccontextmanager
+    async def namespace_transition(self):
+        """Fence old source writes until topology installs the new peer config."""
+        previous_suspended = self._namespace_suspended
+        self._namespace_suspended = True
+        self._retire_worker()
+        applied = False
+
+        def mark_applied():
+            nonlocal applied
+            applied = True
+
+        async with self._sync_lock:
+            self._autonomous_cache_ready = False
+            # A successful no-op during startup must not leave an autonomous
+            # cache fenced. An exception can follow a durable metadata write,
+            # so retain the fence until recovery installs a coherent config.
+            yield mark_applied
+            if not applied:
+                self._namespace_suspended = previous_suspended
+                self._start_worker()
+
+    async def stop(self) -> None:
+        self._started = False
+        self._stopped.set()
+        self._retire_worker()
+        if self._retiring_tasks:
+            await asyncio.gather(*tuple(self._retiring_tasks), return_exceptions=True)
+            self._retiring_tasks.clear()
 
     async def _loop(self) -> None:
-        while not self._stopped.is_set():
-            try:
-                await self.sync_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(
-                    self._stopped.wait(), timeout=self.interval_seconds
-                )
-            except TimeoutError:
-                continue
+        try:
+            while not self._stopped.is_set() and self.config.peers:
+                try:
+                    await self.sync_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(
+                        self._stopped.wait(), timeout=self.interval_seconds
+                    )
+                except TimeoutError:
+                    continue
+        finally:
+            if self._task is asyncio.current_task():
+                self._task = None
 
     async def sync_once(self) -> None:
-        if self.store.role == "owner":
-            await self._sync_owner()
-        else:
-            await self._sync_follower()
+        async with self._sync_lock:
+            if self._namespace_suspended:
+                return
+            if not self.config.peers:
+                await self._refresh_local_unlocked()
+                return
+            if (
+                self.store.role == "follower"
+                and self.store.owner_node_id not in self.config.peers_by_id
+                and self.local_source is not None
+            ):
+                # A moved follower cannot follow the former Mesh's owner.
+                # This cache is derived: rebuild from the current sources,
+                # without changing the independent ACS primary assignment.
+                await self.store.adopt_local_cache()
+                self.owner_node_id = self.store.owner_node_id
+            if self.store.role == "owner":
+                await self._sync_owner()
+            else:
+                await self._sync_follower()
+
+    async def refresh_local(self) -> None:
+        """Refresh an autonomous read model only when a reader needs its state."""
+        if self.config.peers or self.local_source is None:
+            return
+        async with self._sync_lock:
+            if self._namespace_suspended:
+                raise FleetProjectionError("projection namespace transition is in progress")
+            if not self.config.peers:
+                await self._refresh_local_unlocked()
+
+    async def _refresh_local_unlocked(self) -> None:
+        if self.local_source is None:
+            return
+        if not self._autonomous_cache_ready:
+            await self.store.adopt_local_cache()
+            self.owner_node_id = self.store.owner_node_id
+            self._autonomous_cache_ready = True
+        await self._sync_local_source()
 
     async def _sync_owner(self) -> None:
         if self.local_source is not None:
@@ -648,7 +740,7 @@ class FleetProjectionService:
             await self.store.mark_scope_status(source_node_id, scopes, status, reason)
 
     async def _sync_follower(self) -> None:
-        peer = self.config.peers_by_id.get(self.owner_node_id)
+        peer = self.config.peers_by_id.get(self.store.owner_node_id)
         if peer is None:
             raise FleetProjectionError("projection owner peer is unavailable")
         async with self.client_factory() as client:
@@ -806,7 +898,9 @@ class FleetProjectionService:
             return response.json()
 
         timeout = max(0.05, float(self.config.request_timeout_seconds))
-        async with self.client_factory() as client:
+        remote = any(peer is not None for _, peer in targets)
+        context = self.client_factory() if remote else nullcontext()
+        async with context as client:
 
             async def one(node_id, peer):
                 started = time.monotonic()

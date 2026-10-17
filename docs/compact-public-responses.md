@@ -1,8 +1,7 @@
-# Compact public responses — review candidate
+# Compact public responses
 
-Base: `83677e52660d8c1cc21c10ac0ce59bf6b1fa1b82`.
-This changes the public representation only. Canonical promotion and deployment
-remain gated by independent acceptance and the coordinator's integration decision.
+These projections apply to the single current Access, Execution and Coordination
+contract in every topology.
 
 ## Commands
 
@@ -27,10 +26,8 @@ invent a new status. Completed status is valid when already observed.
 
 ## Incoming notices and minimal mutations
 
-The persistent backend's `messages` and `pending_messages` are aliases of the
-calling agent's incoming message obligations. The legacy backend's pending array
-contains rendered strings of those same obligations. Neither is outgoing delivery
-status. Public operation responses combine structured obligations by message ID:
+Public operation responses show the calling agent's incoming native message
+obligations, combined by message ID. These are not outgoing delivery status:
 
 ```json
 {"ok":true,"messages":[{"id":"node:msg:example","sender":"Alpha-7 acceptance","text":"Review the candidate","requirements":"reply"}]}
@@ -46,8 +43,7 @@ No unbounded identifier array is added. Displayed IDs/senders/requirements remai
 intact. Continue the existing `message(action="history", detail="summary")` pages
 with `next_cursor` to obtain every message ID. Read each complete body with
 `message(action="read", message_hash=ID, text_offset=0, text_limit=2048)` and follow
-`messages[0].next_text_offset` until absent. The compatibility MCP uses the separate
-`read_message_hash=ID` parameter, preserving its hash-only ACK spelling.
+`messages[0].next_text_offset` until absent.
 
 The new by-ID text path returns `text`, `text_offset`, `text_length`, and
 `next_text_offset` only when more text remains. Offsets/lengths count Unicode code
@@ -61,17 +57,16 @@ is preflighted before receipt surfacing. Stored maximum accepted text remains
 
 Native Mesh by-ID reads retain history authorization/retention and existing read
 semantics: normal notifications become read; required ACK/reply only become seen.
-Local compatibility reads use recipient-filtered history and preserve existing
-read semantics. Per-recipient outgoing delivery tables are omitted from the
+Per-recipient outgoing delivery tables are omitted from the
 text-only slice, and remain available through message history. Chunk arguments
 are rejected on ACK, reply, send and cursor-based list operations. Reading another
 agent's inaccessible ID returns `message_not_found` without surfacing any receipt.
 
 The old full-history path may still reject a single oversized Unicode body; it
 is retained unchanged. The summary-history plus by-ID chunk path replaces it as
-the supported bounded recovery route. Pure role and compatibility fixtures verify
+the supported bounded recovery route. Native role fixtures verify
 exact maximum-length reconstruction, final encoded bytes and unchanged ACK/reply.
-Independent acceptance of the new immutable candidate is a separate gate.
+Full acceptance is recorded against an immutable source commit.
 
 The projection performs no receipt mutation. Backend delivery/seen/ACK/reply
 rules are unchanged. Ordinary `task_claim` succeeds with exactly `{"ok":true}`;

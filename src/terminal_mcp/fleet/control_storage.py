@@ -440,12 +440,12 @@ class FleetControlStore(TopologyTransitionStore):
                     await db.execute(
                         "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (namespace,)
                     )
-                    await db.execute(
-                        "INSERT INTO control_namespace VALUES(1,?,?,?) "
-                        "ON CONFLICT(singleton) DO UPDATE SET home_fleet_id=excluded.home_fleet_id,"
-                        "pending_fleet_id=excluded.pending_fleet_id,updated_at=excluded.updated_at",
-                        (namespace, namespace, stamp),
-                    )
+                await db.execute(
+                    "INSERT INTO control_namespace VALUES(1,?,?,?) "
+                    "ON CONFLICT(singleton) DO UPDATE SET home_fleet_id=excluded.home_fleet_id,"
+                    "pending_fleet_id=excluded.pending_fleet_id,updated_at=excluded.updated_at",
+                    (namespace, namespace, stamp),
+                )
                 await db.execute(
                     "UPDATE control_meta SET control_node_id=?,routing_revision=routing_revision+1,"
                     "updated_at=? WHERE singleton=1",
@@ -1063,14 +1063,14 @@ class FleetControlStore(TopologyTransitionStore):
                     "WHERE node_id IN (" + ",".join("?" for _ in normalized) + ")",
                     (mesh_id, topology, stamp, *(item["node_id"] for item in normalized)),
                 )
+                await db.execute(
+                    "INSERT INTO control_namespace VALUES(1,?,?,?) "
+                    "ON CONFLICT(singleton) DO UPDATE SET "
+                    "pending_fleet_id=excluded.pending_fleet_id,"
+                    "updated_at=excluded.updated_at",
+                    (self.fleet_id, mesh_id, stamp),
+                )
                 if self.fleet_id != mesh_id:
-                    await db.execute(
-                        "INSERT INTO control_namespace VALUES(1,?,?,?) "
-                        "ON CONFLICT(singleton) DO UPDATE SET "
-                        "pending_fleet_id=excluded.pending_fleet_id,"
-                        "updated_at=excluded.updated_at",
-                        (self.fleet_id, mesh_id, stamp),
-                    )
                     await db.execute(
                         "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (mesh_id,)
                     )
@@ -1666,6 +1666,24 @@ class FleetControlStore(TopologyTransitionStore):
             await db.execute("BEGIN IMMEDIATE")
             try:
                 current = await self._control_revisions(db)
+                local_before = await (
+                    await db.execute(
+                        "SELECT mesh_id,state FROM managed_nodes WHERE node_id=?", (self.node_id,)
+                    )
+                ).fetchone()
+                before_scope = (
+                    local_before[0]
+                    if local_before is not None and local_before[1] != "detached"
+                    else None
+                )
+                after_scope = next(
+                    (
+                        node["mesh_id"]
+                        for node in normalized_nodes
+                        if node["node_id"] == self.node_id and node["state"] != "detached"
+                    ),
+                    None,
+                )
                 if authority_changed:
                     await db.execute(
                         "UPDATE control_meta SET control_node_id=?,updated_at=? WHERE singleton=1",
@@ -1678,13 +1696,14 @@ class FleetControlStore(TopologyTransitionStore):
                         "INSERT OR IGNORE INTO control_namespace VALUES(1,?,NULL,?)",
                         (self.fleet_id, stamp),
                     )
-                if namespace_changed:
+                if namespace_changed or before_scope != after_scope:
                     await db.execute(
                         "INSERT INTO control_namespace VALUES(1,?,?,?) "
                         "ON CONFLICT(singleton) DO UPDATE SET "
                         "pending_fleet_id=excluded.pending_fleet_id,updated_at=excluded.updated_at",
                         (self.fleet_id, namespace, stamp),
                     )
+                if namespace_changed:
                     await db.execute(
                         "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (namespace,)
                     )

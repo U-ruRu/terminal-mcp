@@ -38,25 +38,3 @@ async def test_grant_rejects_another_principals_client(store):
     await store.create_client("alice", "app", "Alice app", client_id="cli_alice")
     with pytest.raises(AuthConflictError, match="different principal"):
         await store.create_grant("bob", "cli_alice", ["node:a"], ["terminal:read"])
-
-
-async def test_provider_binding_records_its_logical_agent(store):
-    await store.register_access_slot("la_one", "secondary")
-    bound = await store.bind_provider_binding("openai", "a" * 64, "la_one", principal_id="usr")
-    assert bound == "la_one"
-    assert await store.resolve_provider_binding("openai", "a" * 64) == "la_one"
-
-
-async def test_provider_binding_rejects_a_second_agent_for_one_conversation(store):
-    await store.register_access_slot("la_one", "secondary")
-    await store.register_access_slot("la_two", "secondary")
-    await store.bind_provider_binding("openai", "a" * 64, "la_one", principal_id="usr")
-    with pytest.raises(AuthConflictError, match="already bound"):
-        await store.bind_provider_binding("openai", "a" * 64, "la_two", principal_id="usr")
-
-
-async def test_provider_binding_rejects_a_second_conversation_for_one_agent(store):
-    await store.register_access_slot("la_one", "secondary")
-    await store.bind_provider_binding("openai", "a" * 64, "la_one", principal_id="usr")
-    with pytest.raises(AuthConflictError, match="slot is already bound"):
-        await store.bind_provider_binding("openai", "b" * 64, "la_one", principal_id="usr")

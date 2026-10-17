@@ -161,8 +161,7 @@ def preflight(settings: Settings, *, reserve_bytes: int = MIN_FREE_BYTES) -> dic
         settings.effective_fleet_control_path(),
         settings.effective_fleet_projection_path(),
     ]
-    if settings.fleet_v1_authority_enabled:
-        required.append(settings.effective_fleet_control_path())
+    required.append(settings.effective_fleet_control_path())
     checked = []
     for path in dict.fromkeys(required + [p for p in optional if p.exists()]):
         try:

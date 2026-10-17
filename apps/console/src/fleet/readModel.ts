@@ -121,6 +121,10 @@ export type FleetReadModel = {
   recentActivity: FleetActivityItem[]
 }
 
+export function hasCurrentAgentSession(agent: Pick<AgentReadModel, 'status'>): boolean {
+  return agent.status === 'active' || agent.status === 'warning' || agent.status === 'draining'
+}
+
 function sourceOf(instance: FleetInstanceView): FleetSource {
   return {
     instanceId: instance.profile.instanceId,
@@ -313,7 +317,7 @@ export function buildFleetReadModel(
     const communication = communicationCounts(communications)
 
     for (const agent of agents) {
-      if (agent.status !== 'active') continue
+      if (!hasCurrentAgentSession(agent)) continue
       activeAgents.push({ ...source, agent })
 
       const sessionRef =
@@ -410,9 +414,9 @@ export function buildFleetReadModel(
       lastError: instance.runtime.lastError,
       staleReason: instance.runtime.realtime?.staleReason,
       catchingUpScopes: instance.runtime.realtime?.catchingUpScopes ?? [],
-      activeAgentCount: agents.filter((agent) => agent.status === 'active').length,
+      activeAgentCount: agents.filter(hasCurrentAgentSession).length,
       activeIntents: agents
-        .filter((agent) => agent.status === 'active')
+        .filter(hasCurrentAgentSession)
         .flatMap((agent) => {
           const scopes = agent.intentScopes ?? []
           if (scopes.length === 0) return agent.intent ? [agent.intent] : []

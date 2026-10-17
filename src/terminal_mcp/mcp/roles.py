@@ -296,7 +296,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
             return projected if projected.get("ok") is not True else None
 
         with actor.bind():
-            raw = await mesh_messages.message(
+            raw = await application.message(
                 actor,
                 text=request.text,
                 target=request.target,
@@ -670,7 +670,6 @@ def build_role_mcp(
             request = CommandRunInput.model_validate(request)
             canonical = CmdRunRequest(
                 action="run",
-                code=None,
                 command=request.command,
                 queue_id=request.queue_id,
                 task_scope=request.task_scope,
@@ -694,7 +693,6 @@ def build_role_mcp(
                 )
             canonical = CmdReadRequest(
                 action="read",
-                code=None,
                 cmd_hash=request.cmd_hash,
                 limit=request.limit,
                 cursor=request.cursor,
@@ -713,7 +711,7 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             request = CommandCancelInput.model_validate(request)
-            canonical = CmdCancelRequest(action="cancel", code=None, cmd_hash=request.cmd_hash)
+            canonical = CmdCancelRequest(action="cancel", cmd_hash=request.cmd_hash)
             raw = await application.cmd(_actor(application, role), canonical)
             return _structured(cmd_result(raw, "cancel"))
 
@@ -728,7 +726,7 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             request = CommandRecoveryInput.model_validate(request)
-            canonical = CmdRecoveryRequest(action="recovery", code=None, command=request.command)
+            canonical = CmdRecoveryRequest(action="recovery", command=request.command)
             raw = await application.cmd(_actor(application, role), canonical)
             return _structured(cmd_result(raw, "recovery"))
 
@@ -744,7 +742,6 @@ def build_role_mcp(
                 return failure
             request = TaskClaimInput.model_validate(request)
             payload = request.model_dump(exclude_none=True)
-            payload["code"] = None
             model = TaskClaimRequest if request.action == "claim" else TaskReleaseRequest
             canonical, failure = _task_request(payload, model)
             if failure is not None:
@@ -766,7 +763,7 @@ def build_role_mcp(
                 return failure
             request = TaskStateInput.model_validate(request)
             payload = request.model_dump(exclude_none=True)
-            payload.update({"action": "state", "code": None})
+            payload.update({"action": "state"})
             canonical, failure = _task_request(payload, TaskStateRequest)
             if failure is not None:
                 return failure
@@ -824,7 +821,6 @@ def build_role_mcp(
                 return failure
             request = TaskManageInput.model_validate(request)
             payload = request.model_dump(exclude_none=True, exclude_unset=True)
-            payload["code"] = None
             canonical, failure = _task_request(payload, _TASK_MANAGE_MODELS[request.action])
             if failure is not None:
                 return failure
@@ -945,8 +941,7 @@ def build_role_mcp(
             tool.description = (
                 "Read inbox, history, and recipients; send, acknowledge, or reply on "
                 "this server only. Message recipients require a current local attachment; "
-                "message transport never uses Mesh peers. Legacy scope='fleet' requests return "
-                "feature_disabled. Messages expire 24 hours after created_at. Writes use an "
+                "messages expire 24 hours after created_at. Writes use an "
                 "attached local work cycle."
             )
         else:

@@ -125,39 +125,3 @@ class PersistentExecutionFence:
                 kind = "running_command"
             blockers.append(self._blocker(command, kind))
         return blockers
-
-
-class CompositePersistentExecutionFence:
-    def __init__(self, local_fence, remote_fence):
-        self.local_fence = local_fence
-        self.remote_fence = remote_fence
-
-    async def revoke_session(
-        self, logical_agent_id, work_session_id, session_epoch, *, reason
-    ) -> list[dict]:
-        local, remote = await __import__("asyncio").gather(
-            self.local_fence.revoke_session(
-                logical_agent_id, work_session_id, session_epoch, reason=reason
-            ),
-            self.remote_fence.revoke_session(
-                logical_agent_id, work_session_id, session_epoch, reason=reason
-            ),
-        )
-        return [*local, *remote]
-
-    async def blockers_for_session(
-        self, logical_agent_id: str, work_session_id: str, session_epoch: int
-    ) -> list[dict]:
-        local, remote = await __import__("asyncio").gather(
-            self.local_fence.blockers_for_session(logical_agent_id, work_session_id, session_epoch),
-            self.remote_fence.blockers_for_session(
-                logical_agent_id, work_session_id, session_epoch
-            ),
-        )
-        return [*local, *remote]
-
-    async def blockers_for_slot(self, logical_agent_id: str) -> list[dict]:
-        return await self.local_fence.blockers_for_slot(logical_agent_id)
-
-    async def blockers_for_claim(self, namespace, task_id, logical_agent_id) -> list[dict]:
-        return await self.local_fence.blockers_for_claim(namespace, task_id, logical_agent_id)

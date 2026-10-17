@@ -86,24 +86,8 @@ class Settings(BaseSettings):
     )
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 8081
-    agent_idle_ttl_sec: int = 300
-    agent_intent_ttl_sec: int = 180
-    agent_max_session_sec: int = 1500
-    agent_session_warning_after_sec: int = 1200
-    agent_session_alert_enabled: bool = True
-    agent_session_alert_after_sec: int = 1380
-    agent_session_alert_repeat_sec: int = 60
-    agent_session_alert_message: str = (
-        "Ваша сессия закончилась. У пользователя для вас новая задача. "
-        "Завершите сессию и немедленно вернитесь в чат к пользователю, "
-        "чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу."
-    )
-    agent_event_window_sec: int = 180
     agent_command_preview_chars: int = 160
     agent_history_default_minutes: int = 60
-    message_reminder_sec: int = 180
-    message_reminder_calls: int = 5
-    agent_post_finish_message_grace_sec: int = 300
     max_active_agents: int = 8
     fleet_instance_id: str = ""
     fleet_signing_private_key: str = ""
@@ -112,10 +96,7 @@ class Settings(BaseSettings):
     mesh_vpn_state_dir: str = str(CONFIG_DIR / "mesh-vpn")
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
-    fleet_v1_source_enabled: bool = False
-    fleet_v1_authority_enabled: bool = False
     fleet_v1_projection_enabled: bool = False
-    fleet_v1_public_enabled: bool = False
     fleet_id: str = ""
     fleet_node_id: str = ""
     fleet_node_meta_path: Path | None = None
@@ -124,7 +105,6 @@ class Settings(BaseSettings):
     fleet_projection_path: Path | None = None
     fleet_projection_owner_node_id: str = ""
     fleet_projection_follower_node_id: str = ""
-    fleet_permit_ttl_ms: int = 10_000
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
     access_mesh_proof_key: str = ""
@@ -204,44 +184,9 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def validate_fleet_v1_source(self):
-        if not self.fleet_v1_source_enabled:
-            return self
-        if not self.fleet_id.strip():
-            raise ValueError("fleet_id is required when fleet_v1_source_enabled is true")
-        if not (self.fleet_node_id.strip() or self.fleet_instance_id.strip()):
-            raise ValueError(
-                "fleet_node_id or fleet_instance_id is required when "
-                "fleet_v1_source_enabled is true"
-            )
-        if not self.fleet_instance_id.strip() or not self.fleet_signing_private_key.strip():
-            raise ValueError(
-                "fleet v1 source currently requires configured fleet peer authentication"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_fleet_v1_authority(self):
-        if not self.fleet_v1_authority_enabled:
-            return self
-        if not self.fleet_v1_source_enabled:
-            raise ValueError("fleet v1 authority requires fleet_v1_source_enabled")
-        if not self.fleet_control_node_id.strip():
-            raise ValueError("fleet_control_node_id is required when fleet v1 authority is enabled")
-        if self.fleet_permit_ttl_ms <= 0 or self.fleet_permit_ttl_ms > 60_000:
-            raise ValueError("fleet_permit_ttl_ms must be between 1 and 60000")
-        return self
-
-    @model_validator(mode="after")
     def validate_fleet_v1_projection(self):
-        if self.fleet_v1_public_enabled and not self.fleet_v1_projection_enabled:
-            raise ValueError("fleet v1 public requires fleet_v1_projection_enabled")
         if not self.fleet_v1_projection_enabled:
             return self
-        if not self.fleet_v1_source_enabled:
-            raise ValueError("fleet v1 projection requires fleet_v1_source_enabled")
-        if not self.fleet_v1_authority_enabled:
-            raise ValueError("fleet v1 projection requires fleet_v1_authority_enabled")
         owner = self.fleet_projection_owner_node_id.strip()
         if not owner:
             raise ValueError(

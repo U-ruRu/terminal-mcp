@@ -2014,14 +2014,10 @@ class TaskCoordinator:
             self.metrics.set("terminal_mcp_task_stale_claims", stale_claims)
         return stats
 
-    async def release_agent_claims(self, agent_id, *, reason="agent_finish", now=None):
-        result = await self.store.release_owner_claims_mutation(
-            owner=ClaimOwner.legacy_session(agent_id), reason=reason, now=now
-        )
-        return result["released_count"]
-
     async def task_refs_for_agent(self, agent_id):
-        rows = await self.store.claims_for_agent(agent_id, active_only=True)
+        rows = await self.store.claims_for_owner(
+            ClaimOwner.logical_agent(agent_id), active_only=True
+        )
         result = []
         for item in rows:
             claims = await self._live_claims(item["namespace"], item["task_id"])

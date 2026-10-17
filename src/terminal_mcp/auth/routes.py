@@ -37,15 +37,15 @@ def build_oauth_router(settings, auth, store):
 
     def protected_resource_metadata(resource: str | None = None):
         return {
-            "resource": resource or settings.oauth_audience or f"{settings.public_base_url}/mcp",
+            "resource": resource
+            or settings.oauth_audience
+            or f"{settings.public_base_url}/terminal-mcp/access/v1/mcp",
             "authorization_servers": [issuer],
             "scopes_supported": settings.oauth_required_scopes.split(),
             "bearer_methods_supported": ["header"],
         }
 
     @r.get("/.well-known/oauth-protected-resource")
-    @r.get("/.well-known/oauth-protected-resource/mcp")
-    @r.get("/mcp/.well-known/oauth-protected-resource")
     async def protected_metadata():
         return protected_resource_metadata()
 

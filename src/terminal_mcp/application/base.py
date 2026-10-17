@@ -20,11 +20,9 @@ CAPABILITIES = frozenset(
         "health",
     }
 )
-# Role endpoints are introduced in a later phase; the compatibility endpoint
-# deliberately retains all existing capabilities. No request field can change
-# this role: the inbound adapter chooses it from server endpoint configuration.
+# The inbound adapter fixes the role from the published endpoint. No request
+# field can grant another endpoint's capabilities.
 ROLE_CAPABILITIES = {
-    "legacy": CAPABILITIES,
     "internal": CAPABILITIES,
     "operator": CAPABILITIES,
     "mesh": CAPABILITIES,

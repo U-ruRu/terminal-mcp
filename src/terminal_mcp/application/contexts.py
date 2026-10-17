@@ -62,9 +62,9 @@ class ContextApplication(ApplicationCapability):
                 "additional": additional,
                 "next_cursor": next_cursor,
             }
-        data = request.model_dump(exclude={"action", "code"}, exclude_none=True)
+        data = request.model_dump(exclude={"action"}, exclude_none=True)
         resolution = await self.gate.resolve(
-            actor, request.code, ManagedOperation.CONTEXT_WRITE
+            actor, None, ManagedOperation.CONTEXT_WRITE
         )
         if resolution.failure is not None:
             return resolution.failure
@@ -90,11 +90,12 @@ class ContextApplication(ApplicationCapability):
     ) -> dict:
         """One local transaction owns context data and resolved actor activity.
 
-        The Access caller passes an authority-resolved actor; the legacy HTTP
-        facade retains its existing admission rules but shares these semantics.
-        No remote authority call or independent legacy-store commit runs inside
-        the transaction. Caller cancellation must not leave a partial mutation.
+        The Access caller passes an authority-resolved actor. Paired application
+        controls use the same transaction and activity attribution. Caller
+        cancellation must not leave a partial mutation.
         """
+        if action == "create" and primary is None:
+            primary = False
         data = {
             "context_id": context_id,
             "summary": summary,

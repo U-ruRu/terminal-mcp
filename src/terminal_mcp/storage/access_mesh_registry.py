@@ -206,6 +206,21 @@ class AccessRegistryStore:
                 ).fetchone()[0]
             )
 
+    def registry_readiness(self):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT upgrade_pending,transition_id FROM access_mesh_registry_scope "
+                "WHERE singleton=1"
+            ).fetchone()
+        if row is None:
+            raise AccessMeshError("mesh_registry_unavailable")
+        reason = (
+            "mesh_transition_pending" if row[1]
+            else "mesh_registry_migrating" if row[0]
+            else None
+        )
+        return {"ready": reason is None, "reason": reason}
+
     def assert_registry_available(self):
         self.assert_registry_ready()
         if self.registry_mesh_id and self.registry_upgrade_pending:

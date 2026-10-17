@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +17,7 @@ def actor(name="owner", **metadata):
             name, f"credential:{name}", frozenset({"terminal:execute"}), 1, "internal", "bearer"
         ),
         node_id="node-a",
-        **metadata,
+        **{"endpoint_role": "executor", **metadata},
     )
 
 
@@ -25,15 +26,17 @@ class Backend:
         self.calls = []
         self.state = {"alert_pending": False, "ack_required_pending": False}
 
-    async def access_identity(self, code):
+    async def resolve(self, actor, operation):
         await asyncio.sleep(0)
-        self.calls.append(("identity", current_admission_context().principal_id))
+        self.calls.append(("identity", actor.principal_id))
         return {
             "ok": True,
             "logical_agent_id": "agent",
             "work_session_id": "session",
             "session_epoch": 2,
             "authority_node_id": "node-authority",
+            "issuer_node_id": "node-a",
+            "slot_id": "slot-a",
         }
 
     async def message_state(self, **kwargs):
@@ -49,6 +52,11 @@ class Backend:
 class Service:
     def __init__(self):
         self.persistent = Backend()
+        self.access_mesh = SimpleNamespace(
+            resolve=self.persistent.resolve,
+            connection_key=lambda actor: actor.principal_id,
+            store=SimpleNamespace(local_node_id="node-a"),
+        )
 
     async def context(self, action, **kwargs):
         return {"ok": True, "primary": [], "additional": []}
@@ -62,7 +70,7 @@ async def test_concurrent_application_calls_keep_separate_actor_contexts():
     service = Service()
     app = TerminalApplication(service)
     before = current_admission_context()
-    request = CmdRunRequest(action="run", code="0042", command="printf safe")
+    request = CmdRunRequest(action="run", command="printf safe")
     values = await asyncio.gather(app.cmd(actor("alice"), request), app.cmd(actor("bob"), request))
     assert all(value["ok"] for value in values)
     assert sorted(service.persistent.calls) == [
@@ -77,7 +85,7 @@ async def test_concurrent_application_calls_keep_separate_actor_contexts():
 @pytest.mark.asyncio
 async def test_session_gate_enriches_from_authority_without_mutating_input_actor():
     original = actor()
-    result = await TerminalApplication(Service()).session_gate.resolve(original, "0042")
+    result = await TerminalApplication(Service()).session_gate.resolve(original)
     assert result.failure is None
     assert result.actor.authority_node_id == "node-authority"
     assert result.actor.logical_agent_id == "agent"
@@ -91,7 +99,7 @@ async def test_capability_policy_denies_coordinator_execution_before_side_effect
     app = TerminalApplication(service)
     result = await app.cmd(
         actor(endpoint_role="coordinator"),
-        CmdRunRequest(action="run", code="0042", command="printf blocked"),
+        CmdRunRequest(action="run", command="printf blocked"),
     )
     assert result["code"] == "capability_not_allowed"
     assert service.persistent.calls == []

@@ -1,83 +1,62 @@
-# Canonical Application Core (Architecture A)
+# Canonical application core
 
-`terminal_mcp.application.TerminalApplication` is the composition-facing application
-API. MCP, legacy Actions/Console, persistent operator HTTP, and authenticated Fleet
-routes translate transport inputs and errors; they do not own session resolution,
-command/message gates, task mutations, or authority routing.
+`terminal_mcp.application.TerminalApplication` is the composition-facing API.
+MCP, native operator HTTP, Console and authenticated Mesh adapters translate
+transport inputs and errors. Application capabilities own session resolution,
+command and message admission, task operations and current Mesh control.
 
-## Dependency direction and composition
+## Composition and actors
 
-Inbound adapters depend on `application`; `application` never imports MCP, FastAPI,
-Starlette, or SQL drivers. Existing `TerminalService`, persistent lifecycle/backend,
-and Fleet domain services are explicit compatibility implementations. They retain
-existing persisted data and established transactions during the incremental migration.
-`app.create_app` composes one application object and shares its capabilities with all
-routes; `get_application(service)` preserves callers of the previous factory signatures.
-An already constructed application may be passed directly to the MCP adapter.
+`app.create_app` composes one application with Access, Execution and Coordination
+on every node. Topology does not select another runtime or tool catalog. The
+application uses transport-independent request models; MCP envelopes and public
+result encoding stay in the MCP adapter.
 
-Capabilities are sessions, observations, tasks, messaging, commands, context, health,
-operator control, persistent Mesh, Fleet replication/source/projection and Fleet control.
-`application/requests.py` and `task_requests.py` own the transport-independent request
-models. MCP-specific validation envelopes and wire result encoding stay in `mcp`.
-Compatibility exports preserve previous model/projection imports without duplicate logic.
+`ActorContext` holds verified principal, credential, scopes, node, endpoint role
+and server trace information. Public agent arguments cannot supply that identity.
+Logical-agent and work-session values come from native Access resolution. A
+request's context is isolated from concurrent requests and cleared on exit,
+including cancellation.
 
-## Actor and admission
+The common SessionGate checks current native slot and work-session state. It
+rejects unresolved registry migration, a topology fence, old-scope bindings,
+expiry and revoked authority. Intent, message obligations and operation-specific
+permissions retain their own checks after identity resolution. Historical
+session rows support attribution and reads; they do not authorize a second
+execution path.
 
-`ActorContext` is immutable. Its authenticated principal, credential identity, scopes,
-auth generation, node, endpoint role/version and server trace identifier come from
-verified transport state and server configuration, never public agent arguments. Provider
-metadata may be absent when a legacy credential does not attest it; it is not guessed.
-Logical agent, work session, epoch and authority are enriched only from a successful
-session-authority resolution. Unverified partial session identities are rejected.
+## Operator and peer boundaries
 
-Every canonical capability checks its endpoint policy and binds the explicit actor for
-one invocation. The compatibility binding resets in `finally`, including cancellation;
-an anonymous actor clears rather than inherits ambient identity. Concurrent requests
-cannot overwrite one another's context. Operator capabilities require the operator role;
-Mesh capabilities require a verified peer identity and check its correspondence to the
-requesting node before authority operations. Forwarded admission is accepted only inside
-the authenticated Mesh capability, not as an agent-facing input.
+The paired application controls membership and primary selection. Topology
+mutations and enrollment require an active paired OAuth device with the required
+scopes. General static bearer access or a permissive auth mode does not confer
+that pairing authority. A verified member may carry bounded internal control and
+registry requests under the assigned topology. Old Mesh ingress authority cannot
+enroll a node into another namespace.
 
-`SessionGate` is the shared application entry to existing local/Mesh authority resolution.
-The persistent lifecycle still owns expiry, epoch, scope, authority permits and fencing.
-Command coordination uses one application gate: alerts block work except cancellation;
-acknowledgement obligations block new run admission, not recovery/cancel semantics.
-Existing domain checks remain defense in depth, not a replacement source of identity.
+Access through any member forwards authoritative registry operations to the
+primary. Namespace, topology revision, trust and durable transition state bind
+those operations. Source-registry handoff preserves every row before an outgoing
+primary clears its local namespace.
 
-## Transactions and repository ports
+## Transactions and recovery
 
-`ApplicationUnitOfWorkPort.transaction()` exposes typed context, session, task and command
-repositories. The SQLite adapter uses one connection and one `BEGIN IMMEDIATE` transaction
-in the authoritative database. The application decides commit boundaries. Context changes
-and resolved-actor activity are now committed together through this port; failed activity
-writes and cancellation roll back the context change. The legacy context facade shares
-the same validation and mutation implementation, preserving its existing admission rules.
+Repository units of work use one SQLite connection and one transaction for their
+local domain mutations. Context changes and successful activity attribution
+commit together. Bound repositories cannot escape their transaction or be used
+by a different async task. Cancellation during COMMIT may leave a committed
+operation; stable operation IDs and reads resolve an ambiguous outcome.
 
-Bound repositories cannot be used after their transaction closes or by another async task.
-Nested transactions are rejected rather than silently joining or deadlocking. Opening,
-rollback and closing retain ownership of their SQLite worker during cancellation. A
-cancellation after submission of COMMIT may observe a completed durable transaction;
-callers must not blindly retry an ambiguous mutation.
+There is no implicit transaction spanning runtime, auth, output, control and
+remote databases. Topology uses prepare/completion receipts, local namespace
+journals and admission fences to recover across those boundaries. Derived Console
+rows are cleared atomically with their namespace metadata and rebuilt on demand;
+old in-flight refreshes cannot repopulate the cache after Move.
 
-This is NOT a transaction spanning the authoritative DB, output cache, auth DB, Fleet
-control DB or a remote node. Independent legacy store methods commit on their own
-connections and must never be called inside a new unit-of-work scope. Network calls,
-process execution and separate output storage remain outside it. No schema migration or
-second authority store is introduced in Architecture A.
+## Verification
 
-## Current boundary checks and subsequent phases
-
-Current MCP catalogs and authoritative request/output models define the public contract.
-Adapter tests verify direct canonical-application construction and keep server-resolved
-identity fields out of caller inputs. Prior Architecture A hash/signature snapshots were
-retired under the test-scope policy recorded in `docs/test-scope-cleanup.md`. Current HTTP
-paths, authorization and OpenAPI operation metadata keep their functional checks.
-The in-process Linux runtime and four numbered queues are unchanged; Architecture B
-introduces ExecutionPort, C introduces privileged local IPC, and D owns deployment
-migration. Public compact output, input limits, managed identity and role endpoints are
-separate tasks atop this boundary.
-
-Boundary tests exercise concurrent actor isolation, cancellation cleanup, capability
-rejection, current MCP discovery, HTTP/Fleet adapter behavior, real repository transactions,
-and rollback through actual application entry points. Full-suite results are recorded
-against immutable Git candidates rather than a moving implementation worktree.
+Current catalogs and request/output models own the public contract. Component
+tests cover actor isolation, strict admission and SQLite transactions. Minimal
+multi-router tests cover shared issuance, namespace isolation, registry handoff,
+Move and interruption recovery. Full acceptance is tied to an immutable source
+SHA, following [the test workflow](../testing.md).

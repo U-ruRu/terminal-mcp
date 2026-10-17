@@ -7,23 +7,28 @@ from types import SimpleNamespace
 import pytest
 
 from terminal_mcp.application import ActorContext, TerminalApplication
-from terminal_mcp.application.requests import ContextCreateRequest
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
 from terminal_mcp.storage.context import ContextStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 
 
-class IdentityBackend:
-    async def access_identity(self, code):
-        assert code == "0042"
+class NativeIdentity:
+    async def resolve(self, actor, operation):
         return {
             "ok": True,
             "logical_agent_id": "logical-owner",
             "work_session_id": "work",
             "session_epoch": 1,
             "authority_node_id": "authority",
+            "issuer_node_id": "node",
+            "slot_id": "native-slot",
         }
+
+
+    @staticmethod
+    def connection_key(actor):
+        return "fixture-attachment"
 
 
 async def application(tmp_path, *, failing=False):
@@ -46,7 +51,7 @@ async def application(tmp_path, *, failing=False):
     else:
         selected = uow
     service = SimpleNamespace(
-        context_store=ContextStore(repository.path), persistent=IdentityBackend()
+        context_store=ContextStore(repository.path), access_mesh=NativeIdentity()
     )
     app = TerminalApplication(service, unit_of_work=selected)
     service.application = app
@@ -55,11 +60,9 @@ async def application(tmp_path, *, failing=False):
 
 async def test_context_create_records_resolved_actor_atomically(tmp_path):
     app, repository = await application(tmp_path)
-    result = await app.context(
-        ActorContext(node_id="node"),
-        ContextCreateRequest(
-            action="create", code="0042", summary="Shared", content="Content", primary=True
-        ),
+    result = await app.contexts.mutate(
+        ActorContext(node_id="node", logical_agent_id="logical-owner"),
+        "create", summary="Shared", content="Content", primary=True,
     )
     assert result["entry"] == {
         "id": 1,
@@ -74,14 +77,9 @@ async def test_context_create_records_resolved_actor_atomically(tmp_path):
 async def test_application_does_not_commit_context_when_activity_write_fails(tmp_path):
     app, repository = await application(tmp_path, failing=True)
     with pytest.raises(RuntimeError, match="activity write failed"):
-        await app.context(
-            ActorContext(),
-            ContextCreateRequest(
-                action="create",
-                code="0042",
-                summary="Transient",
-                content="Roll back",
-            ),
+        await app.contexts.mutate(
+            ActorContext(logical_agent_id="logical-owner"),
+            "create", summary="Transient", content="Roll back",
         )
     assert await app.service.context_store.list() == []
     assert await AgentStore(repository.path).activity_count("logical-owner") == 0

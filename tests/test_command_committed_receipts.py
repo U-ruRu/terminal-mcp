@@ -10,7 +10,7 @@ import pytest
 
 import terminal_mcp.core.persistent_backend as backend_module
 from terminal_mcp.core.persistent_backend import PersistentBackend
-from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleError
+from terminal_mcp.core.session_execution import SessionExecutionError
 from terminal_mcp.mcp.output_contracts import cmd_result
 from terminal_mcp.storage.sqlite import SqliteRepository
 
@@ -57,9 +57,8 @@ async def _backend(tmp_path, monkeypatch):
     )
     backend = PersistentBackend(service, _Lifecycle())
     backend._execution_authority = AsyncMock(
-        return_value=(
-            SimpleNamespace(hard_expires_at="2099-01-01T00:00:00Z", authority_node_id="node-a"),
-            None,
+        return_value=SimpleNamespace(
+            hard_expires_at="2099-01-01T00:00:00Z", authority_node_id="node-a"
         )
     )
     backend._task_refs = AsyncMock(return_value=[])
@@ -70,7 +69,7 @@ async def _backend(tmp_path, monkeypatch):
 
 def _error(kind):
     if kind == "lifecycle":
-        return PersistentLifecycleError("session_expired")
+        return SessionExecutionError("session_expired")
     return RuntimeError("injected optional follow-up failure")
 
 
@@ -108,7 +107,7 @@ async def test_run_preserves_committed_hash_on_followup_failure(tmp_path, monkey
 async def test_run_precommit_failure_has_no_command(tmp_path, monkeypatch, boundary):
     backend = await _backend(tmp_path, monkeypatch)
     if boundary == "authority":
-        backend._execution_authority.side_effect = PersistentLifecycleError("session_expired")
+        backend._execution_authority.side_effect = SessionExecutionError("session_expired")
     else:
         monkeypatch.setattr(backend.repo, "create", AsyncMock(side_effect=RuntimeError("write")))
     result = await backend.run("printf never", **IDENTITY, queue_id=1, task_scope="none")

@@ -63,8 +63,6 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path, action):
 def _run_doctor_with_ingress_status(
     tmp_path,
     ingress_status: str,
-    *,
-    fleet_v1_public_enabled: str = "true",
 ):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -102,7 +100,6 @@ def _run_doctor_with_ingress_status(
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://server-a.example.invalid"\n'
         'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"\n'
         'TERMINAL_MCP_QUEUE_WORKERS="4"\n'
-        f'TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED="{fleet_v1_public_enabled}"\n'
     )
     env = {
         **os.environ,

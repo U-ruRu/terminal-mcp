@@ -1,5 +1,9 @@
 """Independent bootstrap identity; neighboring topology storage is never created."""
 
+import sqlite3
+
+import pytest
+
 from terminal_mcp.config import Settings
 from terminal_mcp.node_identity import ensure_node_identity, local_namespace
 
@@ -37,3 +41,13 @@ def test_separate_installations_have_isolated_registration_credentials(tmp_path)
 
     assert first.fleet_id != second.fleet_id
     assert first.access_mesh_proof_key != second.access_mesh_proof_key
+
+
+def test_missing_established_identity_cannot_generate_new_mesh_authority(tmp_path):
+    configured = settings(tmp_path)
+    with sqlite3.connect(configured.database_path) as db:
+        db.execute("CREATE TABLE unified_runtime_migration(singleton INTEGER PRIMARY KEY)")
+
+    with pytest.raises(ValueError, match="durable node identity is missing"):
+        ensure_node_identity(configured)
+    assert not configured.database_path.with_name("node-identity.json").exists()

@@ -1,54 +1,40 @@
-# Android Access schema 25 upgrade
+# Upgrading existing Android Access data to unified Mesh
 
-This candidate requires backend management contract version 2 for the accepted
-Android 0.2.37 (version code 39) APK. Its Android/frontend source remains unchanged.
-The backend SQLite storage revision is 25; installer release classification must
-recognize this schema change rather than treating the build as code-only.
+The former schema-25 rollout is historical. Current Console and Android sources
+use the same native Access management contract and Mesh topology API. There is no
+optional Access activation, legacy-admission switch or alternate slot response.
+The authoritative requirements are in [the Mesh product contract](mesh-product-contract.md).
 
-## Existing native policy and open windows
+## Preserved state
 
-Before the first incompatible Access schema change, an existing native defaults
-table with no singleton row is snapshotted from the configured effective native
-policy. For the verified deployment configuration this is duration 1,200 seconds,
-cooldown 60 seconds, warning 120 seconds, draining 30 seconds, and legacy admission
-enabled. These are preserved values, not new policy settings. The snapshot is an
-explicit server override; it prevents ordinary Fleet defaults from silently
-replacing the existing native defaults on startup. Existing persisted defaults
-and already-open policy windows are preserved. Fresh native installations retain
-the existing inheritance behavior.
+Hot upgrade keeps existing native slot identities, registrations, individual
+policy overrides, session timestamps and exact deadlines. Supported old session
+records are converted once; the migration receipt prevents a later namespace
+change from importing them again. Historical issuer provenance remains available
+when the complete old Mesh registry is assembled on its primary.
 
-If main storage is upgraded while native Access is disabled, a durable marker
-retains the need to snapshot configured native defaults when Access next starts.
-The configured values must remain the intended pre-upgrade native defaults until
-that first Access startup. No migration changes deployment configuration.
+The inherited Mesh policy comes from the primary. A member-local historical
+parent is not a second Mesh policy. The registry upgrade assembles all required
+member exports before applying the common policy; offline or conflicting inputs
+keep the registry unavailable. Existing individual slot overrides are retained.
 
-## Remaining policy limitation
+The offline release check compares protected old rows and permits only named,
+independently verified conversions. It authenticates encrypted issuance receipts
+before comparing their payloads. A changed issued number, namespace, policy,
+credential fingerprint or unrelated application field fails preservation.
 
-An explicit reset to Mesh inheritance still uses the existing Fleet-to-native
-conversion. With the observed Fleet values it produces duration 82,800 seconds,
-cooldown 120 seconds, warning 10,800 seconds, and draining 3,600 seconds. This
-mapping is not an approved zero-drain native policy. This change does not alter
-that future reset behavior or define a new native policy meaning. Do not present
-reset-to-inherit, inherited defaults, or this rollout as delivering a zero-drain
-policy. A future native policy design and its explicit approval remain separate.
+## Client and activation behavior
 
-## Interrupted startup and rollback
+Console uses temporary and persistent native slot kinds, current policy revision
+checks and stable mutation keys. It keeps an operation pending after a lost reply
+and resolves the committed outcome by reading current state. Every paired member
+can serve as the application's Mesh management entry.
 
-The first synchronous Access migration transaction commits its incompatible
-columns and schema-25 fence atomically. Interrupted work before that commit rolls
-back together. Later startup failure leaves a durable version fence; the schema-24
-runtime refuses main-repository startup rather than accepting incompatible tables.
-A migration-origin marker preserves older conditional main-storage migrations
-until successful initialization.
+Readiness is separate from process liveness. Candidate activation requires the
+registry to finish migration and any topology transition to leave its fenced
+state. A live process with an incomplete registry is not an accepted update.
+Clean deploy instead clears the selected installation's managed state, including
+pairing, identity secrets and local backups, and creates a fresh Standalone node.
 
-A release-symlink-only rollback to schema-24 code is not supported after migration.
-Recovery requires restoring a verified pre-upgrade database backup with the older
-runtime, or using a compatible schema-25 runtime. Preserve coordinated backups and
-a recovery plan before any rollout. These source and isolated-test changes do not
-perform a production migration or authorize deployment.
-
-## Replication recovery
-
-Exact-slot gap repair beyond the first 50-slot page uses the same canonical wire
-serializer as normal snapshot pages. Issuer-local code-generation metadata is
-excluded, and optional legacy fields retain the existing compatibility projection.
+See [the current deployment contract](access-mesh-deployment.md). These source
+changes and isolated tests do not deploy to running servers.

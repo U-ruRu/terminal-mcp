@@ -135,7 +135,7 @@ class FakeNode:
         link = self.root / "current"
         return link.resolve() if link.is_symlink() else None
 
-    def health(self, url, expected_release=None):
+    def health(self, url, expected_release=None, *, readiness=False):
         if not all(self.up.values()) or self.error == "health":
             raise ReleaseError("health_unavailable")
         return {"ok": True, "release": expected_release or "0.26.0-aaaaaaa"}
