@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from native_runtime_helpers import native_agent
 
 from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
 from terminal_mcp.application.access_mesh_messages import _public_name as _public_name
@@ -162,24 +163,28 @@ async def mesh_pair(tmp_path):
         repo = SqliteRepository(tmp_path / f"{node_id}.db", tmp_path / f"{node_id}-output.db")
         await repo.initialize()
         agents = AgentStore(repo.path)
-        runtime = Runtime(LocalSlots(node_id, slots, attached), TaskStore(repo.path), now)
+        local = LocalSlots(node_id, slots, attached)
+        for index, agent_id in enumerate(sorted(attached)):
+            native, _ = native_agent(
+                repo.path,
+                agent_id,
+                node_id=node_id,
+                code=str(1000 + index),
+                now=now,
+                session_id=f"ws-{node_id}-{agent_id}",
+            )
+            local.namespace_id = native.namespace_id
+        runtime = Runtime(local, TaskStore(repo.path), now)
         messages = AccessMeshMessaging(runtime, agents, network.transport(node_id))
         with messages.store.connect() as db:
-            db.executescript("""
-                CREATE TABLE access_mesh_activity(
-                    connection_key TEXT PRIMARY KEY, last_active_at TEXT);
-                CREATE TABLE access_mesh_attachments(
-                    connection_key TEXT PRIMARY KEY, issuer_id TEXT,
-                    slot_id TEXT, logical_agent_id TEXT);
-            """)
             for agent_id in attached:
-                slot = slots[agent_id]
                 db.execute(
-                    "INSERT INTO access_mesh_activity VALUES(?,?)", (agent_id, utc_text(now))
+                    "INSERT INTO access_mesh_activity VALUES(?,?,?)",
+                    (agent_id, utc_text(now), utc_text(now)),
                 )
                 db.execute(
                     "INSERT INTO access_mesh_attachments VALUES(?,?,?,?)",
-                    (agent_id, slot.issuer_id, slot.slot_id, agent_id),
+                    (agent_id, node_id, "test-slot-" + agent_id, agent_id),
                 )
         network.nodes[node_id] = messages
     yield network

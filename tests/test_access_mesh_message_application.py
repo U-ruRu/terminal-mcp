@@ -33,7 +33,10 @@ def messages(monkeypatch):
     mesh = SimpleNamespace(
         store=slots,
         clock=lambda: NOW,
-        resolve=AsyncMock(return_value={"logical_agent_id": "sender", "public_name": "Sender"}),
+        resolve=AsyncMock(return_value={
+            "logical_agent_id": "sender", "public_name": "Sender",
+            "work_session_id": "sender-session", "session_epoch": 1,
+        }),
     )
     store = Mock(spec=AccessMeshMessageStore)
     store.wire.return_value = None

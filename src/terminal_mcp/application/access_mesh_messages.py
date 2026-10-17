@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from terminal_mcp.core.access_mesh_scope import registry_operation
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.message_text import message_text_slice, text_slice_arguments
+from terminal_mcp.core.native_admission import NativeWriteAdmission, native_write_admission
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.public_errors import ValidationIssue, ValidationRepair, public_error
 from terminal_mcp.core.read_contract import (
@@ -790,6 +791,7 @@ class AccessMeshMessaging:
         text_limit=None,
     ):
         try:
+            admitted_namespace = self.mesh.store.namespace_id
             if scope != "local" or detail not in {"summary", "full"}:
                 raise MeshMessagingError("input_validation_failed")
             if type(limit) is not int or not 1 <= limit <= 100:
@@ -875,31 +877,49 @@ class AccessMeshMessaging:
                         else {}
                     ),
                 )
-            if message_hash and text is None:
+            if expiry_alert_ack:
+                # A current system expiry Alert remains acknowledgeable after
+                # its session ends. Recipient and namespace guards still apply.
                 return await asyncio.to_thread(
                     self.store.acknowledge,
                     message_hash,
                     identity["logical_agent_id"],
                     utc_text(self.mesh.clock()),
                 )
-            normalized_mode = mode or ("alert" if alert or require_reply else "notify")
-            if normalized_mode not in {"notify", "ack", "alert"}:
-                raise MeshMessagingError("invalid_message_mode")
-            if require_reply or alert:
-                normalized_mode = "alert"
-            return await self._send(
-                actor,
-                identity,
-                text=text,
-                target=target,
-                mode=normalized_mode,
-                scope=scope,
-                require_reply=require_reply or normalized_mode == "alert",
-                alert=alert or normalized_mode == "alert",
-                namespace=namespace,
-                task_id=task_id,
-                reply_to=message_hash,
+            admission = NativeWriteAdmission(
+                namespace_id=admitted_namespace,
+                logical_agent_id=identity["logical_agent_id"],
+                work_session_id=identity["work_session_id"],
+                session_epoch=identity["session_epoch"],
+                operation=operation,
+                clock=self.mesh.clock,
             )
+            with native_write_admission(admission):
+                if message_hash and text is None:
+                    return await asyncio.to_thread(
+                        self.store.acknowledge,
+                        message_hash,
+                        identity["logical_agent_id"],
+                        utc_text(self.mesh.clock()),
+                    )
+                normalized_mode = mode or ("alert" if alert or require_reply else "notify")
+                if normalized_mode not in {"notify", "ack", "alert"}:
+                    raise MeshMessagingError("invalid_message_mode")
+                if require_reply or alert:
+                    normalized_mode = "alert"
+                return await self._send(
+                    actor,
+                    identity,
+                    text=text,
+                    target=target,
+                    mode=normalized_mode,
+                    scope=scope,
+                    require_reply=require_reply or normalized_mode == "alert",
+                    alert=alert or normalized_mode == "alert",
+                    namespace=namespace,
+                    task_id=task_id,
+                    reply_to=message_hash,
+                )
         except InvalidCursor:
             return _failure("invalid_cursor")
         except OutputItemTooLarge:

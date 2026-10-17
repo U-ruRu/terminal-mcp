@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from terminal_mcp.core.access_mesh_scope import assert_registry_scope
+from terminal_mcp.core.native_admission import assert_native_write_admission
 
 MESSAGE_TTL = timedelta(hours=24)
 CUTOVER_REASON = "delivery_stopped_local_cutover"
@@ -188,6 +189,7 @@ class AccessMeshMessageStore:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             assert_registry_scope(db)
+            assert_native_write_admission(db)
             existing = db.execute(
                 "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?", (message_hash,)
             ).fetchone()
@@ -288,6 +290,7 @@ class AccessMeshMessageStore:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             assert_registry_scope(db)
+            assert_native_write_admission(db)
             self._recipient_tx(db, message_hash, agent_id)
             message = db.execute(
                 "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?",
