@@ -10,7 +10,14 @@ from sqlite3 import IntegrityError
 
 import aiosqlite
 
+from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.models import Command
+from terminal_mcp.core.native_admission import (
+    NativeWriteAdmission,
+    NativeWriteAdmissionError,
+    assert_native_write_admission_async,
+    current_native_write_admission,
+)
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.storage.events import install_event_journal
 from terminal_mcp.storage.output import (
@@ -1588,8 +1595,9 @@ class SqliteRepository:
             effective_queue = (queue_id or 1) if status == "queued" else queue_id
             try:
                 async with self._connect("create_command", command_hash=h) as db:
+                    await db.execute("BEGIN IMMEDIATE")
+                    await assert_native_write_admission_async(db)
                     if status == "queued":
-                        await db.execute("BEGIN IMMEDIATE")
                         row = await (
                             await db.execute(
                                 "SELECT COALESCE(MAX(queue_sequence),0)+1 FROM commands WHERE queue_id=?",
@@ -1767,8 +1775,65 @@ class SqliteRepository:
                 await db.commit()
                 return Command(*row)
 
+    async def _assert_command_launch_admission(self, db, cmd_hash):
+        attribution = await (
+            await db.execute(
+                "SELECT logical_agent_id,work_session_id,session_epoch,command_type "
+                "FROM command_agent_attribution WHERE command_hash=?",
+                (cmd_hash,),
+            )
+        ).fetchone()
+        if attribution is None or attribution[0] is None:
+            return
+        admission = current_native_write_admission()
+        if admission is not None:
+            if (
+                admission.logical_agent_id,
+                admission.work_session_id,
+                admission.session_epoch,
+            ) != tuple(attribution[:3]):
+                raise NativeWriteAdmissionError("stale_session_epoch")
+        else:
+            try:
+                scope = await (
+                    await db.execute(
+                        "SELECT namespace_id FROM access_mesh_registry_scope WHERE singleton=1"
+                    )
+                ).fetchone()
+            except aiosqlite.OperationalError as exc:
+                if str(exc) != "no such table: access_mesh_registry_scope":
+                    raise
+                raise NativeWriteAdmissionError("session_attach_required") from exc
+            if scope is None:
+                raise NativeWriteAdmissionError("session_attach_required")
+            admission = NativeWriteAdmission(
+                namespace_id=scope[0],
+                logical_agent_id=attribution[0],
+                work_session_id=attribution[1],
+                session_epoch=attribution[2],
+                operation=(
+                    ManagedOperation.COMMAND_RECOVERY
+                    if attribution[3] == "persistent_recovery"
+                    else ManagedOperation.COMMAND_RUN
+                ),
+            )
+        await assert_native_write_admission_async(db, admission=admission)
+
     async def set_pid(self, cmd_hash, pid):
         async with self._connect("set_pid", command_hash=cmd_hash) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                # The scheduler writes stdin only after this transaction commits.
+                # Re-check the durable session even when no request context exists.
+                await self._assert_command_launch_admission(db, cmd_hash)
+            except NativeWriteAdmissionError:
+                await db.execute(
+                    "UPDATE commands SET status='cancelled',error='persistent.session_fenced',"
+                    "finished_at=? WHERE hash=? AND status='running'",
+                    (utc_text(), cmd_hash),
+                )
+                await db.commit()
+                return False
             cur = await db.execute(
                 "UPDATE commands SET pid=? WHERE hash=? AND status='running'", (pid, cmd_hash)
             )

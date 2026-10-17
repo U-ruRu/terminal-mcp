@@ -1,9 +1,16 @@
 """Native session authority and exact-session scheduler fencing."""
 
 import pytest
+from native_runtime_helpers import native_agent
 from persistent_app_test_helpers import NoNativeExecutionPort
 
 from terminal_mcp.application.command_scheduler import CommandScheduler
+from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.native_admission import (
+    NativeWriteAdmission,
+    NativeWriteAdmissionError,
+    native_write_admission,
+)
 from terminal_mcp.core.persistent_execution import PersistentExecutionFence
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
@@ -23,8 +30,6 @@ async def repo_and_store(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_state", ["active", "ended", "missing_registry"])
 async def test_queue_claim_requires_the_current_native_session(tmp_path, native_state):
-    from native_runtime_helpers import native_agent
-
     repo, _ = await repo_and_store(tmp_path)
     store, identity = native_agent(repo.path)
     if native_state == "ended":
@@ -49,6 +54,109 @@ async def test_queue_claim_requires_the_current_native_session(tmp_path, native_
     else:
         assert claimed is not None and claimed.cmd_hash == command.cmd_hash
         assert claimed.status == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["queued", "running"])
+@pytest.mark.parametrize("transition", ["ended", "namespace_changed"])
+async def test_command_create_rechecks_captured_native_authority(tmp_path, status, transition):
+    repo, _ = await repo_and_store(tmp_path)
+    store, identity = native_agent(repo.path)
+    admission = NativeWriteAdmission(
+        namespace_id=store.namespace_id,
+        logical_agent_id=identity["logical_agent_id"],
+        work_session_id=identity["work_session_id"],
+        session_epoch=identity["session_epoch"],
+        operation=(
+            ManagedOperation.COMMAND_RECOVERY
+            if status == "running"
+            else ManagedOperation.COMMAND_RUN
+        ),
+    )
+    with store._connect() as db:
+        if transition == "ended":
+            db.execute("UPDATE logical_agent_work_sessions SET state='ended'")
+        else:
+            db.execute("UPDATE access_mesh_registry_scope SET namespace_id='other-mesh'")
+
+    with native_write_admission(admission), pytest.raises(NativeWriteAdmissionError) as error:
+        await repo.create(
+            "printf must-not-be-recorded",
+            cmd_hash="rejected",
+            status=status,
+            agent_id=identity["logical_agent_id"],
+            logical_agent_id=identity["logical_agent_id"],
+            work_session_id=identity["work_session_id"],
+            session_epoch=identity["session_epoch"],
+            command_type="persistent_recovery" if status == "running" else "persistent_run",
+        )
+
+    assert error.value.code == (
+        "session_not_active" if transition == "ended" else "mesh_namespace_mismatch"
+    )
+    assert await repo.get("rejected") is None
+    assert await repo.persistent_attribution("rejected") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_state", ["active", "ended", "missing_registry"])
+async def test_pid_write_rechecks_native_authority_without_request_context(tmp_path, native_state):
+    repo, _ = await repo_and_store(tmp_path)
+    store, identity = native_agent(repo.path)
+    command = await repo.create(
+        "printf must-wait-for-admission",
+        status="running",
+        agent_id=identity["logical_agent_id"],
+        logical_agent_id=identity["logical_agent_id"],
+        work_session_id=identity["work_session_id"],
+        session_epoch=identity["session_epoch"],
+        command_type="persistent_recovery",
+    )
+    with store._connect() as db:
+        if native_state == "ended":
+            db.execute("UPDATE logical_agent_work_sessions SET state='ended'")
+        elif native_state == "missing_registry":
+            db.execute("DROP TABLE access_mesh_registry_scope")
+
+    accepted = await repo.set_pid(command.cmd_hash, 12345)
+
+    current = await repo.get(command.cmd_hash)
+    assert accepted is (native_state == "active")
+    assert current.pid == (12345 if accepted else None)
+    assert current.status == ("running" if accepted else "cancelled")
+    if not accepted:
+        assert current.error == "persistent.session_fenced"
+
+
+@pytest.mark.asyncio
+async def test_pid_write_preserves_the_request_namespace(tmp_path):
+    repo, _ = await repo_and_store(tmp_path)
+    store, identity = native_agent(repo.path)
+    admission = NativeWriteAdmission(
+        namespace_id=store.namespace_id,
+        logical_agent_id=identity["logical_agent_id"],
+        work_session_id=identity["work_session_id"],
+        session_epoch=identity["session_epoch"],
+        operation=ManagedOperation.COMMAND_RECOVERY,
+    )
+    command = await repo.create(
+        "printf old-namespace",
+        status="running",
+        agent_id=identity["logical_agent_id"],
+        logical_agent_id=identity["logical_agent_id"],
+        work_session_id=identity["work_session_id"],
+        session_epoch=identity["session_epoch"],
+        command_type="persistent_recovery",
+    )
+    with store._connect() as db:
+        db.execute("UPDATE access_mesh_registry_scope SET namespace_id='other-mesh'")
+
+    with native_write_admission(admission):
+        assert await repo.set_pid(command.cmd_hash, 12345) is False
+
+    current = await repo.get(command.cmd_hash)
+    assert current.status == "cancelled"
+    assert current.pid is None
 
 
 @pytest.mark.asyncio
