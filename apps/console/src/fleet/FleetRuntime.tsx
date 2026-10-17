@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { App } from '../App'
-import type { AccessMeshMutationRequest, ContextReadModel, PersistentAuditReadModel } from '../api/models'
+import type { AccessMeshMutationRequest, ContextReadModel } from '../api/models'
 import { PairingHandoffController } from '../connections/PairingHandoffController'
 import { BrowserConnectionRegistry } from '../connections/registry'
 import { ConnectionRuntimeProvider } from '../connections/runtime'
@@ -14,7 +14,6 @@ import { browserFleetActorFactory } from './actor'
 import { browserFleetIngressEndpoints, type BrowserFleetIngressEndpoint } from './browserIngress'
 import { BrowserFleetProjectionCache } from './cache'
 import { BrowserDirectAuthorityClient } from './directAuthority'
-import { confirmedWritesFromPersistentMutation } from './confirmedWrites'
 import { fleetV1ClientEnabled } from './flags'
 import { FleetConnectionManager } from './manager'
 import { defaultFleetVisibilitySource } from './nativeVisibility'
@@ -60,12 +59,6 @@ async function queryAll<T>(
     cursor = next
   }
   throw new Error('fleet_query_page_limit')
-}
-
-function rawRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
 }
 
 export type FleetRuntimeDependencies = {
@@ -120,7 +113,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
   )
   const mutateAccessMesh = useCallback(async (instanceId: string, body: AccessMeshMutationRequest) => {
     const result = await directAuthority.accessMeshMutation(instanceId, body)
-    // The native screen rereads its own authority. Advisory legacy-cache sync must
+    // The native screen rereads its own authority. Advisory projection sync must
     // never replace an accepted receipt with a cache error or lose its one-time code.
     const runtime = fleetRuntimeRef.current
     if (runtime) void runtime.syncOnce().catch(() => undefined)
@@ -375,36 +368,6 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
           const instance = directInstances.find((item) => item.profile.instanceId === instanceId)
           return instance?.runtime.realtime?.snapshot?.contexts ?? []
         }}
-        loadSlotAudit={async (instanceId, logicalAgentId): Promise<PersistentAuditReadModel[]> => {
-          if (useProjected && adaptiveState) {
-            const source = sourceForRead(instanceId)
-            const runtime = fleetRuntimeRef.current
-            if (!source || !runtime) throw new Error('fleet_slot_audit_unavailable_offline')
-            const values = await queryAll<Record<string, unknown>>(
-              runtime,
-              'audit',
-              source,
-              { logical_agent_id: logicalAgentId },
-            )
-            return values.map((item) => ({
-              id: Number(item.id ?? 0),
-              eventType: String(item.event_type ?? ''),
-              principalId: String(item.principal_id ?? ''),
-              workSessionId: typeof item.work_session_id === 'string'
-                ? item.work_session_id
-                : undefined,
-              sessionEpoch: Number.isInteger(item.session_epoch)
-                ? Number(item.session_epoch)
-                : undefined,
-              payload: rawRecord(item.payload),
-              createdAt: String(item.created_at ?? ''),
-            }))
-          }
-          const instance = directInstances.find((item) => item.profile.instanceId === instanceId)
-          const slot = instance?.runtime.realtime?.snapshot?.persistent?.slots
-            .find((item) => item.logicalAgentId === logicalAgentId)
-          return slot?.audit ?? []
-        }}
         loadTask={async (instanceId, namespace, taskId) => {
           if (useProjected && adaptiveState) {
             const source = sourceForRead(instanceId)
@@ -436,34 +399,10 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
           }
           return directAuthority.task(instanceId, namespace, taskId)
         }}
-        loadManagedSlotStatus={(instanceId, logicalAgentId) => directAuthority.managedSlotStatus(instanceId, logicalAgentId)}
         loadFleetControl={(instanceId) => directAuthority.fleetControl(instanceId)}
         mutateFleetControl={async (instanceId, path, body) => {
           const result = await directAuthority.fleetControlMutation(instanceId, path, body)
           const runtime = fleetRuntimeRef.current
-          if (runtime) void runtime.syncOnce()
-          return result
-        }}
-        mutatePersistent={async (instanceId, path, body) => {
-          const result = await directAuthority.persistentMutation(instanceId, path, body)
-          const runtime = fleetRuntimeRef.current
-          if (result.ok && runtime && cache) {
-            const sourceNodeId = sourceForProfile.get(instanceId)
-            if (sourceNodeId) {
-              const writes = confirmedWritesFromPersistentMutation(
-                sourceNodeId,
-                path,
-                body,
-                result,
-              )
-              if (writes.length > 0) {
-                const next = await cache.putConfirmedWrites(writes)
-                setAdaptiveState((current) => current ? { ...current, cache: next } : current)
-              }
-            }
-          }
-          // Rejections such as revision_conflict are authoritative evidence that the cached
-          // read model is stale too, so request projection convergence after every write attempt.
           if (runtime) void runtime.syncOnce()
           return result
         }}

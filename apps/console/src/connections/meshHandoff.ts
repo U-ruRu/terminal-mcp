@@ -20,8 +20,10 @@ export function readMeshHandoff(storage: Pick<Storage, 'getItem'>, id: string): 
 }
 
 export function beginMeshHandoff(storage: Pick<Storage, 'getItem' | 'setItem'>, id: string, intent: PendingMeshHandoff): void {
+  // A primary transfer may change either controller during this same move.
+  // Node and destination Mesh remain fixed; fresh authenticated reads resolve transport.
   const previous = readMeshHandoff(storage, id)
-  if (previous && Object.keys(intent).some((key) => previous[key as keyof PendingMeshHandoff] !== intent[key as keyof PendingMeshHandoff])) {
+  if (previous && (previous.nodeId !== intent.nodeId || previous.targetMeshId !== intent.targetMeshId)) {
     throw new Error('control_commit_uncertain')
   }
   // Storage failure prevents Detach, so a crash cannot lose the requested target.

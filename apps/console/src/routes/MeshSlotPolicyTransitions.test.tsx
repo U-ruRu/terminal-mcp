@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter,Route,Routes } from 'react-router-dom'
 import { afterEach,expect,test,vi } from 'vitest'
 import { ConsoleHttpError } from '../api/client'
-import type { AccessMeshMutationRequest,ManagedAccessPolicyReadModel,ManagedFleetControlReadModel,PersistentMutationResult } from '../api/models'
+import type { AccessMeshMutationRequest,ManagedAccessPolicyReadModel,ManagedFleetControlReadModel,AccessMutationResult } from '../api/models'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { fleetInstance,meshControl,nativeDefaults,nativeInheritance,nativeSlot } from '../slots/testFixtures'
 import type { MeshAccessPolicyRequest } from './MeshAccessPolicyControls'
@@ -12,7 +12,7 @@ import { ServerSlots } from './ServerSlots'
 function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthority = false) {
   const state = {
     policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1290, rearmAfterSeconds: 180,
-      legacyAdmissionEnabled: false, revision: 2, updatedAt: '2026-10-12T05:00:00Z' } as ManagedAccessPolicyReadModel,
+      revision: 2, updatedAt: '2026-10-12T05:00:00Z' } as ManagedAccessPolicyReadModel,
     slots: [nativeSlot()], defaults: { ...nativeDefaults(), meshPolicySupported: capability, inheritanceSupported: capability,
       inheritance: nativeInheritance('inherit', 'mesh') },
     failAuthority, conflict: false, loseReceipt: false,
@@ -32,11 +32,11 @@ function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthori
     }
     state.policy = { durationSeconds: request.duration_seconds, warningAfterSeconds: request.warning_after_seconds,
       alertAfterSeconds: request.alert_after_seconds, rearmAfterSeconds: request.rearm_after_seconds,
-      legacyAdmissionEnabled: request.legacy_admission_enabled, revision: state.policy.revision + 1, updatedAt: state.policy.updatedAt }
+      revision: state.policy.revision + 1, updatedAt: state.policy.updatedAt }
     if (state.loseReceipt) throw new ConsoleHttpError(0, 'request_timeout')
     return { ok: true, control: control('alpha') }
   })
-  const mutateNative = vi.fn<(id: string, request: AccessMeshMutationRequest) => Promise<PersistentMutationResult>>(async () => ({ ok: true, payload: {} }))
+  const mutateNative = vi.fn<(id: string, request: AccessMeshMutationRequest) => Promise<AccessMutationResult>>(async () => ({ ok: true, payload: {} }))
   const props = { instances: [fleetInstance(), fleetInstance('beta')], loadFleetControl: loadControl, loadAccessMeshSlots: loadSlots,
     loadAccessMeshDefaults: loadDefaults, mutateFleetControl: mutateMesh, mutateAccessMesh: mutateNative }
   render(<I18nProvider><MemoryRouter initialEntries={[route]}><Routes>
@@ -62,7 +62,7 @@ test('saving Mesh policy sends the current revision to its control node', async 
 
   await waitFor(() => expect(env.mutateMesh).toHaveBeenCalledWith('alpha', '/actions/fleet/control/policy', {
     duration_seconds: 10800, warning_after_seconds: 1200, alert_after_seconds: 1290,
-    rearm_after_seconds: 180, legacy_admission_enabled: false, expected_revision: 2,
+    rearm_after_seconds: 180, expected_revision: 2,
   }))
 })
 

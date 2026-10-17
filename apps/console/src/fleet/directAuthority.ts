@@ -1,5 +1,5 @@
 import { ConsoleClient, ConsoleHttpError, type FetchLike } from '../api/client'
-import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, MeshVpnStatus, MeshVpnResult, PersistentMutationResult, TaskReadModel } from '../api/models'
+import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, MeshVpnStatus, MeshVpnResult, TaskReadModel } from '../api/models'
 import type { ProfileRestoreResult } from '../connections/types'
 
 type ConnectedRestore = Extract<ProfileRestoreResult, { status: 'connected' }>
@@ -48,18 +48,6 @@ export class BrowserDirectAuthorityClient {
     body: Record<string, unknown>,
   ): Promise<ManagedFleetMutationResult> {
     return this.withClient(instanceId, (client) => client.fleetControlMutation(path, body))
-  }
-
-  persistentMutation(
-    instanceId: string,
-    path: string,
-    body: Record<string, unknown>,
-  ): Promise<PersistentMutationResult> {
-    return this.withClient(instanceId, (client) => client.persistentMutation(path, body))
-  }
-
-  managedSlotStatus(instanceId: string, logicalAgentId: string) {
-    return this.withClient(instanceId, (client) => client.managedSlotStatus(logicalAgentId))
   }
 
   accessMeshSlots(instanceId: string) {

@@ -1,8 +1,8 @@
 import { ConsoleContractError } from './contracts'
 import type {
   AccessMeshDefaultsReadModel, AccessMeshPolicyReadModel, AccessMeshSlotReadModel,
-  JsonRecord, ManagedSlotPolicyReadModel, ManagedSlotStatusReadModel,
-  ManagedWorkWindowReadModel, PersistentMutationResult, SlotPolicyInheritanceReadModel,
+  JsonRecord,
+  AccessMutationResult, SlotPolicyInheritanceReadModel,
 } from './models'
 
 /** Keep diagnostics to stable public codes; never use server response bodies as messages. */
@@ -73,62 +73,6 @@ export function decodePolicyInheritance(value: unknown, path = '$.inheritance'):
   }
 }
 
-function managedPolicy(value: unknown, path: string): ManagedSlotPolicyReadModel {
-  const item = record(value, path)
-  const policy = {
-    inheritance: decodePolicyInheritance(item.inheritance, path + '.inheritance'),
-    defaultDurationSeconds: integer(item.default_duration_seconds, path + '.default_duration_seconds', 1),
-    warningBeforeExpirySeconds: integer(item.warning_before_expiry_seconds, path + '.warning_before_expiry_seconds'),
-    drainingBeforeExpirySeconds: integer(item.draining_before_expiry_seconds, path + '.draining_before_expiry_seconds'),
-    rearmAfterSeconds: integer(item.rearm_after_seconds, path + '.rearm_after_seconds'),
-    revision: integer(item.revision, path + '.revision', 1),
-  }
-  if (policy.drainingBeforeExpirySeconds > policy.warningBeforeExpirySeconds) throw new ConsoleContractError(path, 'invalid threshold order')
-  return policy
-}
-function managedWindow(value: unknown, path: string): ManagedWorkWindowReadModel {
-  const item = record(value, path)
-  return {
-    workWindowId: text(item.work_window_id, path + '.work_window_id', true),
-    state: text(item.state, path + '.state', true),
-    lifecycle: text(item.lifecycle, path + '.lifecycle', true),
-    openedAt: text(item.opened_at, path + '.opened_at', true),
-    elapsedSeconds: integer(item.elapsed_seconds, path + '.elapsed_seconds'),
-    remainingSeconds: integer(item.remaining_seconds, path + '.remaining_seconds'),
-    initialDurationSeconds: integer(item.initial_duration_seconds, path + '.initial_duration_seconds', 1),
-    effectiveDurationSeconds: integer(item.effective_duration_seconds, path + '.effective_duration_seconds', 1),
-    hardExpiresAt: text(item.hard_expires_at, path + '.hard_expires_at', true),
-    warningBeforeExpirySeconds: integer(item.warning_before_expiry_seconds, path + '.warning_before_expiry_seconds'),
-    drainingBeforeExpirySeconds: integer(item.draining_before_expiry_seconds, path + '.draining_before_expiry_seconds'),
-    rearmAfterSeconds: integer(item.rearm_after_seconds, path + '.rearm_after_seconds'),
-    rearmAt: nullableText(item.rearm_at, path + '.rearm_at'),
-    windowRevision: integer(item.window_revision, path + '.window_revision', 1),
-  }
-}
-
-export function decodeManagedSlotStatus(value: unknown): ManagedSlotStatusReadModel {
-  const root = success(value)
-  const rawSession = root.session === null ? null : record(root.session, '$.session')
-  return {
-    logicalAgentId: text(root.logical_agent_id, '$.logical_agent_id', true),
-    publicName: text(root.public_name, '$.public_name', true),
-    authorityNodeId: text(root.authority_node_id, '$.authority_node_id', true),
-    authorityEpoch: integer(root.authority_epoch, '$.authority_epoch', 1),
-    policy: managedPolicy(root.policy, '$.policy'),
-    window: root.window === null ? null : managedWindow(root.window, '$.window'),
-    session: rawSession === null ? null : {
-      workSessionId: text(rawSession.work_session_id, '$.session.work_session_id', true),
-      sessionEpoch: integer(rawSession.session_epoch, '$.session.session_epoch', 1),
-      role: text(rawSession.role, '$.session.role', true),
-      contractVersion: integer(rawSession.contract_version, '$.session.contract_version', 1),
-      state: text(rawSession.state, '$.session.state', true),
-      startedAt: text(rawSession.started_at, '$.session.started_at', true),
-      endedAt: nullableText(rawSession.ended_at, '$.session.ended_at'),
-      endReason: nullableText(rawSession.end_reason, '$.session.end_reason'),
-    },
-  }
-}
-
 function accessPolicy(value: unknown, path: string): AccessMeshPolicyReadModel {
   const item = record(value, path)
   const policy = {
@@ -163,7 +107,7 @@ function requireNativeInheritance(item: JsonRecord, path: string, slot: boolean)
 function accessSlot(value: unknown, path: string): AccessMeshSlotReadModel {
   const item = record(value, path)
   requireNativeInheritance(item, path, true)
-  if (item.mode !== 'legacy' && item.mode !== 'persistent') throw new ConsoleContractError(path + '.mode', 'unsupported mode')
+  if (item.mode !== 'temporary' && item.mode !== 'persistent') throw new ConsoleContractError(path + '.mode', 'unsupported mode')
   const cycle = record(item.session_lifecycle, path + '.session_lifecycle')
   return {
     inheritance: decodePolicyInheritance(item.inheritance, path + '.inheritance'),
@@ -217,11 +161,10 @@ export function decodeAccessMeshDefaults(value: unknown): AccessMeshDefaultsRead
     writeTarget: root.write_target === undefined ? undefined : choice(root.write_target, ['fleet_control', 'access_defaults'] as const, '$.write_target'),
     revision: integer(root.revision, '$.revision', 1),
     policy: accessPolicy(root.policy, '$.policy'),
-    legacyEnabled: flag(root.legacy_enabled, '$.legacy_enabled'),
   }
 }
 
-export function decodeSlotMutation(value: unknown): PersistentMutationResult {
+export function decodeSlotMutation(value: unknown): AccessMutationResult {
   const root = record(value, '$')
   return {
     ok: flag(root.ok, '$.ok'),

@@ -1,7 +1,7 @@
 import { ConsoleHttpError } from '../api/client'
 import { useRef, useState } from 'react'
 
-import type { AccessMeshDefaultsReadModel, AccessMeshMutationRequest, AccessMeshPolicyReadModel, AccessMeshSlotReadModel, PersistentMutationResult } from '../api/models'
+import type { AccessMeshDefaultsReadModel, AccessMeshMutationRequest, AccessMeshPolicyReadModel, AccessMeshSlotReadModel, AccessMutationResult } from '../api/models'
 import { ConfirmationDialog, IconButton, IconButtonRow } from '../components/UiPrimitives'
 import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
@@ -10,7 +10,7 @@ import { durationSecondsValue, durationValue, type DurationValue } from '../slot
 import { newSlotOperationKey } from '../slots/operationJournal'
 import { PolicyInheritance, type PolicyInheritanceDisplay } from '../slots/PolicyInheritance'
 
-export type AccessMeshActionResult = { result: PersistentMutationResult; confirmed: boolean }
+export type AccessMeshActionResult = { result: AccessMutationResult; confirmed: boolean }
 export type AccessMeshActionExecutor = (request: AccessMeshMutationRequest) => Promise<AccessMeshActionResult>
 type PolicyDraft = {
   revision: number
@@ -21,7 +21,6 @@ type PolicyDraft = {
   rearm: DurationValue
   rearmEnabled: boolean
   releaseOnEnd: 'mode' | 'yes' | 'no'
-  legacyEnabled?: boolean
 }
 type NativeSlot = AccessMeshSlotReadModel & { inheritance?: PolicyInheritanceDisplay; windowPolicy?: AccessMeshPolicyReadModel | null }
 
@@ -30,7 +29,6 @@ type FormProps = {
   revision: number
   inheritance?: PolicyInheritanceDisplay
   slotId?: string
-  legacyEnabled?: boolean
   policySupported: boolean
   canMutate: boolean
   externalBusy?: boolean
@@ -47,7 +45,7 @@ function makeDraft(props: FormProps): PolicyDraft {
     revision: props.revision, base: policyKey(props.policy, props.revision, props.inheritance),
     duration: durationValue(props.policy.durationSeconds), warning: durationValue(props.policy.warningSeconds),
     draining: durationValue(props.policy.drainingSeconds), rearm: durationValue(props.policy.cooldownSeconds),
-    rearmEnabled: props.policy.rearmEnabled, legacyEnabled: props.legacyEnabled,
+    rearmEnabled: props.policy.rearmEnabled,
     releaseOnEnd: props.policy.releaseOnEnd === null ? 'mode' : props.policy.releaseOnEnd ? 'yes' : 'no',
   }
 }
@@ -86,7 +84,7 @@ function NativePolicyForm(props: FormProps) {
     const policy = { duration_seconds: duration, warning_seconds: warning, draining_seconds: draining, cooldown_seconds: rearm, rearm_enabled: draft.rearmEnabled, release_on_end: draft.releaseOnEnd === 'mode' ? null : draft.releaseOnEnd === 'yes' }
     void perform(props.slotId
       ? { action: 'policy', slot_id: props.slotId, expected_revision: draft.revision, policy, idempotency_key: newSlotOperationKey() }
-      : { action: 'defaults', expected_revision: draft.revision, policy, ...(draft.legacyEnabled === undefined ? {} : { legacy_enabled: draft.legacyEnabled }), idempotency_key: newSlotOperationKey() })
+      : { action: 'defaults', expected_revision: draft.revision, policy, idempotency_key: newSlotOperationKey() })
   }
 
   const reset = () => {
@@ -115,7 +113,6 @@ function NativePolicyForm(props: FormProps) {
     <label className="policy-toggle"><input type="checkbox" checked={draft.rearmEnabled} disabled={disabled} onChange={(event) => setEdited({ ...draft, rearmEnabled: event.target.checked })} /><span>{t('slots.native.rearmEnabled')}</span></label>
     <label className="ui-field"><span>{t('slots.native.releaseOnEnd')}</span><select aria-label={t('slots.native.releaseOnEnd')} value={draft.releaseOnEnd} disabled={disabled} onChange={(event) => setEdited({ ...draft, releaseOnEnd: event.target.value as PolicyDraft['releaseOnEnd'] })}><option value="mode">{t('slots.native.modeDefault')}</option><option value="yes">{t('slots.yes')}</option><option value="no">{t('slots.no')}</option></select></label>
 
-    {draft.legacyEnabled === undefined ? null : <label className="policy-toggle"><input type="checkbox" checked={draft.legacyEnabled} disabled={disabled} onChange={(event) => setEdited({ ...draft, legacyEnabled: event.target.checked })} /><span>{t('slots.legacyAdmission')}</span></label>}
     {conflict ? <p role="alert" className="attention-strip">{t('slots.managed.conflict')}</p> : null}
     {notice ? <p role="status" className="attention-strip">{notice}</p> : null}
     <IconButtonRow className="server-actions policy-actions">
@@ -134,7 +131,7 @@ export function AccessMeshDefaultsControls({ defaults, ...props }: {
   execute: AccessMeshActionExecutor
   refresh: () => void
 }) {
-  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} legacyEnabled={defaults.legacyEnabled} policySupported={Boolean(defaults.managementContractVersion === 2 && defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
+  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} policySupported={Boolean(defaults.managementContractVersion === 2 && defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
 }
 
 export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute, refresh }: {

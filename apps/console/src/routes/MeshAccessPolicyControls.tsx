@@ -11,15 +11,14 @@ export type MeshAccessPolicyRequest = {
   warning_after_seconds: number
   alert_after_seconds: number
   rearm_after_seconds: number
-  legacy_admission_enabled: boolean
   expected_revision: number
 }
 export type MeshAccessPolicyOutcome = { confirmed: boolean; conflict?: boolean }
-type Draft = { revision: number; base: string; duration: DurationValue; warning: DurationValue; alert: DurationValue; rearm: DurationValue; legacy: boolean }
+type Draft = { revision: number; base: string; duration: DurationValue; warning: DurationValue; alert: DurationValue; rearm: DurationValue }
 function draftFor(policy: ManagedAccessPolicyReadModel): Draft {
   return { revision: policy.revision, base: JSON.stringify(policy), duration: durationValue(policy.durationSeconds),
     warning: durationValue(policy.warningAfterSeconds), alert: durationValue(policy.alertAfterSeconds),
-    rearm: durationValue(policy.rearmAfterSeconds), legacy: policy.legacyAdmissionEnabled }
+    rearm: durationValue(policy.rearmAfterSeconds) }
 }
 
 
@@ -49,7 +48,7 @@ export function MeshAccessPolicyControls({ policy, canMutate, externalBusy, auth
     lock.current = true; setBusy(true); setNotice('')
     try {
       const outcome = await save({ duration_seconds: duration, warning_after_seconds: warning, alert_after_seconds: alert,
-        rearm_after_seconds: rearm, legacy_admission_enabled: draft.legacy, expected_revision: draft.revision })
+        rearm_after_seconds: rearm, expected_revision: draft.revision })
       if (outcome.confirmed) { setEdited(null); setNotice(t('slots.managed.confirmed')) }
       else setNotice(t(outcome.conflict ? 'slots.managed.conflict' : 'slots.managed.confirmationPending'))
     } catch { setNotice(t('slots.managed.uncertain')) }
@@ -66,7 +65,6 @@ export function MeshAccessPolicyControls({ policy, canMutate, externalBusy, auth
       <DurationField label={t('slots.alertAfterSeconds')} value={draft.alert} disabled={disabled} onChange={(alert) => setEdited({ ...draft, alert })} />
       <DurationField label={t('slots.rearmAfterSeconds')} value={draft.rearm} disabled={disabled} onChange={(rearm) => setEdited({ ...draft, rearm })} />
     </div>
-    <label className="policy-toggle"><input type="checkbox" checked={draft.legacy} disabled={disabled} onChange={(event) => setEdited({ ...draft, legacy: event.target.checked })} /><span>{t('slots.legacyAdmission')}</span></label>
     {conflict ? <p role="alert" className="attention-strip">{t('slots.managed.conflict')}</p> : null}
     {notice ? <p role="status" className="attention-strip">{notice}</p> : null}
     <IconButtonRow className="server-actions policy-actions">

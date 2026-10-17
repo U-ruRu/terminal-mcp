@@ -20,7 +20,7 @@ export function nativeSlot(id = 'alpha'): AccessMeshSlotReadModel {
 }
 export function nativeDefaults(): AccessMeshDefaultsReadModel {
   const inheritance = nativeInheritance(); inheritance.parent = null; inheritance.resetSupported = false
-  return { managementContractVersion: 2, inheritanceSupported: true, meshPolicySupported: false, revision: 2, legacyEnabled: false, policy: nativeSlot().policy, inheritance, writeTarget: 'access_defaults' }
+  return { managementContractVersion: 2, inheritanceSupported: true, meshPolicySupported: false, revision: 2, policy: nativeSlot().policy, inheritance, writeTarget: 'access_defaults' }
 }
 export function fleetInstance(id = 'alpha'): FleetInstanceView {
   return {

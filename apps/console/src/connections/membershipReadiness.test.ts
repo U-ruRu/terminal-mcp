@@ -14,3 +14,9 @@ test('matching local revisions cannot confirm a newer desired authority revision
   authority.nodes[1].appliedTopologyRevision = 2
   expect(membershipReady(ready('beta'), authority, 'beta', 'mesh-prod')).toBe(false)
 })
+
+test('a paired follower confirms the same Mesh after fresh applied-state reads', () => {
+  const follower = { ...ready('beta'), fleetId: 'retained-transport-label' }
+  expect(membershipReady(ready(), follower, 'alpha', 'mesh-prod')).toBe(true)
+  expect(membershipReady(ready(), follower, 'alpha', 'another-mesh')).toBe(false)
+})

@@ -1,4 +1,4 @@
-import { decodeManagedSlotStatus, decodeAccessMeshSlot, decodeAccessMeshSlots, decodeAccessMeshDefaults, decodeSlotMutation, publicErrorCode } from './slotContracts'
+import { decodeAccessMeshSlot, decodeAccessMeshSlots, decodeAccessMeshDefaults, decodeSlotMutation, publicErrorCode } from './slotContracts'
 import {
   ConsoleContractError,
   decodeActivityFeed,
@@ -14,7 +14,6 @@ import type {
   AccessMeshDefaultsReadModel,
   AccessMeshMutationRequest,
   AccessMeshSlotReadModel,
-  ManagedSlotStatusReadModel,
   ActivityFeedReadModel,
   AgentCollectionReadModel,
   ConsoleSnapshotReadModel,
@@ -24,7 +23,7 @@ import type {
   ManagedFleetMutationResult,
   MeshVpnResult,
   MeshVpnStatus,
-  PersistentMutationResult,
+  AccessMutationResult,
   TaskCollectionReadModel,
   TaskReadModel,
   WebSocketTicketReadModel,
@@ -139,20 +138,6 @@ export class ConsoleClient {
     )
   }
 
-  async persistentMutation(path: string, body: Record<string, unknown>): Promise<PersistentMutationResult> {
-    if (!path.startsWith('/actions/persistent/')) throw new Error('invalid_persistent_path')
-    const raw = await this.request(path, { method: 'POST', body: JSON.stringify(body) })
-    return decodeSlotMutation(raw)
-  }
-
-  async managedSlotStatus(logicalAgentId: string): Promise<ManagedSlotStatusReadModel> {
-    const status = decodeManagedSlotStatus(await this.request('/actions/persistent/managed/status', {
-      method: 'POST', body: JSON.stringify({ logical_agent_id: logicalAgentId }),
-    }))
-    if (status.logicalAgentId !== logicalAgentId) throw new ConsoleContractError('$.logical_agent_id', 'response belongs to another slot')
-    return status
-  }
-
   async accessMeshDefaults(): Promise<AccessMeshDefaultsReadModel> {
     return decodeAccessMeshDefaults(await this.request('/actions/access/defaults'))
   }
@@ -190,7 +175,7 @@ export class ConsoleClient {
     throw new ConsoleContractError('$.next_cursor', 'slot page limit reached')
   }
 
-  async accessMeshMutation(body: AccessMeshMutationRequest): Promise<PersistentMutationResult> {
+  async accessMeshMutation(body: AccessMeshMutationRequest): Promise<AccessMutationResult> {
     return decodeSlotMutation(await this.request('/actions/access/mutate', {
       method: 'POST', body: JSON.stringify(body),
     }))

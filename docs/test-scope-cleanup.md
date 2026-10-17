@@ -197,3 +197,15 @@ lost prepare replies, blocked busy admission without a stranded source fence,
 retry after ingress rotation, large registry payloads and one-time conversion
 of a single populated historical topology. No old multi-authority runtime is
 retained when a historical topology requires explicit resolution.
+
+
+## Console uses one native Mesh contract
+
+The complete Console suite passes 186 tests in 69 files. ESLint and production
+build pass. The only build advisory is the existing large-bundle warning.
+Removed ManagedWorkSessions, SlotPolicyControls and confirmedWrites tests belonged
+to the retired persistent-session HTTP/UI path. Native Access policy, slot
+mutation continuation, cache scope and local projection modules retain those
+current responsibilities. Primary handoff and membership readiness checks cover
+a paired follower entry, aborted-operation retry and a changed target controller
+while retaining the app-selected Mesh identity.

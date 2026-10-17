@@ -1,5 +1,5 @@
 import { ConsoleClient, type FetchLike } from '../api/client'
-import type { ActivityFeedReadModel, PersistentMutationResult, TaskReadModel } from '../api/models'
+import type { ActivityFeedReadModel, TaskReadModel } from '../api/models'
 import { ConnectionManager } from '../auth/pairing'
 import { PairingTransport } from '../auth/transport'
 import { BrowserCredentialVault, type KeyValueStorage } from '../auth/vault'
@@ -146,18 +146,6 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
       throw new Error('instance_not_connected:' + this.instanceId)
     }
     return this.client.task(namespace, taskId)
-  }
-
-  async persistentMutation(path: string, body: Record<string, unknown>): Promise<PersistentMutationResult> {
-    // Realtime/read freshness and authenticated HTTP write reachability are separate planes.
-    // Keep mutations available while the authenticated client exists; authority validation
-    // decides whether the revisioned operation is legal.
-    if (!this.client || this.state.authStatus !== 'connected') {
-      throw new Error('instance_not_connected:' + this.instanceId)
-    }
-    const result = await this.client.persistentMutation(path, body)
-    this.engine?.applyPersistentMutation(result)
-    return result
   }
 
   async retryNow(): Promise<void> {

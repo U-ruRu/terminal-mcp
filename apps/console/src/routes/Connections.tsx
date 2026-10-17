@@ -14,13 +14,14 @@ import { beginMeshCreate, finishMeshCreate, readPendingMeshCreate } from '../con
 import { isConverged, membershipReady, nativeTrustReady, MembershipMutationLifetime } from '../connections/membershipReadiness'
 import { isAutonomous, joinPreflightError } from '../connections/joinPreflight'
 import { beginMeshHandoff, finishMeshHandoff, readMeshHandoff } from '../connections/meshHandoff'
-import { clearCachedFleetControl, isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
+import { changeMeshPrimary } from '../connections/meshPrimary'
+import { controlNamespace, clearCachedFleetControl, isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { ConfirmationDialog, FeedbackState, IconButton, IconButtonRow } from '../components/UiPrimitives'
 import { returnToState } from '../navigation/context'
-import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
+import { meshSlotsRoute, meshRoute, serverRoute } from '../navigation/routes'
 import { MeshVpnPanel } from './MeshVpnPanel'
 
 
@@ -63,11 +64,14 @@ function controlErrorCode(cause: unknown): string {
   const value = cause && typeof cause === 'object' && 'code' in cause ? (cause as { code: unknown }).code : undefined
   if (typeof value === 'string' && /^[a-zA-Z0-9_:-]{1,120}$/.test(value)) return value
   if (cause instanceof Error && cause.message === 'mesh_create_reconcile_required') return cause.message
+  if (cause instanceof Error && cause.message === 'mesh_primary_handoff_pending') return cause.message
   if (cause instanceof Error && cause.message === 'storage_unavailable') return cause.message
   return 'control_request_failed'
 }
 
 function recoveryKey(error: string): MessageKey {
+  if (error === 'mesh_active_work') return 'connections.recovery.activeWork'
+  if (error === 'mesh_primary_handoff_pending') return 'connections.recovery.primary'
   if (error.includes('fleet_id_mismatch')) return 'connections.recovery.fleet'
   if (error.includes('management_contract') || error.includes('contract_')) return 'connections.recovery.contract'
   if (error === 'mesh_create_reconcile_required') return 'connections.recovery.pendingCreate'
@@ -164,6 +168,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   const [newMeshName, setNewMeshName] = useState('Mesh')
   const [newMeshControlInstanceId, setNewMeshControlInstanceId] = useState('')
   const [selectedMeshId, setSelectedMeshId] = useState('')
+  const [primaryTargets, setPrimaryTargets] = useState<Record<string, string>>({})
   // Independent control authorities must never share a UI write lock.
   const [busyAuthorities, setBusyAuthorities] = useState<Record<string, number>>({})
   const markBusy = useCallback((instanceId: string, change: number) => {
@@ -189,8 +194,8 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         const observed = controls[profile.instanceId]
         const local = observed?.freshness === 'fresh' ? observed.control : undefined
         const node = local?.nodes.find((item) => item.nodeId === pending.nodeId)
-        if (local?.controlNodeId === pending.targetControlId && local.fleetId === pending.targetFleetId
-          && node?.meshId === pending.targetMeshId && isConverged(node) && nativeTrustReady(local, pending.targetMeshId)) {
+        if (local?.managed && node?.state === 'active'
+          && node.meshId === pending.targetMeshId && isConverged(node) && nativeTrustReady(local, pending.targetMeshId)) {
           finishMeshHandoff(localStorage, profile.instanceId, pending.targetMeshId)
           setMembershipMutations((value) => ({ ...value, [profile.instanceId]: { targetMeshId: pending.targetMeshId, phase: 'confirmed' } }))
         } else {
@@ -267,9 +272,10 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     for (const profile of profiles) {
       const observation = controls[profile.instanceId]
       if (!observation?.control?.managed) continue
-      const key = observation.control.fleetId + ':' + observation.control.controlNodeId
+      const key = controlNamespace(observation.control)
       const current = grouped.get(key)
-      if (!current || score(observation as ControlObservation & { control: ManagedFleetControlReadModel }) > score(current)) {
+      if (!current || observation.control.revisions.topology > current.control.revisions.topology
+        || observation.control.revisions.topology === current.control.revisions.topology && score(observation as ControlObservation & { control: ManagedFleetControlReadModel }) > score(current)) {
         grouped.set(key, observation as ControlObservation & { control: ManagedFleetControlReadModel })
       }
     }
@@ -285,7 +291,13 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
           || Boolean(authorityNode?.origin && normalizedOrigin(candidate.origin) === normalizedOrigin(authorityNode.origin))
         )
       ))
-      return { control, freshness: observation.freshness, observedAt: observation.observedAt, profile }
+      const pairedMember = profile ?? profiles.find((candidate) => {
+        const local = controls[candidate.instanceId]?.control
+        return states[candidate.instanceId]?.status === 'connected' && local
+          && controlNamespace(local) === controlNamespace(control)
+          && control.nodes.some((node) => node.nodeId === local.nodeId && node.state === 'active')
+      })
+      return { control, freshness: observation.freshness, observedAt: observation.observedAt, profile: pairedMember }
     })
   }, [controls, profiles, states])
 
@@ -297,8 +309,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     const observed = controls[profile.instanceId]?.control
     if (observed?.managed) {
       const exact = authorityViews.find((view) => (
-        view.control.fleetId === observed.fleetId
-        && view.control.controlNodeId === observed.controlNodeId
+        controlNamespace(view.control) === controlNamespace(observed)
       ))
       if (exact) return exact
     }
@@ -662,10 +673,14 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       if (!authorityApi) return { ok: false, error: 'control_write_unavailable' }
       const [targetControl, authorityControl] = await Promise.all([targetApi.fleetControl(), authorityApi.fleetControl()])
       const handoff = readMeshHandoff(localStorage, instanceId)
-      if (handoff && (handoff.nodeId !== targetControl.nodeId || handoff.targetMeshId !== meshId
-        || handoff.targetControlId !== authorityControl.controlNodeId || handoff.targetFleetId !== authorityControl.fleetId)) {
+      if (handoff && (handoff.nodeId !== targetControl.nodeId || handoff.targetMeshId !== meshId)) {
         return { ok: false, code: 'control_commit_uncertain', error: 'control_commit_uncertain' }
       }
+      if (!authorityControl.managed || !authorityControl.meshes.some((mesh) => mesh.meshId === meshId && mesh.adopted)) {
+        return { ok: false, code: 'membership_unknown', error: 'membership_unknown' }
+      }
+      if (handoff) beginMeshHandoff(localStorage, instanceId, { ...handoff,
+        targetControlId: authorityControl.controlNodeId, targetFleetId: authorityControl.fleetId })
       const preflightError = joinPreflightError(targetControl, authorityControl)
       if (preflightError) {
         const failure = { ok: false, code: preflightError, error: preflightError }
@@ -717,6 +732,50 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       return failure
     }
     }, [authorityForMesh, client, mutateControl, projectMembershipControl, refreshControls])
+  async function transferPrimary(authority: AuthorityView, meshId: string, nodeId: string): Promise<ManagedFleetMutationResult> {
+    const api = authority.profile ? client(authority.profile.instanceId) : null
+    if (!api) return { ok: false, error: 'control_write_unavailable' }
+    try {
+      const result = await changeMeshPrimary({ fleetControl: () => api.fleetControl(),
+        fleetControlMutation: (path, body) => mutateControl(authority, path, body),
+      }, localStorage, meshId, nodeId)
+      if (!result.ok) setControlError(result.code ?? result.error ?? 'mesh_primary_handoff_pending')
+      void refreshControls()
+      return result
+    } catch (cause) {
+      const failure = { ok: false, error: controlErrorCode(cause) }
+      setControlError(failure.error)
+      return failure
+    }
+  }
+
+  async function changeSelectedPrimary() {
+    if (!selectedAuthority || !selectedMesh) return
+    const target = primaryTargets[selectedMesh.meshId] ?? selectedAuthority.control.controlNodeId
+    setMeshMutationPhase('pending')
+    const result = await transferPrimary(selectedAuthority, selectedMesh.meshId, target)
+    setMeshMutationPhase(result.ok ? 'confirmed' : 'failed')
+  }
+
+  async function authorityBeforeDeparture(authority: AuthorityView, nodeId: string): Promise<{ authority?: AuthorityView; failure?: ManagedFleetMutationResult }> {
+    const api = authority.profile ? client(authority.profile.instanceId) : null
+    if (!api) return { failure: { ok: false, error: 'control_write_unavailable' } }
+    const control = await api.fleetControl()
+    const node = control.nodes.find((item) => item.nodeId === nodeId && item.state !== 'detached')
+    if (!node?.meshId) return { failure: { ok: false, error: 'membership_unknown' } }
+    const current = { ...authority, control, freshness: 'fresh' as const }
+    const meshId = node.meshId
+    const remaining = control.nodes.filter((item) => item.nodeId !== nodeId && item.meshId === node.meshId && item.state === 'active')
+    if (control.controlNodeId !== nodeId || remaining.length === 0) return { authority: current }
+    const selected = remaining.find((item) => item.nodeId === primaryTargets[meshId])
+      ?? [...remaining].sort((a, b) => a.nodeId.localeCompare(b.nodeId))[0]
+    const transferred = await transferPrimary(current, node.meshId, selected.nodeId)
+    if (!transferred.ok || !transferred.control || transferred.control.controlNodeId !== selected.nodeId) {
+      return { failure: transferred.ok ? { ok: false, error: 'mesh_primary_handoff_pending' } : transferred }
+    }
+    return { authority: { ...current, control: transferred.control } }
+  }
+
   async function detachFromMesh(instanceId: string): Promise<ManagedFleetMutationResult> {
     const profile = profiles.find((item) => item.instanceId === instanceId)
     if (!profile) return { ok: false, error: 'membership_unknown' }
@@ -724,9 +783,11 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     if (!sourceAuthority?.control.managed) return { ok: false, error: 'control_write_unavailable' }
     const node = nodeForProfile(profile, sourceAuthority.control, controls[instanceId])
     if (!node?.meshId) return { ok: false, error: 'membership_unknown' }
-    const result = await mutateControl(sourceAuthority, '/actions/fleet/control/nodes/detach', {
+    const prepared = await authorityBeforeDeparture(sourceAuthority, node.nodeId)
+    if (!prepared.authority) return prepared.failure ?? { ok: false, error: 'mesh_primary_handoff_pending' }
+    const result = await mutateControl(prepared.authority, '/actions/fleet/control/nodes/detach', {
       node_id: node.nodeId,
-      expected_topology_revision: sourceAuthority.control.revisions.topology,
+      expected_topology_revision: prepared.authority.control.revisions.topology,
     })
     if (result.ok && result.control) projectMembershipControl(instanceId, result.control, node.nodeId)
     return result
@@ -742,19 +803,6 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     }
     const node = nodeForProfile(profile, sourceAuthority.control, controls[instanceId])
     if (!node?.meshId) return { ok: false, error: 'membership_unknown' }
-    const sameAuthority = (
-      sourceAuthority.control.fleetId === targetAuthority.control.fleetId
-      && sourceAuthority.control.controlNodeId === targetAuthority.control.controlNodeId
-    )
-    if (sameAuthority) {
-      const result = await mutateControl(sourceAuthority, '/actions/fleet/control/nodes/move', {
-        node_id: node.nodeId,
-        target_mesh_id: targetMeshId,
-        expected_topology_revision: sourceAuthority.control.revisions.topology,
-      })
-      if (result.ok && result.control) projectMembershipControl(instanceId, result.control, node.nodeId)
-      return result
-    }
     const localApi = client(instanceId)
     const destinationApi = targetAuthority.profile ? client(targetAuthority.profile.instanceId) : null
     const sourceApi = sourceAuthority.profile ? client(sourceAuthority.profile.instanceId) : null
@@ -783,9 +831,12 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         if (local.controlNodeId !== source.controlNodeId) return { ok: false, error: 'already_managed_by_other_authority' }
         // Detach uses its own fresh revision. An ambiguous POST is resolved by
         // the target's direct read; never release a second authority speculatively.
-        await mutateControl({ ...sourceAuthority, control: source }, '/actions/fleet/control/nodes/detach', {
-          node_id: node.nodeId, expected_topology_revision: source.revisions.topology,
+        const prepared = await authorityBeforeDeparture({ ...sourceAuthority, control: source }, node.nodeId)
+        if (!prepared.authority) return prepared.failure ?? { ok: false, error: 'mesh_primary_handoff_pending' }
+        const departure = await mutateControl(prepared.authority, '/actions/fleet/control/nodes/detach', {
+          node_id: node.nodeId, expected_topology_revision: prepared.authority.control.revisions.topology,
         })
+        if (!departure.ok && !/^(control_commit_uncertain|http_5\d\d|network_error|timeout|request_timeout)$/.test(departure.code ?? departure.error ?? '')) return departure
       }
       const detached = await localApi.fleetControl()
       if (detached.nodeId !== node.nodeId || !isAutonomous(detached)) {
@@ -982,7 +1033,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         <p className="muted">{routeMeshId ? t('connections.manageHint') : t('fleet.meshesHint')}</p>
         {selectedMesh && routeMeshId ? (
           <div className="connection-actions">
-            <Link className="nav-link" to={meshPersistentRoute(selectedMesh.meshId)}>{t('nav.slots')}</Link>
+            <Link className="nav-link" to={meshSlotsRoute(selectedMesh.meshId)}>{t('nav.slots')}</Link>
           </div>
         ) : null}
         {routeMeshId && selectedMesh ? (
@@ -1046,7 +1097,19 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                 onChange={(event) => setMeshName(event.target.value)}
               />
             </label>
+            <label className="ui-field">
+              <span>{t('connections.controlNode')}</span>
+              <select aria-label={t('connections.controlNode')} value={primaryTargets[selectedMesh.meshId] ?? authoritative?.controlNodeId ?? ''}
+                disabled={busyFor(writeProfile?.instanceId) || !writeProfile}
+                onChange={(event) => setPrimaryTargets((value) => ({ ...value, [selectedMesh.meshId]: event.target.value }))}>
+                {selectedMembers.filter((node) => node.state === 'active').map((node) => <option key={node.nodeId} value={node.nodeId}>
+                  {profiles.find((profile) => nodeForProfile(profile, authoritative, controls[profile.instanceId])?.nodeId === node.nodeId)?.displayName ?? node.nodeId}
+                </option>)}
+              </select>
+            </label>
+            <p className="muted">{t('connections.primaryHint')}</p>
             <IconButtonRow className="connection-actions">
+              <IconButton icon="save" variant="primary" label={t('connections.changePrimary')} disabled={busyFor(writeProfile?.instanceId) || !writeProfile || !primaryTargets[selectedMesh.meshId] || primaryTargets[selectedMesh.meshId] === authoritative?.controlNodeId} onClick={() => void changeSelectedPrimary()} />
               <IconButton icon="edit" variant="secondary" label={t('connections.renameMesh')} disabled={busyFor(writeProfile?.instanceId) || !writeProfile} onClick={() => void renameMesh()} />
               <IconButton icon="delete" variant="destructive" label={t('connections.deleteMesh')} disabled={busyFor(writeProfile?.instanceId) || !writeProfile} onClick={() => { if (selectedMesh) setConfirmation({ kind: 'delete-mesh', label: selectedMesh.displayName }) }} />
             </IconButtonRow>

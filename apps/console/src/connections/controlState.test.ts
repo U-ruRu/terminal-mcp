@@ -3,6 +3,7 @@ import { beforeEach,describe,expect,test } from 'vitest'
 import type { ManagedFleetControlReadModel } from '../api/models'
 import {
 FLEET_CONTROL_CACHE_KEY,
+isFleetControlRevisionRegression,
 loadCachedFleetControl,
 loadCachedFleetControlForProfile,
 propagateCachedFleetControl,
@@ -35,7 +36,6 @@ const control = (nodeId: string, revision = 4): ManagedFleetControlReadModel => 
     warningAfterSeconds: 1200,
     alertAfterSeconds: 1320,
     rearmAfterSeconds: 180,
-    legacyAdmissionEnabled: false,
     revision,
     updatedAt: '2026-10-02T06:00:00Z',
   },
@@ -93,4 +93,14 @@ describe('fleet control cache', () => {
     expect(projected?.control.nodes.find((node) => node.nodeId === 'firstbyte')?.meshId).toBeUndefined()
   })
 
+})
+
+
+test('primary transfer updates the same Mesh while stale former-primary reads cannot roll it back', () => {
+  const prior = control('main')
+  const transferred = { ...prior, controlNodeId: 'firstbyte', revisions: { ...prior.revisions, topology: 3 } }
+  saveCachedFleetControl('main-profile', prior, 100)
+  propagateCachedFleetControl(transferred, 200)
+  expect(loadCachedFleetControl('main-profile')?.control.controlNodeId).toBe('firstbyte')
+  expect(isFleetControlRevisionRegression(prior, transferred)).toBe(true)
 })

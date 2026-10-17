@@ -20,8 +20,12 @@ export function membershipReady(
   nodeId: string,
   meshId: string,
 ): boolean {
-  if (!local || !authority || local.nodeId !== nodeId || authority.nodeId !== authority.controlNodeId
-    || local.fleetId !== authority.fleetId || local.controlNodeId !== authority.controlNodeId) return false
+  if (!local || !authority || local.nodeId !== nodeId
+    || local.controlNodeId !== authority.controlNodeId) return false
+  const entry = authority.nodes.find((node) => node.nodeId === authority.nodeId)
+  const primary = authority.nodes.find((node) => node.nodeId === authority.controlNodeId)
+  if (entry?.state !== 'active' || entry.meshId !== meshId
+    || primary?.state !== 'active' || primary.meshId !== meshId) return false
   const applied = local.nodes.find((node) => node.nodeId === nodeId)
   const desired = authority.nodes.find((node) => node.nodeId === nodeId)
   return Boolean(applied && desired && applied.state === 'active' && desired.state === 'active'

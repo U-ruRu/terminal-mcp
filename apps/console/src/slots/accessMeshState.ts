@@ -2,13 +2,13 @@ import { connectionAuthorityScope } from '../connections/authorityScope'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConsoleHttpError } from '../api/client'
-import type { AccessMeshDefaultsReadModel, AccessMeshMutationRequest, AccessMeshSlotReadModel, PersistentMutationResult } from '../api/models'
+import type { AccessMeshDefaultsReadModel, AccessMeshMutationRequest, AccessMeshSlotReadModel, AccessMutationResult } from '../api/models'
 import { ConsoleOperationError } from '../api/slotContracts'
 import type { FleetInstanceView } from '../fleet/types'
 
 export type AccessMeshSlotsLoader = (instanceId: string) => Promise<AccessMeshSlotReadModel[]>
 export type AccessMeshDefaultsLoader = (instanceId: string) => Promise<AccessMeshDefaultsReadModel>
-export type AccessMeshMutator = (instanceId: string, request: AccessMeshMutationRequest) => Promise<PersistentMutationResult>
+export type AccessMeshMutator = (instanceId: string, request: AccessMeshMutationRequest) => Promise<AccessMutationResult>
 export type SlotReadFailure = { kind: 'unsupported' | 'disabled' | 'denied' | 'failed'; code: string }
 export type AccessMeshReadState = {
   slots?: AccessMeshSlotReadModel[]

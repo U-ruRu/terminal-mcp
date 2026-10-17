@@ -53,10 +53,10 @@ export function meshRoute(meshId: string): string {
   return `/meshes/${part(meshId)}`
 }
 
-export function meshPersistentRoute(meshId: string): string {
-  return `${meshRoute(meshId)}/persistent`
+export function meshSlotsRoute(meshId: string): string {
+  return `${meshRoute(meshId)}/slots`
 }
 
-export function meshPersistentSlotRoute(meshId: string, logicalAgentId: string): string {
-  return `${meshPersistentRoute(meshId)}/${part(logicalAgentId)}`
+export function meshSlotRoute(meshId: string, logicalAgentId: string): string {
+  return `${meshSlotsRoute(meshId)}/${part(logicalAgentId)}`
 }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { Link } from 'react-router-dom'
 
-import type { ManagedFleetControlReadModel, PersistentMutationResult } from '../api/models'
+import type { ManagedFleetControlReadModel } from '../api/models'
 import { FleetDashboard, type FleetServerGroup } from '../components/FleetDashboard'
 import { FeedbackState } from '../components/UiPrimitives'
 import type { FleetReadModel } from '../fleet/readModel'
@@ -24,7 +24,6 @@ export function Overview({ model, instances = [], loadFleetControl: sourceContro
   model: FleetReadModel
   instances?: FleetInstanceView[]
   loadFleetControl?: (instanceId: string) => Promise<ManagedFleetControlReadModel>
-  mutatePersistent?: (instanceId: string, path: string, body: Record<string, unknown>) => Promise<PersistentMutationResult>
 }) {
   const { t, number } = useI18n()
   const [observations, setObservations] = useState<MeshObservation[]>([])

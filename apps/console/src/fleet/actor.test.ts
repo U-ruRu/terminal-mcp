@@ -1,25 +1,8 @@
 import { expect,test,vi } from 'vitest'
 
-import type { KeyValueStorage } from '../auth/vault'
 import type { ConnectionProfile } from '../connections/types'
 import type { RealtimeScheduler } from '../realtime/engine'
 import { BrowserFleetInstanceActor } from './actor'
-
-class MemoryStorage implements KeyValueStorage {
-  data = new Map<string, string>()
-
-  getItem(key: string): string | null {
-    return this.data.get(key) ?? null
-  }
-
-  setItem(key: string, value: string): void {
-    this.data.set(key, value)
-  }
-
-  removeItem(key: string): void {
-    this.data.delete(key)
-  }
-}
 
 class Scheduler implements RealtimeScheduler {
   queue: Array<{ callback: () => void; delayMs: number; handle: object }> = []
@@ -88,34 +71,4 @@ test('manual retry cancels pending auth backoff and restores immediately', async
   expect(restore.mock.calls).toEqual([['alpha']])
   expect(scheduler.queue).toHaveLength(0)
   expect(actor.getState().reconnectAttempt).toBe(0)
-})
-
-test('persistent mutations remain available when realtime reads are stale but auth is connected', async () => {
-  const actor = new BrowserFleetInstanceActor(makeProfile('alpha'), { storage: new MemoryStorage() })
-  const persistentMutation = vi.fn(async () => ({ ok: false, code: 'revision_conflict' }))
-  const applyPersistentMutation = vi.fn(() => undefined)
-  const internals = actor as unknown as {
-    state: ReturnType<BrowserFleetInstanceActor['getState']>
-    client: { persistentMutation: typeof persistentMutation }
-    engine: { applyPersistentMutation: typeof applyPersistentMutation }
-  }
-  internals.state = {
-    instanceId: 'alpha',
-    status: 'reconnecting',
-    authStatus: 'connected',
-    realtime: null,
-    reconnectAttempt: 1,
-  }
-  internals.client = { persistentMutation }
-  internals.engine = { applyPersistentMutation }
-
-  await expect(
-    actor.persistentMutation('/actions/persistent/slots/play', {
-      logical_agent_id: 'la_alpha',
-      expected_revision: 7,
-      idempotency_key: 'actor-stale-write-001',
-    }),
-  ).resolves.toEqual({ ok: false, code: 'revision_conflict' })
-  expect(persistentMutation).toHaveBeenCalledOnce()
-  expect(applyPersistentMutation).toHaveBeenCalledWith({ ok: false, code: 'revision_conflict' })
 })

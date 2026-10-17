@@ -17,7 +17,6 @@ export const runtimeSlotFixtures = {
       "draining_seconds": 30,
       "release_on_end": null
     },
-    "legacy_enabled": true
   },
   "access_persistent_initial": {
     "ok": true,
@@ -107,7 +106,7 @@ export const runtimeSlotFixtures = {
       "slot_id": "as_hrFa0-dIwy_6f343HH1OiXQi",
       "logical_agent_id": "la_firstbyte_ZPhiEXwU9FcUyNSWWjk_ew_B",
       "public_name": "Papa-220",
-      "mode": "legacy",
+      "mode": "temporary",
       "state": "active",
       "revision": 1,
       "policy": {
@@ -159,7 +158,7 @@ export const runtimeSlotFixtures = {
         "slot_id": "as_hrFa0-dIwy_6f343HH1OiXQi",
         "logical_agent_id": "la_firstbyte_ZPhiEXwU9FcUyNSWWjk_ew_B",
         "public_name": "Papa-220",
-        "mode": "legacy",
+        "mode": "temporary",
         "state": "active",
         "revision": 1,
         "policy": {

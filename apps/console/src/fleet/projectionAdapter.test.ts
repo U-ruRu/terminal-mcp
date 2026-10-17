@@ -53,8 +53,8 @@ test('projected claim stays visible with no active work session', () => {
     }),
   ]), [{ sourceNodeId: 'node-a', profile }], 'degraded')
 
-  const slot = instances[0].runtime.realtime?.snapshot?.persistent?.slots[0]
-  expect(slot?.claims[0]).toMatchObject({ taskId: 'T-1', priority: 'P0', claimIntent: 'continue' })
+  const task = instances[0].runtime.realtime?.snapshot?.tasks[0]
+  expect(task).toMatchObject({ taskId: 'T-1', priority: 'P0', owner: { agentId: 'logical-1', claimIntent: 'continue' } })
 })
 
 test('stale runtime overlay preserves the cached version and resource values', () => {

@@ -84,13 +84,21 @@ function normalizedOrigin(value: string | undefined): string {
   return (value ?? '').replace(/\/+$/, '').toLowerCase()
 }
 
+/** Membership, not the current primary or an old fleet grouping, scopes authority. */
+export function controlNamespace(control: ManagedFleetControlReadModel): string {
+  if (!control.managed) return 'standalone:' + control.nodeId
+  const meshId = control.mesh?.meshId ?? control.nodes.find((node) => node.nodeId === control.nodeId)?.meshId
+    ?? (control.meshes.length === 1 ? control.meshes[0].meshId : control.fleetId)
+  return 'mesh:' + meshId
+}
+
 function compareCandidateRecency(
   left: { entry: CachedFleetControl },
   right: { entry: CachedFleetControl },
 ): number {
   const a = left.entry.control
   const b = right.entry.control
-  if (a.fleetId === b.fleetId && a.controlNodeId === b.controlNodeId) {
+  if (controlNamespace(a) === controlNamespace(b)) {
     const topology = b.revisions.topology - a.revisions.topology
     if (topology !== 0) return topology
   }
@@ -103,8 +111,7 @@ export function isFleetControlRevisionRegression(
 ): boolean {
   if (
     !current
-    || candidate.fleetId !== current.fleetId
-    || candidate.controlNodeId !== current.controlNodeId
+    || controlNamespace(candidate) !== controlNamespace(current)
   ) return false
   return (
     candidate.revisions.topology < current.revisions.topology
@@ -172,8 +179,8 @@ export function propagateCachedFleetControl(
   const document = readDocument()
   let changed = false
   for (const [instanceId, entry] of Object.entries(document.entries)) {
-    if (entry.control.fleetId !== authoritative.fleetId) continue
-    if (entry.control.controlNodeId !== authoritative.controlNodeId) continue
+    if (controlNamespace(entry.control) !== controlNamespace(authoritative)) continue
+    if (isFleetControlRevisionRegression(authoritative, entry.control)) continue
     const nodeId = entry.control.nodeId
     const node = authoritative.nodes.find((candidate) => candidate.nodeId === nodeId)
     const mesh = node?.meshId

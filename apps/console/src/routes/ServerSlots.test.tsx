@@ -4,7 +4,7 @@ import { MemoryRouter,Route,Routes } from 'react-router-dom'
 import { afterEach,expect,test,vi } from 'vitest'
 
 import { ConsoleHttpError } from '../api/client'
-import type { AccessMeshMutationRequest,PersistentMutationResult } from '../api/models'
+import type { AccessMeshMutationRequest,AccessMutationResult } from '../api/models'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { fleetInstance,nativeDefaults,nativeInheritance,nativeSlot,standaloneControl } from '../slots/testFixtures'
 import { ServerSlots,type ServerSlotsProps } from './ServerSlots'
@@ -14,7 +14,7 @@ function setup(route = '/slots', overrides: Partial<ServerSlotsProps> = {}) {
   const loadSlots = vi.fn(async () => structuredClone(state.slots))
   const loadDefaults = vi.fn(async () => structuredClone(state.defaults))
   const loadControl = vi.fn(async (id: string) => standaloneControl(id))
-  const mutate = vi.fn(async (_id: string, request: AccessMeshMutationRequest): Promise<PersistentMutationResult> => {
+  const mutate = vi.fn(async (_id: string, request: AccessMeshMutationRequest): Promise<AccessMutationResult> => {
     if (request.action === 'defaults') {
       state.defaults.revision++
       if (request.policy?.duration_seconds !== undefined) state.defaults.policy.durationSeconds = request.policy.duration_seconds

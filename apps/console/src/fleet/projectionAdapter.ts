@@ -3,10 +3,7 @@ import type {
   ConsoleSnapshotReadModel,
   ContextReadModel,
   HostResourcesReadModel,
-  PersistentClaimReadModel,
-  PersistentConsoleReadModel,
-  PersistentSlotReadModel,
-  PersistentWorkSessionReadModel,
+  WorkSessionReadModel,
   TaskOwnerReadModel,
   TaskReadModel,
 } from '../api/models'
@@ -79,7 +76,7 @@ function latestSession(
     .find((item) => !item.payload.ended_at && ['active', 'stopping'].includes(text(item.payload.state)))
 }
 
-function workSession(item?: FleetProjectionEntity): PersistentWorkSessionReadModel | undefined {
+function workSession(item?: FleetProjectionEntity): WorkSessionReadModel | undefined {
   if (!item) return undefined
   const p = item.payload
   return {
@@ -91,100 +88,6 @@ function workSession(item?: FleetProjectionEntity): PersistentWorkSessionReadMod
     hardExpiresAt: text(p.hard_expires_at),
     state: text(p.state),
     originInstanceId: text(p.origin_instance_id) || undefined,
-  }
-}
-
-function claimsFor(
-  claims: FleetProjectionEntity[],
-  logicalAgentId: string,
-  tasks: Map<string, FleetProjectionEntity>,
-): PersistentClaimReadModel[] {
-  return claims
-    .filter((item) =>
-      !item.payload.released_at &&
-      text(item.payload.owner_kind) === 'logical_agent' &&
-      text(item.payload.owner_id) === logicalAgentId
-    )
-    .map((item) => {
-      const namespace = text(item.payload.namespace)
-      const taskId = text(item.payload.task_id)
-      const task = tasks.get(namespace + '/' + taskId)
-      return {
-        namespace,
-        taskId,
-        lane: text(task?.payload.lane, 'general'),
-        priority: priority(task?.payload.priority),
-        state: text(task?.payload.state, 'ready'),
-        claimedAt: text(item.payload.claimed_at),
-        claimIntent: text(item.payload.claim_intent),
-      }
-    })
-}
-
-function persistent(
-  cache: FleetCacheView,
-  source: string,
-  nowIso: string,
-): PersistentConsoleReadModel {
-  const sessions = rows(cache, source, 'work_session')
-  const attachments = rows(cache, source, 'node_attachment')
-  const claims = rows(cache, source, 'work_claim')
-  const tasks = new Map(rows(cache, source, 'task').map((item) => [item.entityId, item]))
-  const slots: PersistentSlotReadModel[] = rows(cache, source, 'logical_agent').map((item) => {
-    const p = item.payload
-    const id = text(p.logical_agent_id, item.entityId)
-    const session = workSession(latestSession(sessions, id))
-    return {
-      logicalAgentId: id,
-      displayName: typeof p.display_name === 'string' ? p.display_name : '',
-      state: text(p.state, 'suspended'),
-      authorityNodeId: text(p.authority_node_id, item.authorityNodeId ?? source),
-      authorityEpoch: integer(p.authority_epoch, item.authorityEpoch ?? 1),
-      slotRevision: integer(p.slot_revision, item.entityRevision),
-      selector: '—',
-      selectorGeneration: integer(p.selector_generation),
-      authGeneration: integer(p.auth_generation),
-      access: text(p.public_name) ? {
-        publicName: text(p.public_name),
-        accessGeneration: integer(p.access_generation),
-        status: text(p.access_status, 'active'),
-      } : undefined,
-      createdAt: text(p.created_at, item.updatedAt),
-      updatedAt: text(p.updated_at, item.updatedAt),
-      serverNow: nowIso,
-      workSession: session,
-      claims: claimsFor(claims, id, tasks),
-      audit: [],
-      attachments: attachments
-        .filter((entry) =>
-          !entry.payload.revoked_at &&
-          text(entry.payload.logical_agent_id) === id &&
-          (!session || text(entry.payload.work_session_id) === session.workSessionId)
-        )
-        .map((entry) => ({
-          nodeAttachmentId: text(entry.payload.node_attachment_id, entry.entityId),
-          nodeInstanceId: text(entry.payload.node_instance_id),
-          attachedAt: text(entry.payload.attached_at, entry.updatedAt),
-          hardExpiresAt: text(entry.payload.hard_expires_at, session?.hardExpiresAt ?? ''),
-        })),
-    }
-  })
-  return {
-    enabled: true,
-    available: true,
-    serverNow: nowIso,
-    policy: {
-      durationSeconds: 0,
-      warningAfterSeconds: 0,
-      alertAfterSeconds: 0,
-      rearmAfterSeconds: 180,
-      manualRearm: true,
-      admissionMode: 'fleet-projected',
-      legacyAdmissionEnabled: false,
-      policyControlSupported: false,
-      projected: true,
-    },
-    slots,
   }
 }
 
@@ -406,7 +309,6 @@ function snapshot(
     tasks: tasks(cache, source, nowMs),
     contexts: contexts(cache, source),
     communications: [],
-    persistent: persistent(cache, source, new Date(nowMs).toISOString()),
   }
 }
 

@@ -1,7 +1,5 @@
 import { ConsoleHttpError, type ConsoleClient } from '../api/client'
-import type { PersistentMutationResult } from '../api/models'
 import {
-  applyPersistentMutationResult,
   applyRealtimeFrame,
   beginConnecting,
   boundedBackoffDelay,
@@ -132,12 +130,6 @@ export class RealtimeConsoleEngine {
     if (!this.running) return
     this.clearRefreshTimer()
     await this.refreshSnapshot()
-  }
-
-  applyPersistentMutation(result: PersistentMutationResult): void {
-    if (!this.running) return
-    if (result.ok) this.setState(applyPersistentMutationResult(this.state, result))
-    this.queueSnapshotRefresh()
   }
 
   async retryNow(): Promise<void> {

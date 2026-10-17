@@ -101,10 +101,6 @@ class FakeActor implements FleetInstanceActor {
     }
   }
 
-  async persistentMutation() {
-    return { ok: true, payload: { ok: true } }
-  }
-
   getState(): FleetInstanceRuntimeState {
     return this.state
   }

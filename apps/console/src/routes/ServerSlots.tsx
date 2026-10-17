@@ -5,13 +5,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 
 import { ConsoleHttpError } from '../api/client'
-import type { AccessMeshMutationRequest, AccessMeshSlotReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, ManagedSlotStatusReadModel, PersistentAuditReadModel, PersistentMutationResult } from '../api/models'
+import type { AccessMeshMutationRequest, AccessMeshSlotReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult } from '../api/models'
 import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
 import { loadCachedFleetControlForProfile, propagateCachedFleetControl, saveCachedFleetControl } from '../connections/controlState'
 import type { FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
-import { meshPersistentSlotRoute, slotRoute } from '../navigation/routes'
+import { meshSlotRoute, slotRoute } from '../navigation/routes'
 import { Icon } from '../components/Icon'
 import { ConfirmationDialog, FeedbackState, IconButton, IconButtonRow, UiButton } from '../components/UiPrimitives'
 import { useAccessMeshState, slotReadFailure, type AccessMeshSlotsLoader, type AccessMeshDefaultsLoader, type AccessMeshMutator } from '../slots/accessMeshState'
@@ -20,8 +20,6 @@ import { nativeCodeScope, readNativeCodeReceipt } from '../slots/nativeCodeRecei
 import { contextsFromTopology, meshControlForContext, normalizedOrigin, resolveContextKey } from '../slots/topology'
 import { AccessMeshDefaultsControls, AccessMeshSlotControls, type AccessMeshActionResult } from './AccessMeshPolicyControls'
 
-// These callback types remain shared with other screens. This screen only reads current Access slots.
-export type PersistentMutator = (instanceId: string, path: string, body: Record<string, unknown>) => Promise<PersistentMutationResult>
 export type FleetControlLoader = (instanceId: string) => Promise<ManagedFleetControlReadModel>
 export type FleetControlMutator = (instanceId: string, path: string, body: Record<string, unknown>) => Promise<ManagedFleetMutationResult>
 export type ServerSlotsProps = {
@@ -32,10 +30,6 @@ export type ServerSlotsProps = {
   loadAccessMeshSlots?: AccessMeshSlotsLoader
   loadAccessMeshDefaults?: AccessMeshDefaultsLoader
   mutateAccessMesh?: AccessMeshMutator
-  // Transitional call-site types; neither the old readers nor old mutators are called here.
-  mutatePersistent?: PersistentMutator
-  loadSlotAudit?: (instanceId: string, logicalAgentId: string) => Promise<PersistentAuditReadModel[]>
-  loadManagedSlotStatus?: (instanceId: string, logicalAgentId: string) => Promise<ManagedSlotStatusReadModel>
 }
 
 type Entry = { slot: AccessMeshSlotReadModel; instanceId: string; contextKey: string; observedAt: number }
@@ -296,7 +290,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     const params = new URLSearchParams({ issuer: entry.slot.issuerNodeId, slot: entry.slot.slotId })
     if (activeSessionsOnly) {
       const context = contexts.find((item) => item.key === entry.contextKey)
-      return `${context?.meshId ? meshPersistentSlotRoute(context.meshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)}?${params}`
+      return `${context?.meshId ? meshSlotRoute(context.meshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)}?${params}`
     }
     if (globalMode) {
       if (filter !== 'all') params.set('filter', filter)
@@ -304,7 +298,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       params.set('owner', entry.contextKey)
       return `/slots/${encodeURIComponent(entry.slot.logicalAgentId)}?${params}`
     }
-    const path = routeMeshId ? meshPersistentSlotRoute(routeMeshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)
+    const path = routeMeshId ? meshSlotRoute(routeMeshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)
     return `${path}?${params}`
   }
   const positionMenu = (details: HTMLDetailsElement) => {

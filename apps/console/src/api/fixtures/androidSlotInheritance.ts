@@ -79,10 +79,8 @@ export const nativeInheritanceFixtures = {
       "release_on_end": null,
       "warning_seconds": 120
     },
-    "legacy_enabled": true,
     "inherit_policy": false,
     "parent": {
-      "legacy_enabled": true,
       "policy": {
         "cooldown_seconds": 60,
         "draining_seconds": 30,
@@ -355,11 +353,9 @@ export const nativeInheritanceFixtures = {
       "release_on_end": null,
       "warning_seconds": 180
     },
-    "legacy_enabled": true,
     "inherit_policy": true,
     "parent": {
       "control_node_id": "firstbyte",
-      "legacy_enabled": true,
       "mesh_id": "fixture-mesh",
       "policy": {
         "cooldown_seconds": 180,

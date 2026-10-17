@@ -56,12 +56,11 @@ function standaloneControl(serverId: string): ManagedFleetControlReadModel {
 
 function renderOverview(model: FleetReadModel, instances: FleetInstanceView[], controls: Record<string, ManagedFleetControlReadModel>) {
   const loader = vi.fn(async (instanceId: string) => controls[instanceId] ?? standaloneControl(instanceId))
-  const mutatePersistent = vi.fn(async () => ({ ok: true, payload: {} }))
   const loadNative = vi.fn(async (id: string) => structuredClone(nativeRows.get(id) ?? []))
   const loadDefaults = vi.fn(async () => nativeDefaults())
   const mutateNative = vi.fn(async () => ({ ok: true, payload: {} }))
-  const view = render(<I18nProvider><MemoryRouter><Overview model={model} instances={instances} loadFleetControl={loader} mutatePersistent={mutatePersistent} loadAccessMeshSlots={loadNative} loadAccessMeshDefaults={loadDefaults} mutateAccessMesh={mutateNative} /></MemoryRouter></I18nProvider>)
-  return { ...view, loader, mutatePersistent, mutateNative, loadNative, loadDefaults }
+  const view = render(<I18nProvider><MemoryRouter><Overview model={model} instances={instances} loadFleetControl={loader} loadAccessMeshSlots={loadNative} loadAccessMeshDefaults={loadDefaults} mutateAccessMesh={mutateNative} /></MemoryRouter></I18nProvider>)
+  return { ...view, loader, mutateNative, loadNative, loadDefaults }
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); nativeRows.clear(); vi.useRealTimers(); vi.restoreAllMocks() })
