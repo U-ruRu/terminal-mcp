@@ -70,7 +70,6 @@ function controlErrorCode(cause: unknown): string {
 }
 
 function recoveryKey(error: string): MessageKey {
-  if (error === 'mesh_active_work') return 'connections.recovery.activeWork'
   if (error === 'mesh_primary_handoff_pending') return 'connections.recovery.primary'
   if (error.includes('fleet_id_mismatch')) return 'connections.recovery.fleet'
   if (error.includes('management_contract') || error.includes('contract_')) return 'connections.recovery.contract'

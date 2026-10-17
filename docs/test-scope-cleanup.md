@@ -274,3 +274,19 @@ and remains integration coverage, owned by Mesh and events. The shared admission
 and policy-window source files declare their consumers and deferred integration
 boundaries. Full acceptance still runs the complete collected suite without
 selection, skips or legacy API restoration.
+
+## Membership activity blockers retired
+
+The former `mesh_active_work` refusal and source-activity admission checks are
+retired with the updated membership contract: slots, sessions, queued/running
+commands and cleanup no longer prevent Join, Detach, Move or primary handoff.
+The existing refusal cases now check successful active-work transitions.
+The conflicting-transition recovery case retains its current error boundary. Commit-time namespace fencing, local cleanup, source
+registry preservation and primary-handoff recovery remain current obligations.
+
+The former lagging-replica activity-refusal case duplicated the retained member-
+departure/source-registry owner after removal of the refusal and was deleted.
+Registry admission now checks each activity kind independently through one
+parameterized storage case; active and suspended snapshots reuse the existing
+handoff and departure cases. Native authority retirement remains a local-store
+check, and existing HTTP attach coverage verifies lazy primary lookup.

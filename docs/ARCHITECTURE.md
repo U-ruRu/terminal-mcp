@@ -40,9 +40,9 @@ The session gate obtains identity from native Access and performs local lifecycl
 
 ## Topology and recovery
 
-The paired application owns Create, Join, Detach, Move and primary selection. The server verifies authorization, revisions, the consistency of the proposed operation and the absence of active slots/work in the affected area. Historical namespace labels, prior controllers and manual peer approval lists are not admission rules.
+The paired application owns Create, Join, Detach, Move and primary selection. The server verifies authorization, revisions and the consistency of the proposed operation. Slots, active sessions, queued or running commands and cleanup do not block membership changes on the moving node, source Mesh or destination Mesh. Local work may run until its existing deadline or stop when its local session is invalidated; no agent-stop handshake is required. Historical namespace labels, prior controllers and manual peer approval lists are not admission rules.
 
-Membership changes use a durable control journal and an ACS admission fence. The source primary is checked when authoritative source activity matters; a lagging local replica cannot hide an active shared slot. On C's departure, only C loses its previous slots, replicas and bindings. The source registry remains complete and unchanged.
+Membership changes use a durable control journal and an ACS admission fence. The commit-time namespace check prevents a request authorized in the previous namespace from writing after the transition. On C's departure, only C loses its previous slots, replicas and bindings. The source registry remains complete and unchanged.
 
 Primary handoff fences the affected participants, transfers the full registry, checks its digest and publishes a signed authority transition. Replays are resolved by operation identity before revision comparison. An incomplete handoff remains fenced and resumable. Startup recovery reconciles control and ACS before policy application and admission.
 

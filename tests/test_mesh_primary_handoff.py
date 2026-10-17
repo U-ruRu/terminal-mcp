@@ -36,8 +36,6 @@ class RegistryProbe:
         self.imports += 1
 
     async def begin_topology_transition(self, operation_id):
-        if self.active:
-            raise AccessMeshError("mesh_active_work")
         if self.guard is not None and self.guard != operation_id:
             raise AccessMeshError("mesh_transition_pending")
         self.guard = operation_id
@@ -172,15 +170,15 @@ async def test_primary_replay_rejects_another_destination(mesh_pair):
         await source.change_primary(node_id="source", operation_id="handoff-one")
 
 
-async def test_active_registry_blocks_primary_change(mesh_pair):
-    source, target, _, _ = mesh_pair
+async def test_primary_handoff_preserves_registry_with_active_work(mesh_pair):
+    source, target, records, _ = mesh_pair
     source.native_access.active = True
 
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
-        await source.change_primary(node_id="target", operation_id="handoff-busy")
+    await source.change_primary(node_id="target", operation_id="handoff-busy")
 
-    assert source.store.control_node_id == target.store.control_node_id == "source"
-    assert target.native_access.imports == 0
+    assert source.store.control_node_id == target.store.control_node_id == "target"
+    assert source.native_access.records == target.native_access.records == records
+    assert target.native_access.imports == 1
 
 
 async def test_handoff_certificate_rejects_a_changed_destination(mesh_pair):

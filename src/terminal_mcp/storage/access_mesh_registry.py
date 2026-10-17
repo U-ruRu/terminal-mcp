@@ -247,48 +247,6 @@ class AccessRegistryStore:
             )
         self._load_registry_scope()
 
-    def local_active_work_summary(self, namespace_id=None, *, _connection=None):
-        if namespace_id is not None and namespace_id != self.namespace_id:
-            raise AccessMeshError("mesh_namespace_mismatch")
-        with self._connect() if _connection is None else nullcontext(_connection) as db:
-            slots = db.execute(
-                "SELECT * FROM access_mesh_slot_replicas WHERE state='active'"
-            ).fetchall()
-            now = self.clock()
-            active_slots = sum(
-                self.merged_cycle(self._snapshot(row), now)["state"]
-                in {"active", "warning", "draining"}
-                for row in slots
-            )
-            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            sessions = (
-                db.execute(
-                    "SELECT COUNT(*) FROM logical_agent_work_sessions "
-                    "WHERE state='active' AND hard_expires_at>?",
-                    (now.isoformat(),),
-                ).fetchone()[0]
-                if "logical_agent_work_sessions" in tables
-                else 0
-            )
-            cleanup = db.execute(
-                "SELECT COUNT(*) FROM access_mesh_cleanup_jobs WHERE completed_at IS NULL"
-            ).fetchone()[0]
-            commands = (
-                db.execute(
-                    "SELECT COUNT(*) FROM commands "
-                    "WHERE status IN ('queued','running','cancelling')"
-                ).fetchone()[0]
-                if "commands" in tables
-                else 0
-            )
-        return {
-            "namespace_id": self.namespace_id,
-            "active_slots": active_slots,
-            "active_sessions": sessions,
-            "active_commands": commands,
-            "cleanup_pending": cleanup,
-        }
-
     def begin_topology_transition(self, operation_id):
         if not isinstance(operation_id, str) or not operation_id or len(operation_id) > 200:
             raise AccessMeshError("invalid_request")
@@ -303,12 +261,6 @@ class AccessRegistryStore:
                 return
             if self.registry_mesh_id and self.registry_upgrade_pending:
                 raise AccessMeshError("mesh_registry_migrating")
-            summary = self.local_active_work_summary(_connection=db)
-            if any(
-                summary[k]
-                for k in ("active_slots", "active_sessions", "active_commands", "cleanup_pending")
-            ):
-                raise AccessMeshError("mesh_active_work")
             db.execute(
                 "UPDATE access_mesh_registry_scope SET transition_id=? WHERE singleton=1",
                 (operation_id,),

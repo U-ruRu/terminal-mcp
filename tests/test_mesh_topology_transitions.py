@@ -73,16 +73,16 @@ async def test_transition_id_rejects_a_different_destination(topology):
         await store.prepare_topology_transition(**(args | {"target_mesh_id": "mesh-c"}))
 
 
-async def test_active_work_blocks_membership_before_topology_commit(topology):
+async def test_pending_local_transition_blocks_membership_before_topology_commit(topology):
     store, controller, _ = topology
     controller.native_access = AsyncMock()
     controller.native_access.replication = None
     controller.native_access.begin_topology_transition.side_effect = AccessMeshError(
-        "mesh_active_work"
+        "mesh_transition_pending"
     )
     before = await store.control_state()
 
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
+    with pytest.raises(FleetControlError, match="mesh_transition_pending"):
         await controller._commit_detach_node("home")
 
     assert (await store.control_state())["revisions"] == before["revisions"]
@@ -105,28 +105,6 @@ async def test_member_departure_preserves_the_source_registry(topology):
 
     controller.native_access.begin_topology_transition.assert_awaited_once()
     controller.native_access.finish_topology_transition.assert_not_awaited()
-
-
-async def test_authority_active_slots_block_a_member_with_a_lagging_replica(topology):
-    store, controller, public = topology
-    await store.upsert_managed_node(
-        node_id="member",
-        mesh_id="mesh-a",
-        origin="https://member.example",
-        public_key=public,
-        auth_token="member-enrollment",
-    )
-    controller.native_access = AsyncMock()
-    controller.native_access.replication = None
-    controller.native_access.begin_topology_transition.side_effect = AccessMeshError(
-        "mesh_active_work"
-    )
-
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
-        await controller._commit_detach_node("member")
-
-    assert (await store.managed_node("member"))["mesh_id"] == "mesh-a"
-    assert all(call.args[1] == "abort" for call in controller._transition_peer_call.await_args_list)
 
 
 async def test_primary_departure_requires_a_successor_before_fencing(topology):

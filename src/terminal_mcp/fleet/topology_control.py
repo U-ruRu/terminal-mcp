@@ -65,8 +65,8 @@ class TopologyControl:
             and coordinator_id != self.store.control_node_id
         ):
             # The enrollment proves the app's assignment. Detach through the
-            # source authority first so an out-of-date replica cannot hide an
-            # active source slot. This also retires the source ingress token.
+            # source authority first to retire the old membership and its
+            # ingress token before entering the assigned namespace.
             await self.detach_node(self.store.node_id)
             state = await self.snapshot()
             if self._member_mesh(state, self.store.node_id) is not None:

@@ -106,17 +106,6 @@ class AccessRegistryApplication:
         finally:
             REGISTRY_BINDING.reset(token)
 
-    async def ensure_topology_idle(self):
-        summary = await asyncio.to_thread(
-            self.store.local_active_work_summary, self.store.namespace_id
-        )
-        if any(
-            summary[key]
-            for key in ("active_slots", "active_sessions", "active_commands", "cleanup_pending")
-        ):
-            raise AccessMeshError("mesh_active_work")
-        return summary
-
     async def begin_topology_transition(self, operation_id):
         # Commit-time guards close races with thread-backed issuer and attach
         # transactions. In-process locks alone do not survive a process crash.

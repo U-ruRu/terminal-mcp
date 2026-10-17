@@ -13,7 +13,7 @@ from test_mesh_primary_handoff import mesh_pair as mesh_pair
 
 from terminal_mcp.fleet.config import FleetConfig
 from terminal_mcp.fleet.control_plane import ManagedFleetControl
-from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlStore
+from terminal_mcp.fleet.control_storage import FleetControlStore
 from terminal_mcp.http.fleet_control import build_fleet_control_router
 
 
@@ -149,40 +149,32 @@ async def test_lost_move_prepare_response_retries_with_bound_transition_credenti
     )
 
 
-async def test_direct_move_checks_active_source_registry_before_detach(moving_mesh):
-    source, moving, destination, _, _ = moving_mesh
+async def test_direct_move_preserves_active_source_registry_before_detach(moving_mesh):
+    source, moving, destination, records, _ = moving_mesh
     source.native_access.active = True
     descriptor = await moving.enrollment_descriptor()
     original_ingress = (await moving.store.managed_identity())["ingress_token"]
 
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
-        await move(destination, descriptor)
+    await move(destination, descriptor)
 
-    assert (await moving.snapshot())["mesh"]["mesh_id"] == "mesh-a"
-    assert (await source.store.managed_node("target"))["mesh_id"] == "mesh-a"
-    assert await destination.store.managed_node("target") is None
-    assert (await moving.store.managed_identity())["ingress_token"] == original_ingress
+    assert (await moving.snapshot())["mesh"]["mesh_id"] == "mesh-b"
+    assert source.native_access.records == records
+    assert (await source.store.managed_node("target"))["mesh_id"] is None
+    assert (await moving.store.managed_identity())["ingress_token"] != original_ingress
     assert destination.native_access.guard is None
 
 
-async def test_busy_standalone_join_releases_source_guard_and_retries(moving_mesh):
+async def test_active_standalone_joins_running_mesh_without_copying_all_sessions(moving_mesh):
     _, moving, destination, _, _ = moving_mesh
     await moving.detach_node("target")
     moving.native_access.active = True
+    destination.native_access.active = True
     descriptor = await moving.enrollment_descriptor()
 
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
-        await move(destination, descriptor)
-
-    assert not (await moving.snapshot())["managed"]
-    assert destination.native_access.guard is None
-    assert moving.native_access.guard is None
-    assert (await destination.store.topology_transition("target"))["phase"] == "aborted"
-    assert (await moving.store.topology_transition("target"))["phase"] == "aborted"
-
-    moving.native_access.active = False
     await move(destination, descriptor)
     assert (await moving.snapshot())["mesh"]["mesh_id"] == "mesh-b"
+    assert moving.native_access.records == {"namespace_id": "mesh-b", "tables": {}}
+    assert moving.native_access.imports == 0
     assert destination.native_access.guard is None
 
 
@@ -233,26 +225,24 @@ async def test_mesh_peer_ingress_does_not_authorize_an_app_topology_assignment(m
     )
 
 
-async def test_follower_create_preserves_source_membership_when_work_is_active(moving_mesh):
+async def test_follower_create_detaches_from_active_source_mesh(moving_mesh):
     source, moving, _, _, _ = moving_mesh
     source.native_access.active = True
 
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
-        await moving.adopt(mesh_id="mesh-new", control_node_id="target")
+    await moving.adopt(mesh_id="mesh-new", control_node_id="target")
 
-    assert (await moving.snapshot())["mesh"]["mesh_id"] == "mesh-a"
-    assert (await source.store.managed_node("target"))["mesh_id"] == "mesh-a"
+    assert (await moving.snapshot())["mesh"]["mesh_id"] == "mesh-new"
+    assert (await source.store.managed_node("target"))["mesh_id"] is None
 
 
-async def test_delete_mesh_checks_authoritative_work_before_detaching_members(moving_mesh):
+async def test_delete_mesh_detaches_members_with_active_work(moving_mesh):
     source, moving, _, _, _ = moving_mesh
     source.native_access.active = True
 
-    with pytest.raises(FleetControlError, match="mesh_active_work"):
-        await source.delete_mesh(mesh_id="mesh-a")
+    await source.delete_mesh(mesh_id="mesh-a")
 
-    assert (await moving.snapshot())["mesh"]["mesh_id"] == "mesh-a"
-    assert (await source.snapshot())["mesh"]["mesh_id"] == "mesh-a"
+    assert not (await moving.snapshot())["managed"]
+    assert not (await source.snapshot())["managed"]
 
 
 async def test_primary_router_transfers_a_registry_larger_than_public_read_budget(moving_mesh):

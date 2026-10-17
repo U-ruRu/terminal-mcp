@@ -253,8 +253,8 @@ class PrimaryHandoffControl:
         signed = handoff["certificate"]["payload"]
         peer = FleetPeer(**handoff["payload"]["peer"])
         if handoff["phase"] == "prepared":
-            # Every participant is quiescent before snapshot activation. This
-            # closes admission through peers whose registry view is stale.
+            # Fence new registry admission on every participant before snapshot
+            # activation, including peers whose registry view is stale.
             for data in handoff["payload"]["members"]:
                 await self._transition_peer_call(
                     FleetPeer(**data),
