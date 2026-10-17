@@ -28,6 +28,10 @@ def test_source_explicit_node_identity_and_meta_path_are_used(tmp_path):
         database_path=tmp_path / "runtime.sqlite3",
         fleet_v1_source_enabled=True,
         fleet_id="fleet-a",
+        # Source identity is explicit; transport authentication is still required.
+        fleet_instance_id="transport-a",
+        fleet_signing_private_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        fleet_peers_json="[]",
         fleet_node_id="node-a",
         fleet_node_meta_path=tmp_path / "node-meta.sqlite3",
     )
