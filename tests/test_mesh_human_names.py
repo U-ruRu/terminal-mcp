@@ -40,9 +40,8 @@ async def make_agent(f, number, conversation, label=None):
         policy=SlotPolicy(1380, 60),
         display_name=label,
     )
-    identity = await f.app.attach(
-        actor("executor", conversation), issuer_node_id="firstbyte", access_code=number
-    )
+    await f.app.attach(actor("executor", conversation), session_number=number)
+    identity = f.store.observed_identity(f.store.registry_slot(issued["slot_id"]), now=f.clock[0])
     await f.app.update_intent(actor("executor", conversation), intent="Ordinary fixture work")
     return issued, identity
 

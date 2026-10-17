@@ -19,9 +19,9 @@ async def intent_env(fixture):
     issued = await f.app.issue(
         actor("access"), kind="persistent", code="1234", policy=SlotPolicy(1200)
     )
-    identity = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    await f.app.attach(actor(), session_number="1234")
     f.slot = f.store.slot("firstbyte", issued["slot_id"])
-    f.session_id = identity["work_session_id"]
+    f.session_id = f.store.observed_identity(f.slot, now=f.clock[0])["work_session_id"]
     return f
 
 

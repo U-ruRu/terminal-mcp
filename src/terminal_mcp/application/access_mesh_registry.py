@@ -88,7 +88,7 @@ class AccessRegistryApplication:
         try:
             operation, arguments = payload["operation"], payload["arguments"]
             if operation == "session":
-                if actor.endpoint_role != "access" or set(arguments) - {"action", "mode", "code"}:
+                if actor.endpoint_role != "access" or set(arguments) != {"action"}:
                     raise AccessMeshError("access_denied")
                 return await self.issuer_session(actor, **arguments)
             from terminal_mcp.application.access_mesh_operator import AccessMeshOperator

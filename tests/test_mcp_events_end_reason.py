@@ -47,11 +47,8 @@ async def arrange(f):
     issued = await f.app.issuer_session(actor("access", "worker"), action="start")
     slot = f.store.numbers.winner(issued["session_number"])
     issued["slot_id"] = slot["slot_id"]
-    identity = await f.app.attach(
-        actor("executor", "worker"),
-        issuer_node_id="firstbyte",
-        access_code=issued["session_number"],
-    )
+    await f.app.attach(actor("executor", "worker"), session_number=issued["session_number"])
+    identity = f.store.observed_identity(f.store.registry_slot(issued["slot_id"]), now=f.clock[0])
     await events.pump(now=f.clock[0])
     return events, issued, identity
 

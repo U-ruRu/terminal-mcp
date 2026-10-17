@@ -77,7 +77,7 @@ async def issued(f, kind="temporary", **policy):
 async def test_expiry_claim_policy_preserves_task_state(fixture, kind, release):
     f = fixture
     grant = await issued(f, kind, release_on_end=release)
-    await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    await f.app.attach(actor(), session_number="1234")
     await f.tasks.create_task("mesh", "one", "one", state="in_progress", checkpoint="keep")
     await f.tasks.claim_owner("mesh", "one", ClaimOwner.logical_agent(grant["logical_agent_id"]))
     f.clock[0] = T0 + timedelta(seconds=11)
@@ -92,7 +92,10 @@ async def test_expiry_claim_policy_preserves_task_state(fixture, kind, release):
 async def test_deadline_override_updates_native_session_deadline(fixture):
     f = fixture
     grant = await issued(f, "persistent")
-    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    await f.app.attach(actor(), session_number="1234")
+    attached = f.store.observed_identity(
+        f.store.attached_slot(f.app.connection_key(actor())), now=f.clock[0]
+    )
     await f.app.change(
         actor("access"),
         slot_id=grant["slot_id"],
@@ -109,7 +112,10 @@ async def test_deadline_override_updates_native_session_deadline(fixture):
 async def test_expired_status_read_preserves_native_session(fixture):
     f = fixture
     await issued(f, "persistent")
-    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    await f.app.attach(actor(), session_number="1234")
+    attached = f.store.observed_identity(
+        f.store.attached_slot(f.app.connection_key(actor())), now=f.clock[0]
+    )
     f.clock[0] = T0 + timedelta(seconds=16)
     slot = f.store.attached_slot(f.app.connection_key(actor()))
     status = f.store.observed_identity(slot, now=f.clock[0])

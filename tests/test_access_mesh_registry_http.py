@@ -72,3 +72,42 @@ async def test_member_cannot_fall_back_to_local_issuance_when_primary_is_down(tm
         with pytest.raises(AccessMeshError, match="mesh_primary_unavailable"):
             await member.issuer_session(replace(actor(), endpoint_role="access"), action="start")
         assert member.store.issuer_slots() == []
+
+
+@pytest.mark.asyncio
+async def test_member_acs_end_closes_the_shared_cycle(tmp_path):
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        primary, primary_replica = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        member, member_replica = await node(tmp_path, "bacloud", "firstbyte", routes, client)
+        primary.replication = primary_replica
+        member.replication = member_replica
+        access = replace(actor(), endpoint_role="access")
+        issued = await member.issuer_session(access, action="start")
+        await member.attach(actor(), session_number=issued["session_number"])
+        assert await member.issuer_session(access, action="end") == {"ok": True}
+        slot = member.store.attached_slot(member.connection_key(actor()))
+        assert member.store.merged_cycle(slot, member.clock())["state"] == "expired"
+
+
+def test_previous_primary_cannot_commit_cycle_after_handoff(tmp_path):
+    from test_access_mesh_registry_storage import registry
+    from test_access_mesh_replication_http import T0
+
+    store = registry(tmp_path / "registry.db", "b")
+    store.trusted_issuers = frozenset({"a", "b"})
+    store.install_registry_scope(mesh_id="mesh-x", authority_id="a")
+    store.begin_topology_transition("handoff")
+    store.finish_topology_transition(
+        "handoff", namespace_id="mesh-x", mesh_id="mesh-x", authority_id="b", clear_local=False
+    )
+    with pytest.raises(AccessMeshError, match="access_mesh_untrusted_issuer"):
+        store.numbers.record_end(
+            number="1234",
+            cycle_key="cycle",
+            issuer_id="a",
+            slot_id="old",
+            event_id="late-end",
+            ended_at=T0,
+            source_peer_id="a",
+        )

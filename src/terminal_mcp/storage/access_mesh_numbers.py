@@ -146,6 +146,7 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.store.assert_registry_ready(db)
+            self.store.assert_registry_writer(db, self.store.local_node_id)
             db.execute("DELETE FROM access_mesh_number_reservations WHERE expires_at<=?", (stamp,))
             if not self._occupied(db, number, attempt_id, as_of=stamp):
                 db.execute(
@@ -226,6 +227,7 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.store.assert_registry_ready(db)
+            self.store.assert_registry_writer(db, source_peer_id or self.store.local_node_id)
             pinned = db.execute(
                 "SELECT c.* FROM access_mesh_recipient_holds h "
                 "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
@@ -546,6 +548,7 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.store.assert_registry_ready(db)
+            self.store.assert_registry_writer(db, source_peer_id or self.store.local_node_id)
             existing = db.execute(
                 "SELECT * FROM access_mesh_number_starts WHERE event_id=?",
                 (event_id,),
@@ -753,7 +756,9 @@ class MeshSessionNumbers:
                         (number, attempt, expires),
                     )
 
-    def record_end(self, *, number, cycle_key, issuer_id, slot_id, event_id, ended_at):
+    def record_end(
+        self, *, number, cycle_key, issuer_id, slot_id, event_id, ended_at, source_peer_id=None
+    ):
         self.validate(number)
         if not self.store.registry_issuer_trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_peer")
@@ -768,6 +773,7 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.store.assert_registry_ready(db)
+            self.store.assert_registry_writer(db, source_peer_id or self.store.local_node_id)
             db.execute(
                 "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)",
                 (number, cycle_key, issuer_id, slot_id, event_id, stamp),

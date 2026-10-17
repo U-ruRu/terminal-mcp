@@ -28,7 +28,7 @@ from terminal_mcp.core.managed_sessions import (
 from terminal_mcp.core.persistent_admission import PersistentAdmissionError
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
-from terminal_mcp.storage.access_mesh import AccessMeshStore, local_cycle
+from terminal_mcp.storage.access_mesh import AccessMeshStore
 
 _LOG = logging.getLogger(__name__)
 _INTENT_CALL: ContextVar[dict | None] = ContextVar("mesh_intent_call", default=None)
@@ -289,84 +289,53 @@ class AccessMeshApplication(AccessRegistryApplication):
             _LOG.warning("local MCP event notification failed: %s", type(exc).__name__)
 
     @registry_operation
-    async def attach(
-        self,
-        actor: ActorContext,
-        *,
-        session_number: str | None = None,
-        issuer_node_id: str | None = None,
-        access_code: str | None = None,
-    ) -> dict:
+    async def attach(self, actor: ActorContext, *, session_number: str) -> dict:
         self.require_write(actor)
         await asyncio.to_thread(self.store.assert_registry_ready)
-        if session_number is not None:
-            if self.registry_authoritative:
-                await asyncio.to_thread(self.store.assert_registry_available)
-            if not self.registry_authoritative:
-                if self.replication is None:
-                    raise AccessMeshError("mesh_primary_unavailable")
-                await self.replication.refresh_registry_slot(session_number)
-            winner = await asyncio.to_thread(self.store.numbers.winner, session_number)
-            rotated = await asyncio.to_thread(self.store.rotated_code_slot, session_number)
-            if rotated is not None and winner is not None:
-                # A missing slot replica is not proof that an unexpired numeric
-                # claim is free. Keep conflicts closed even during partial catch-up.
-                if datetime.fromisoformat(winner["hard_expires_at"]) > self.clock():
-                    raise AccessMeshError("access_mesh_ambiguous_code")
-            if winner is None and rotated is None:
-                raise AccessMeshError("invalid_session_number")
-            connection = self.connection_key(actor)
-            current = await asyncio.to_thread(self.store.attached_slot, connection)
-            if rotated is not None:
-                slot = await asyncio.to_thread(
-                    self.store.attach,
-                    issuer_id=rotated.issuer_id,
-                    code=session_number,
-                    connection_key=connection,
-                )
-            elif current is not None:
-                bound_number = await asyncio.to_thread(
-                    self.store.numbers.number_for_slot, current.issuer_id, current.slot_id
-                )
-                if bound_number != session_number:
-                    raise AccessMeshError("access_mesh_binding_conflict")
-                slot = current
-            else:
-                slot = await asyncio.to_thread(
-                    self.store.attach,
-                    issuer_id=winner["issuer_id"],
-                    code=session_number,
-                    connection_key=connection,
-                )
-            # Attach creates the local WorkSession immediately, so another
-            # agent can discover this recipient before its first command.
-            await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
-            identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
-            await self._notify_local_presence(identity)
-            return {"ok": True}
-        if isinstance(access_code, str) and ":" in access_code:
-            prefix, access_code = access_code.split(":", 1)
-            if issuer_node_id and issuer_node_id != prefix:
-                raise AccessMeshError("access_mesh_issuer_mismatch")
-            issuer_node_id = prefix
-        if not issuer_node_id:
-            raise AccessMeshError("access_mesh_issuer_required")
-        slot = await asyncio.to_thread(
-            self.store.attach,
-            issuer_id=issuer_node_id,
-            code=access_code,
-            connection_key=self.connection_key(actor),
-        )
+        if self.registry_authoritative:
+            await asyncio.to_thread(self.store.assert_registry_available)
+        if not self.registry_authoritative:
+            if self.replication is None:
+                raise AccessMeshError("mesh_primary_unavailable")
+            await self.replication.refresh_registry_slot(session_number)
+        winner = await asyncio.to_thread(self.store.numbers.winner, session_number)
+        rotated = await asyncio.to_thread(self.store.rotated_code_slot, session_number)
+        if rotated is not None and winner is not None:
+            # A missing slot replica is not proof that an unexpired numeric
+            # claim is free. Keep conflicts closed even during partial catch-up.
+            if datetime.fromisoformat(winner["hard_expires_at"]) > self.clock():
+                raise AccessMeshError("access_mesh_ambiguous_code")
+        if winner is None and rotated is None:
+            raise AccessMeshError("invalid_session_number")
+        connection = self.connection_key(actor)
+        current = await asyncio.to_thread(self.store.attached_slot, connection)
+        if rotated is not None:
+            slot = await asyncio.to_thread(
+                self.store.attach,
+                issuer_id=rotated.issuer_id,
+                code=session_number,
+                connection_key=connection,
+            )
+        elif current is not None:
+            bound_number = await asyncio.to_thread(
+                self.store.numbers.number_for_slot, current.issuer_id, current.slot_id
+            )
+            if bound_number != session_number:
+                raise AccessMeshError("access_mesh_binding_conflict")
+            slot = current
+        else:
+            slot = await asyncio.to_thread(
+                self.store.attach,
+                issuer_id=winner["issuer_id"],
+                code=session_number,
+                connection_key=connection,
+            )
+        # Attach creates the local WorkSession immediately, so another
+        # agent can discover this recipient before its first command.
         await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         await self._notify_local_presence(identity)
-        return {
-            **identity,
-            "action": "attach",
-            "attached": True,
-            "role": actor.endpoint_role,
-            "contract_version": actor.contract_version,
-        }
+        return {"ok": True}
 
     @registry_operation
     async def update_intent(self, actor: ActorContext, intent: str, *, initial_only=False) -> dict:
@@ -970,38 +939,23 @@ class AccessMeshApplication(AccessRegistryApplication):
         return result
 
     @registry_operation
-    async def issuer_session(
-        self, actor: ActorContext, *, action: str, mode=None, code=None
-    ) -> dict:
-        forwarded = await self.proxy_registry(
-            actor, "session", {"action": action, "mode": mode, "code": code}
-        )
+    async def issuer_session(self, actor: ActorContext, *, action: str) -> dict:
+        if action not in {"start", "end"}:
+            raise AccessMeshError("invalid_request")
+        self.require_write(actor)
+        forwarded = await self.proxy_registry(actor, "session", {"action": action})
         if forwarded is not None:
             return forwarded
-        if action not in {"start", "end", "status"}:
-            raise AccessMeshError("invalid_request")
-        if action != "status":
-            self.require_write(actor)
         binding = self.connection_key(actor)
         async with self._issuer_session_lock:
-            spec = self._receipt_spec(actor, {"action": action, "mode": mode, "code": code})
-            if action != "status":
-                replay = await asyncio.to_thread(
-                    self.store.receipt, spec["request_key"], spec["fingerprint"]
-                )
-                if replay is not None:
-                    if action == "start" and mode is None:
-                        return {"ok": True, "session_number": replay["access_code"]}
-                    if action == "end" and mode is None:
-                        return {"ok": True}
-                    return replay
-            if action == "start" and mode is None:
-                slot = await asyncio.to_thread(self.store.issuer_bound_slot, binding)
+            spec = self._receipt_spec(actor, {"action": action})
+            slot = await asyncio.to_thread(self.store.issuer_bound_slot, binding)
+            if action == "start":
                 if slot is None:
                     result = await self.issue(actor, kind="temporary", receipt_spec=spec)
                     return {"ok": True, "session_number": result["access_code"]}
-                if slot.state != "active" or slot.kind != "temporary":
-                    raise AccessMeshError("access_mode_mismatch")
+                if slot.state != "active":
+                    raise AccessMeshError("slot_not_armed")
                 now = self.clock()
                 cycle = await asyncio.to_thread(self.store.merged_cycle, slot, now)
                 if cycle["state"] in {"active", "warning", "draining"}:
@@ -1013,12 +967,13 @@ class AccessMeshApplication(AccessRegistryApplication):
                 previous_end = await asyncio.to_thread(
                     self.store.numbers.end_for_slot, slot.issuer_id, slot.slot_id
                 )
-                # A manually ended window may resume its original, unextended
-                # deadline. Beyond it, wait for normal cooldown before a new
-                # full-duration start. No automatic policy rearm grants writes.
+                # Resume an explicitly ended window with its original deadline.
+                # A new full window requires the slot's rearm policy and cooldown.
                 if previous_end is not None and now < original_end:
                     anchor, hard_deadline = original_start, original_end
                 else:
+                    if not slot.policy.rearm_enabled:
+                        raise AccessMeshError("session_expired")
                     cooldown_end = original_end + timedelta(seconds=slot.policy.cooldown_seconds)
                     if previous_end is not None:
                         cooldown_end = max(
@@ -1045,132 +1000,11 @@ class AccessMeshApplication(AccessRegistryApplication):
                 if number is None:
                     raise AccessMeshError("invalid_session_number")
                 return {"ok": True, "session_number": number}
-            if action == "start" and mode == "temporary" and code is not None:
-                raise AccessMeshError("temporary_code_not_allowed")
-            slot = (
-                await asyncio.to_thread(self.store.registry_code_slot, code)
-                if code is not None
-                else await asyncio.to_thread(self.store.issuer_bound_slot, binding)
-            )
             if slot is None or slot.state == "deleted":
-                if action == "start" and mode == "temporary":
-                    return await self.issue(actor, kind="temporary", receipt_spec=spec)
                 raise AccessMeshError("access_mesh_slot_not_found")
-            cycle = local_cycle(slot, self.clock())
-            previous = await asyncio.to_thread(self.store.latest_session_window, slot.slot_id)
-            last_end = await asyncio.to_thread(self.store.latest_session_end, slot.slot_id)
-            ended = bool(
-                last_end and (previous is None or last_end["revision"] > previous["revision"])
-            )
-            original_deadline = None
-            if previous:
-                original_deadline = previous["deadline"] or (
-                    previous["start"] + timedelta(seconds=slot.policy.duration_seconds)
-                )
-            if action == "start" and mode == "temporary" and slot.kind != "temporary":
-                raise AccessMeshError("access_mode_mismatch")
-            if action == "status":
-                if ended:
-                    cycle = {
-                        **cycle,
-                        "state": (
-                            "cooldown"
-                            if original_deadline and self.clock() < original_deadline
-                            else "expired"
-                        ),
-                        "hard_expires_at": original_deadline.isoformat()
-                        if original_deadline
-                        else None,
-                        "remaining_seconds": 0,
-                    }
-                return {
-                    **self._slot_receipt(slot, action),
-                    "slot_state": slot.state,
-                    "session_lifecycle": cycle,
-                    "policy": asdict(slot.policy),
-                }
-            if action == "start":
-                if mode not in {"temporary", "persistent"} or slot.kind != mode:
-                    raise AccessMeshError("access_mode_mismatch")
-                if slot.state != "active":
-                    raise AccessMeshError("slot_not_armed")
-                if (
-                    original_deadline is not None
-                    and self.clock() >= original_deadline
-                    and (
-                        not ended
-                        or self.clock()
-                        < last_end["ended_at"] + timedelta(seconds=slot.policy.cooldown_seconds)
-                    )
-                ):
-                    return {
-                        "ok": False,
-                        "code": "session_expired",
-                        "error": "session_expired",
-                        "return_to_chat": True,
-                    }
-                if not ended and cycle["state"] in {"active", "warning", "draining"}:
-                    return {
-                        "ok": False,
-                        "code": "session_already_started",
-                        "error": "session_already_started",
-                    }
-                now = self.clock()
-                if ended and previous is not None and original_deadline is not None:
-                    if now >= original_deadline:
-                        return {
-                            "ok": False,
-                            "code": "session_expired",
-                            "error": "session_expired",
-                            "return_to_chat": True,
-                        }
-                    cooldown_end = last_end["ended_at"] + timedelta(
-                        seconds=slot.policy.cooldown_seconds
-                    )
-                    if now < cooldown_end:
-                        # Resume the original timebox with its original hard deadline.
-                        return await self.change(
-                            actor,
-                            slot_id=slot.slot_id,
-                            kind="SessionStarted",
-                            expected_revision=slot.revision,
-                            effective_at=previous["start"],
-                            deadline_at=original_deadline,
-                            receipt_spec=spec,
-                        )
-                    # A new authorized window gets its full policy duration.
-                    return await self.change(
-                        actor,
-                        slot_id=slot.slot_id,
-                        kind="SessionStarted",
-                        expected_revision=slot.revision,
-                        effective_at=now,
-                        deadline_at=now + timedelta(seconds=slot.policy.duration_seconds),
-                        receipt_spec=spec,
-                    )
-                if cycle["state"] == "cooldown":
-                    raise AccessMeshError("window_cooldown")
-                if cycle["state"] == "expired":
-                    return {
-                        "ok": False,
-                        "code": "session_expired",
-                        "error": "session_expired",
-                        "return_to_chat": True,
-                    }
-                return await self.change(
-                    actor,
-                    slot_id=slot.slot_id,
-                    kind="SessionStarted",
-                    expected_revision=slot.revision,
-                    receipt_spec=spec,
-                )
-            elif not ended and cycle["state"] in {"active", "warning", "draining"}:
-                number_end = (
-                    await asyncio.to_thread(self.store.number_cycle, slot, self.clock())
-                    if action == "end" and mode is None
-                    else None
-                )
-                outcome = await self.change(
+            number_end = await asyncio.to_thread(self.store.number_cycle, slot, self.clock())
+            if number_end is not None:
+                await self.change(
                     actor,
                     slot_id=slot.slot_id,
                     kind="SessionEnded",
@@ -1178,9 +1012,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     receipt_spec=spec,
                     number_end=number_end,
                 )
-                if number_end is not None and self.replication is not None:
-                    # Announce after the local atomic end; replication failures do
-                    # not turn a committed end into an apparent failed mutation.
+                if self.replication is not None:
                     try:
                         end_event = max(
                             (
@@ -1196,8 +1028,9 @@ class AccessMeshApplication(AccessRegistryApplication):
                             await self.replication.announce_end(**end_event)
                     except Exception:
                         _LOG.exception("Mesh session-end propagation pending")
-                return {"ok": True} if action == "end" and mode is None else outcome
-            result = self._slot_receipt(slot, action)
-            receipt = self.store.prepare_receipt(event_id="none", result=result, **spec)
-            await asyncio.to_thread(self.store.save_receipt, receipt)
-            return {"ok": True} if action == "end" and mode is None else result
+            else:
+                receipt = self.store.prepare_receipt(
+                    event_id="none", result=self._slot_receipt(slot, "end"), **spec
+                )
+                await asyncio.to_thread(self.store.save_receipt, receipt)
+            return {"ok": True}

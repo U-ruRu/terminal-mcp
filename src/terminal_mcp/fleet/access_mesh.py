@@ -125,9 +125,13 @@ class AccessMeshReplication:
             self.store.numbers.register, **result["claim"], source_peer_id=peer.instance_id
         )
         for row in result["starts"]:
-            await asyncio.to_thread(self.store.numbers.record_start, **row)
+            await asyncio.to_thread(
+                self.store.numbers.record_start, **row, source_peer_id=peer.instance_id
+            )
         for row in result["ends"]:
-            await asyncio.to_thread(self.store.numbers.record_end, **row)
+            await asyncio.to_thread(
+                self.store.numbers.record_end, **row, source_peer_id=peer.instance_id
+            )
         if self.store.registry_upgrade_pending:
             from terminal_mcp.storage.access_mesh_registry_upgrade import accept_primary_completion
 
@@ -460,7 +464,9 @@ class AccessMeshReplication:
             if response.get("ok") is not True or not isinstance(response.get("ends"), list):
                 raise AccessMeshError("invalid_session_end_snapshot")
             for event in response["ends"]:
-                await asyncio.to_thread(self.store.numbers.record_end, **event)
+                await asyncio.to_thread(
+                    self.store.numbers.record_end, **event, source_peer_id=peer.instance_id
+                )
             cursor = response.get("next_cursor")
             if not cursor:
                 return
@@ -1150,7 +1156,9 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         if peer != mesh.store.registry_authority_id:
             raise HTTPException(400, "issuer does not match authenticated primary")
         try:
-            return await asyncio.to_thread(mesh.store.numbers.record_end, **payload)
+            return await asyncio.to_thread(
+                mesh.store.numbers.record_end, **payload, source_peer_id=peer
+            )
         except (AccessMeshError, ValueError, TypeError) as exc:
             return {"ok": False, "code": getattr(exc, "code", "invalid_session_end")}
 

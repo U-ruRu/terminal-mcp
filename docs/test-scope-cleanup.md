@@ -160,3 +160,17 @@ The integrated stage passes 35 selected tests, including the registry HTTP
 adapter, native lifecycle, strict proof gate, node identity and the operator
 slot-policy continuation. This is stage evidence; final full-source acceptance
 is recorded after runtime and topology integration.
+
+
+## Numeric-only Access and role entry points
+
+The old merged-inbox-presence test selected a decentralized number winner.
+That behavior is removed. The registry upgrade tests preserve both colliding
+source rows and require explicit conflict resolution instead of selecting a
+winner. Current registry HTTP tests verify shared end through a member Access
+and deny a number-end request from the former primary after a handoff.
+
+Native lifecycle, operator HTTP, intent freshness, public names and event-end
+fixtures now use start/end on Access and numeric attach on roles. They obtain
+native identity through the current registration, without the removed issuer/code
+or verbose legacy session response. The integrated selected set passes 42 tests.
