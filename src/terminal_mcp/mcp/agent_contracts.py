@@ -2,7 +2,7 @@
 
 Packaged metadata is compiled from the real Pydantic contracts at development
 time. At server construction, check exact model hashes before publishing it.
-The compatibility switch is intentionally read at startup, not per request.
+Only one packaged agent-facing catalog is published for each role.
 """
 
 from __future__ import annotations
@@ -30,16 +30,15 @@ def install_agent_contract(
     """Publish object-only schemas without replacing FastMCP's arg_model/validator.
 
     A stale packaged description is an installation error instead of silently
-    misdocumenting runtime behavior. Set MODE_ENV=legacy to restore the prior
-    discovery representation without touching code, data or in-flight sessions.
+    misdocumenting runtime behavior. A second legacy discovery mode is unsupported.
     """
     mode = os.environ.get(MODE_ENV, "knowledge")
-    if mode == "legacy":
-        return
     if mode != "knowledge":
-        raise ValueError(f"Unknown {MODE_ENV} value; expected knowledge or legacy")
+        raise ValueError(f"Unsupported {MODE_ENV} value; expected knowledge")
 
-    catalog = bundled_catalog()[role if mesh or role == "access" else role + "_native"]
+    if role != "access" and not mesh:
+        raise RuntimeError("Knowledge role discovery requires Access Mesh")
+    catalog = bundled_catalog()[role]
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     if set(tools) != set(catalog) or set(models) != set(tools):
         raise RuntimeError(f"Agent discovery catalog roster drift for {role}")

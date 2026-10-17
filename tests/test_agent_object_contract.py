@@ -92,19 +92,10 @@ def test_http_validation_and_admission_are_structured_pre_commit(tmp_path):
         assert after["tasks"] == []
 
 
-def test_compatibility_switch_restores_old_discovery_without_changing_execution(
-    tmp_path, monkeypatch
-):
+def test_legacy_discovery_mode_is_not_supported(tmp_path, monkeypatch):
     monkeypatch.setenv(MODE_ENV, "legacy")
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        for role in ("access", "executor", "coordinator"):
-            tools = rpc(client, role, "tools/list").json()["result"]["tools"]
-            assert any(item["inputSchema"] != {"type": "object"} for item in tools)
-        error = call(client, "executor", "command_run", {"command": 2})
-        assert error["error"]["code"] == "input_validation_failed"
-        assert error["outcome"] == "not_committed"
-        assert call(client, "executor", "task_list", {}, meta=False)["ok"] is True
+    with pytest.raises(ValueError, match=MODE_ENV):
+        create_app(settings(tmp_path))
 
 
 def test_stale_catalog_or_unknown_mode_fails_closed(monkeypatch):
@@ -119,12 +110,12 @@ def test_stale_catalog_or_unknown_mode_fails_closed(monkeypatch):
         build_role_mcp(mesh, "executor")
 
 
-def test_native_roles_also_publish_object_only_schema():
-    service = SimpleNamespace(persistent=None)
-    for role, count in (("executor", 10), ("coordinator", 8)):
-        server = build_role_mcp(service, role)
-        assert len(server._tool_manager.list_tools()) == count
-        for tool in server._tool_manager.list_tools():
-            assert tool.parameters == {"type": "object"}
-            assert tool.output_schema == {"type": "object"}
-            assert tool.description == bundled_catalog()[role + "_native"][tool.name]["description"]
+def test_single_agent_catalog_has_no_native_or_obsolete_session_descriptions():
+    catalog = bundled_catalog()
+    assert set(catalog) == {"access", "executor", "coordinator"}
+    for role in ("executor", "coordinator"):
+        assert 'action?:"attach"|"intent"' in catalog[role]["session"]["description"]
+        for entry in catalog[role].values():
+            assert "session(action='start')" not in entry["description"]
+        assert "Start, end, or interrupt" not in catalog[role]["session"]["description"]
+    assert "logical_agent_id" in catalog["coordinator"]["agent_observe"]["description"]

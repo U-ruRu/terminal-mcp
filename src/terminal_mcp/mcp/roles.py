@@ -1181,7 +1181,9 @@ def build_role_mcp(
     from terminal_mcp.operation_metadata import install_action_metadata
 
     install_action_metadata(mcp, role, mesh=bool(mesh))
-    if publish_agent_contract:
+    # The packaged agent contract is the Mesh contract only. Standalone keeps
+    # its existing runtime validator without a second published catalog.
+    if publish_agent_contract and mesh:
         from terminal_mcp.mcp.agent_contracts import install_agent_contract
 
         install_agent_contract(
