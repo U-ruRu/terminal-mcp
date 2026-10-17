@@ -12,7 +12,8 @@ import { inspectCanonicalPairingLink } from '../connections/pairingLink'
 import { connectionLifecycle, pairingErrorMessageKey, type ConnectionLifecycle } from '../connections/lifecycle'
 import { beginMeshCreate, finishMeshCreate, readPendingMeshCreate } from '../connections/meshCreate'
 import { isConverged, membershipReady, nativeTrustReady, MembershipMutationLifetime } from '../connections/membershipReadiness'
-import { joinPreflightError } from '../connections/joinPreflight'
+import { isAutonomous, joinPreflightError } from '../connections/joinPreflight'
+import { beginMeshHandoff, finishMeshHandoff, readMeshHandoff } from '../connections/meshHandoff'
 import { clearCachedFleetControl, isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
@@ -178,6 +179,28 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   const [membershipMutations, setMembershipMutations] = useState<Record<string, MembershipMutation>>({})
   const [membershipInFlight] = useState(() => new MembershipMutationLifetime())
   const [membershipTargets, setMembershipTargets] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      for (const profile of profiles) {
+        let pending
+        try { pending = readMeshHandoff(localStorage, profile.instanceId) } catch { continue }
+        if (!pending) continue
+        const observed = controls[profile.instanceId]
+        const local = observed?.freshness === 'fresh' ? observed.control : undefined
+        const node = local?.nodes.find((item) => item.nodeId === pending.nodeId)
+        if (local?.controlNodeId === pending.targetControlId && local.fleetId === pending.targetFleetId
+          && node?.meshId === pending.targetMeshId && isConverged(node) && nativeTrustReady(local, pending.targetMeshId)) {
+          finishMeshHandoff(localStorage, profile.instanceId, pending.targetMeshId)
+          setMembershipMutations((value) => ({ ...value, [profile.instanceId]: { targetMeshId: pending.targetMeshId, phase: 'confirmed' } }))
+        } else {
+          setMembershipTargets((value) => ({ ...value, [profile.instanceId]: pending.targetMeshId }))
+          setMembershipMutations((value) => value[profile.instanceId] ? value : ({ ...value, [profile.instanceId]: { targetMeshId: pending.targetMeshId, phase: 'failed', error: 'control_commit_uncertain' } }))
+        }
+      }
+    }, 0)
+    return () => window.clearTimeout(handle)
+  }, [profiles, controls])
 
   // Recover a confirmed Create Mesh after navigation, timeout or process restart.
   useEffect(() => {
@@ -464,7 +487,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     }
 
     if (observed?.control) {
-      if (!observed.control.managed) {
+      if (!observed.control.managed || isAutonomous(observed.control)) {
         return { kind: 'standalone', freshness: observed.freshness }
       }
       const observedNode = observed.control.nodes.find((node) => node.nodeId === observed.control?.nodeId)
@@ -638,6 +661,11 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       const authorityApi = targetAuthority.profile ? client(targetAuthority.profile.instanceId) : null
       if (!authorityApi) return { ok: false, error: 'control_write_unavailable' }
       const [targetControl, authorityControl] = await Promise.all([targetApi.fleetControl(), authorityApi.fleetControl()])
+      const handoff = readMeshHandoff(localStorage, instanceId)
+      if (handoff && (handoff.nodeId !== targetControl.nodeId || handoff.targetMeshId !== meshId
+        || handoff.targetControlId !== authorityControl.controlNodeId || handoff.targetFleetId !== authorityControl.fleetId)) {
+        return { ok: false, code: 'control_commit_uncertain', error: 'control_commit_uncertain' }
+      }
       const preflightError = joinPreflightError(targetControl, authorityControl)
       if (preflightError) {
         const failure = { ok: false, code: preflightError, error: preflightError }
@@ -727,9 +755,49 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       if (result.ok && result.control) projectMembershipControl(instanceId, result.control, node.nodeId)
       return result
     }
-    // Cross-authority rehome needs a durable prepare/commit/compensate protocol.
-    // Refuse before detaching anything; a multi-write UI sequence can strand the node.
-    return { ok: false, code: 'cross_authority_handoff_required', error: 'cross_authority_handoff_required' }
+    const localApi = client(instanceId)
+    const destinationApi = targetAuthority.profile ? client(targetAuthority.profile.instanceId) : null
+    const sourceApi = sourceAuthority.profile ? client(sourceAuthority.profile.instanceId) : null
+    if (!localApi || !destinationApi || !sourceApi) return { ok: false, error: 'control_write_unavailable' }
+    try {
+      const [local, destination, source] = await Promise.all([localApi.fleetControl(), destinationApi.fleetControl(), sourceApi.fleetControl()])
+      if (local.nodeId !== node.nodeId || source.controlNodeId !== sourceAuthority.control.controlNodeId
+        || destination.controlNodeId !== targetAuthority.control.controlNodeId
+        || !destination.meshes.some((mesh) => mesh.meshId === targetMeshId && mesh.adopted)) {
+        return { ok: false, error: 'enrollment_identity_changed' }
+      }
+      // A switch must establish Join compatibility before releasing membership.
+      // addToMesh repeats this check against fresh reads after Detach.
+      if (local.schemaVersion !== destination.schemaVersion) {
+        return { ok: false, code: 'management_contract_mismatch', error: 'management_contract_mismatch' }
+      }
+      if (local.fleetId !== destination.fleetId && !local.namespaceTransitionSupported) {
+        return { ok: false, error: 'namespace_transition_unsupported' }
+      }
+      // Validate operator enrollment before releasing the old membership.
+      // Detach rotates ingress credentials, so Join fetches it again afterwards.
+      const authorizedEnrollment = await localApi.fleetEnrollment()
+      if (authorizedEnrollment.nodeId !== local.nodeId) return { ok: false, error: 'enrollment_identity_changed' }
+      beginMeshHandoff(localStorage, instanceId, { nodeId: node.nodeId,
+        sourceControlId: source.controlNodeId, targetControlId: destination.controlNodeId,
+        targetFleetId: destination.fleetId, targetMeshId })
+      if (local.controlNodeId === destination.controlNodeId) return await addToMesh(instanceId, targetMeshId)
+      if (!isAutonomous(local)) {
+        if (local.controlNodeId !== source.controlNodeId) return { ok: false, error: 'already_managed_by_other_authority' }
+        // Detach uses its own fresh revision. An ambiguous POST is resolved by
+        // the target's direct read; never release a second authority speculatively.
+        await mutateControl({ ...sourceAuthority, control: source }, '/actions/fleet/control/nodes/detach', {
+          node_id: node.nodeId, expected_topology_revision: source.revisions.topology,
+        })
+      }
+      const detached = await localApi.fleetControl()
+      if (detached.nodeId !== node.nodeId || !isAutonomous(detached)) {
+        return { ok: false, code: 'control_commit_uncertain', error: 'control_commit_uncertain' }
+      }
+      return await addToMesh(instanceId, targetMeshId)
+    } catch (cause) {
+      return { ok: false, error: controlErrorCode(cause) }
+    }
   }
 
   async function changeMembership(instanceId: string, targetMeshId: string) {

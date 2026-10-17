@@ -191,7 +191,7 @@ class PersistentPolicyController:
         for raw in original.splitlines():
             stripped = raw.strip()
             matched = None
-            for key in tuple(remaining):
+            for key in updates:
                 candidate = stripped
                 if candidate.startswith("export "):
                     candidate = candidate[7:].lstrip()
@@ -200,6 +200,10 @@ class PersistentPolicyController:
                     break
             if matched is None:
                 output.append(raw)
+                continue
+            if matched not in remaining:
+                # A duplicate later assignment must not override the accepted
+                # administrative value after the next service restart.
                 continue
             output.append(f'{matched}="{remaining.pop(matched)}"')
 

@@ -36,6 +36,7 @@ class ManagedFleetControl:
         public_base_url: str,
         runtime_targets: Iterable[object] = (),
         client_factory=None,
+        namespace_sync=None,
     ):
         self.store = store
         self.config = config
@@ -49,6 +50,18 @@ class ManagedFleetControl:
         self._deferred_reconcile_requested = False
         self._stopped = asyncio.Event()
         self.native_access = None
+        self.namespace_sync = namespace_sync
+        self._namespace_lock = asyncio.Lock()
+        self._replica_lock = asyncio.Lock()
+
+    async def _complete_namespace(self) -> None:
+        async with self._namespace_lock:
+            namespace = await self.store.pending_namespace()
+            if namespace is None:
+                return
+            if self.namespace_sync is not None:
+                await self.namespace_sync(namespace)
+            await self.store.namespace_completed(namespace)
 
     async def start(self, interval_seconds: float | None = None) -> None:
         if self._reconcile_task is not None:
@@ -107,6 +120,7 @@ class ManagedFleetControl:
         )
 
     async def reconcile_pending(self) -> dict:
+        await self._complete_namespace()
         state = await self.snapshot()
         if state.get("managed"):
             # Durable managed state is also the source of truth for the live
@@ -483,6 +497,7 @@ class ManagedFleetControl:
                     {"node_id": self.store.node_id},
                 )
             await self.store.claim_local_control_authority()
+            await self._complete_namespace()
             self._sync_control_node(self.store.control_node_id)
         state = await self.store.adopt_managed(
             mesh_id=mesh_id or f"mesh-{secrets.token_hex(8)}",
@@ -806,6 +821,7 @@ class ManagedFleetControl:
         )
 
     async def reconcile_local(self) -> dict:
+        await self._complete_namespace()
         await self._ensure_local_identity()
         state = await self.snapshot()
         self._sync_control_node(str(state["control_node_id"]))
@@ -815,7 +831,7 @@ class ManagedFleetControl:
         await self._apply_local(state)
         return await self.snapshot()
 
-    async def apply_replica(self, snapshot: dict, *, source_node_id: str) -> dict:
+    async def _accept_replica(self, snapshot: dict, *, source_node_id: str) -> dict:
         incoming_control = str(snapshot.get("control_node_id") or "")
         if source_node_id != self.store.control_node_id and source_node_id != incoming_control:
             raise FleetControlError("control_authority_required")
@@ -840,11 +856,38 @@ class ManagedFleetControl:
                 str(identity.get("ingress_token") or ""),
             ):
                 raise FleetControlError("control_rejoin_credential_required")
+            current = await self.snapshot()
+            if any(
+                node.get("state") != "detached"
+                and (node.get("node_id") != self.store.node_id or node.get("mesh_id") is not None)
+                for node in current.get("nodes") or []
+            ) or current.get("meshes"):
+                raise FleetControlError("control_authority_rehome_requires_standalone")
+
+        namespace_changed = str(snapshot.get("fleet_id") or "") != self.store.fleet_id
+        if namespace_changed and (
+            source_node_id != incoming_control
+            or (incoming_control != self.store.control_node_id and not self.is_control_node)
+        ):
+            raise FleetControlError("control_authority_required")
 
         state = await self.store.apply_managed_replica(
             public_snapshot,
             bootstrap_tokens=bootstrap_tokens,
+            # This method is reached only after management-peer authentication.
+            # A new controller must additionally present the local enrollment
+            # credential above; a public namespace value grants no trust.
+            namespace_authorized=source_node_id == incoming_control,
         )
+        await self._complete_namespace()
+        return state
+
+    async def apply_replica(self, snapshot: dict, *, source_node_id: str) -> dict:
+        # Serialize acceptance and local persistence only. Detach can call the
+        # authority, which may replicate back before its response; holding this
+        # lock across peer I/O would deadlock that legitimate callback.
+        async with self._replica_lock:
+            state = await self._accept_replica(snapshot, source_node_id=source_node_id)
         self._sync_control_node(self.store.control_node_id)
         await self._apply_local(state)
 
@@ -878,6 +921,7 @@ class ManagedFleetControl:
                 # that post-commit acknowledgement race into a false detach failure.
                 pass
             await self.store.claim_local_control_authority(policy=self.policy_controller.snapshot())
+            await self._complete_namespace()
             self._sync_control_node(self.store.control_node_id)
             return acknowledgement
 

@@ -92,11 +92,18 @@ class FleetNodeMetaStore:
                     (self.SCHEMA_VERSION,),
                 )
             else:
-                if row[0] != self.fleet_id or row[1] != self.node_id:
+                if row[1] != self.node_id:
                     await db.rollback()
                     raise RuntimeError(
                         "fleet node identity does not match persisted fleet_node_meta; "
                         "use a fresh node-meta store for a replacement node"
+                    )
+                if row[0] != self.fleet_id:
+                    # An administrator may change namespace in configuration.
+                    # Keep the node identity, stream generation and data intact.
+                    await db.execute(
+                        "UPDATE source_meta SET fleet_id=?,updated_at=? WHERE singleton=1",
+                        (self.fleet_id, stamp),
                     )
                 version = await (
                     await db.execute("SELECT version FROM meta_schema WHERE singleton=1")

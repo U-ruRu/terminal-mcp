@@ -26,11 +26,17 @@ def make_settings(tmp_path):
         auth_mode="bearer",
         bearer_tokens="api-token",
         metrics_port=0,
+        access_mesh_enabled=True,
+        fleet_instance_id="test-node",
+        fleet_signing_private_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        fleet_peers_json="[]",
+        access_mesh_proof_key="mesh-runtime-fixture-key-never-production",
+        access_mesh_peers_json="[]",
         fleet_v1_source_enabled=False,
         fleet_v1_authority_enabled=False,
         fleet_v1_projection_enabled=False,
         fleet_v1_public_enabled=False,
-        persistent_agents_enabled=False,
+        persistent_agents_enabled=True,
         legacy_agent_admission_enabled=True,
     )
 

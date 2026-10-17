@@ -234,6 +234,12 @@ class FleetControlStore:
                         ingress_token TEXT,
                         updated_at TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS control_namespace(
+                        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                        home_fleet_id TEXT NOT NULL,
+                        pending_fleet_id TEXT,
+                        updated_at TEXT NOT NULL
+                    );
                     CREATE TABLE IF NOT EXISTS access_policy(
                         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                         duration_seconds INTEGER NOT NULL CHECK(duration_seconds>0),
@@ -329,11 +335,25 @@ class FleetControlStore:
                             stamp,
                         ),
                     )
-                elif (meta[0], meta[1]) != (self.fleet_id, self.node_id):
+                elif meta[1] != self.node_id:
                     raise FleetControlError(
                         "fleet_control identity does not match persisted metadata"
                     )
                 else:
+                    if meta[0] != self.fleet_id:
+                        # Local configuration is an administrative namespace choice,
+                        # not a peer credential. Node identity remains immutable.
+                        await db.execute(
+                            "UPDATE control_meta SET fleet_id=?,topology_revision="
+                            "topology_revision+?,updated_at=? WHERE singleton=1",
+                            (self.fleet_id, int(meta[2] == self.node_id), stamp),
+                        )
+                        await db.execute(
+                            "INSERT INTO control_namespace VALUES(1,?,NULL,?) "
+                            "ON CONFLICT(singleton) DO UPDATE SET "
+                            "home_fleet_id=excluded.home_fleet_id,pending_fleet_id=NULL,"
+                            "updated_at=excluded.updated_at", (self.fleet_id, stamp),
+                        )
                     # The persisted control authority is runtime state. The env value is
                     # only a bootstrap default and must not overwrite an explicit rehome.
                     self.control_node_id = validate_protocol_id(str(meta[2]), "control_node_id")
@@ -354,6 +374,7 @@ class FleetControlStore:
     ) -> str:
         """Make this standalone node its own control-domain authority."""
         stamp = now or utc_text()
+        namespace = self.fleet_id
         async with self._connect("fleet_control_claim_local_authority") as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
@@ -365,6 +386,20 @@ class FleetControlStore:
                 ).fetchone()
                 if row is not None and row[1] != "detached" and row[0] is not None:
                     raise FleetControlError("control_authority_rehome_requires_standalone")
+                home = await (
+                    await db.execute(
+                        "SELECT home_fleet_id FROM control_namespace WHERE singleton=1"
+                    )
+                ).fetchone()
+                if home is not None and home[0] != namespace:
+                    namespace = str(home[0])
+                    await db.execute(
+                        "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (namespace,)
+                    )
+                    await db.execute(
+                        "UPDATE control_namespace SET pending_fleet_id=?,updated_at=? "
+                        "WHERE singleton=1", (namespace, stamp),
+                    )
                 await db.execute(
                     "UPDATE control_meta SET control_node_id=?,routing_revision=routing_revision+1,"
                     "updated_at=? WHERE singleton=1",
@@ -425,6 +460,7 @@ class FleetControlStore:
                 await db.rollback()
                 raise
         self.control_node_id = self.node_id
+        self.fleet_id = namespace
         return self.control_node_id
 
     async def schema_version(self) -> int:
@@ -1430,6 +1466,7 @@ class FleetControlStore:
             raise FleetControlError("fleet_control is not initialized")
         result = {
             "schema_version": self.SCHEMA_VERSION,
+            "namespace_transition_supported": True,
             "fleet_id": self.fleet_id,
             "node_id": self.node_id,
             "control_node_id": self.control_node_id,
@@ -1455,12 +1492,15 @@ class FleetControlStore:
         snapshot: dict,
         *,
         bootstrap_tokens: dict[str, str] | None = None,
+        namespace_authorized: bool = False,
         now: str | None = None,
     ) -> dict:
         if not bool(snapshot.get("managed")):
             raise FleetControlError("managed_snapshot_required")
-        if str(snapshot.get("fleet_id") or "") != self.fleet_id:
-            raise FleetControlError("fleet_id_mismatch")
+        namespace = validate_protocol_id(str(snapshot.get("fleet_id") or ""), "fleet_id")
+        namespace_changed = namespace != self.fleet_id
+        if namespace_changed and namespace_authorized is not True:
+            raise FleetControlError("namespace_transition_authorization_required")
         incoming_control_node_id = validate_protocol_id(
             str(snapshot.get("control_node_id") or ""), "control_node_id"
         )
@@ -1557,6 +1597,21 @@ class FleetControlStore:
                     )
                 elif topology < current[0] or trust < current[1] or policy_revision < current[2]:
                     raise FleetControlError("managed_snapshot_stale")
+                if authority_changed and self.control_node_id == self.node_id:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO control_namespace VALUES(1,?,NULL,?)",
+                        (self.fleet_id, stamp),
+                    )
+                if namespace_changed:
+                    await db.execute(
+                        "INSERT INTO control_namespace VALUES(1,?,?,?) "
+                        "ON CONFLICT(singleton) DO UPDATE SET "
+                        "pending_fleet_id=excluded.pending_fleet_id,updated_at=excluded.updated_at",
+                        (self.fleet_id, namespace, stamp),
+                    )
+                    await db.execute(
+                        "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (namespace,)
+                    )
                 existing_tokens = {
                     row[0]: row[1]
                     for row in await (
@@ -1663,7 +1718,25 @@ class FleetControlStore:
                 raise
         if authority_changed:
             self.control_node_id = incoming_control_node_id
+        self.fleet_id = namespace
         return await self.control_state(include_secrets=False)
+
+    async def pending_namespace(self) -> str | None:
+        async with self._connect("fleet_namespace_pending") as db:
+            row = await (
+                await db.execute(
+                    "SELECT pending_fleet_id FROM control_namespace WHERE singleton=1"
+                )
+            ).fetchone()
+        return str(row[0]) if row and row[0] else None
+
+    async def namespace_completed(self, namespace: str) -> None:
+        async with self._connect("fleet_namespace_completed") as db:
+            await db.execute(
+                "UPDATE control_namespace SET pending_fleet_id=NULL "
+                "WHERE singleton=1 AND pending_fleet_id=?", (namespace,)
+            )
+            await db.commit()
 
     async def register_member(
         self,

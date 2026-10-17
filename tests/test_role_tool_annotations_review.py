@@ -13,21 +13,21 @@ from terminal_mcp.mcp.roles import build_role_mcp
         (
             "executor",
             {
-                "session",
                 "message",
                 "command_run",
                 "command_recovery",
                 "command_cancel",
                 "task_state",
+                "task_claim",
                 "task_comment",
             },
             {"command_run", "command_recovery"},
         ),
-        ("coordinator", {"session", "message", "task_manage"}, set()),
+        ("coordinator", {"message", "task_manage"}, set()),
     ],
 )
 def test_role_annotations_describe_real_effects(role, destructive_names, open_world_names):
-    mcp = build_role_mcp(SimpleNamespace(persistent=None), role)
+    mcp = build_role_mcp(SimpleNamespace(persistent=None, access_mesh=object()), role)
     for tool in mcp._tool_manager.list_tools():
         assert tool.annotations is not None
         assert tool.annotations.destructiveHint is (tool.name in destructive_names), tool.name

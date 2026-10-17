@@ -1,235 +1,175 @@
 # Test workflow and reusable preparation
 
 `python scripts/test.py` separates component feedback, integration/platform checks,
-complete candidate acceptance and node probes. Run it using the project's
-installed test environment (`.[test,compact]`) and a checkout of the intended source.
-It prints an external `report.json` path; results never disappear into terminal output.
-The runner supplies sanitized temporary paths to pytest; session hooks retain this isolated configuration.
+complete candidate acceptance and node probes. Use the project's installed test
+environment (`.[test,compact]`) and the intended source checkout. Each run writes an
+external `report.json` together with its exact command, source identity and outcomes.
+The runner and pytest session hooks keep test configuration isolated.
 
-The repository's [AGENTS.md](../AGENTS.md) defines the lightweight agent workflow:
-find and reuse existing behavior checks before adding a named missing regression,
-select the smallest relevant layer and report reused/changed/new coverage.
+[AGENTS.md](../AGENTS.md) defines the test authoring workflow: identify the current
+responsibility, find its existing owner, and keep one operation and its observable
+result in each test. Arrange the state needed for that operation through a fixture
+or the owning store. Neighboring services and transports are doubled in component
+checks. Own SQLite transactions can remain real when storage is the subject.
 
 ## Commands
 
 ```sh
-# Development feedback: public/compact artifact contracts, read/window/version and runner safeguards.
+# Small current contract and runner feedback.
 python scripts/test.py dev
 
-# Reviewed component checks for this owner only; no global dev or dependency expansion.
+# Reviewed component checks for these owners.
 python scripts/test.py component mesh
 python scripts/test.py component agents
 
-# Explicit cross-component feedback, including the app/auth/commit boundaries.
+# Explicit cross-component feedback, including app/auth/commit boundaries.
 python scripts/test.py integration mesh
 python scripts/test.py integration events
 
-# Explicit Linux shell, Unix IPC and kernel-dependent checks.
+# Linux shell, Unix IPC and kernel-dependent checks.
 python scripts/test.py platform linux --plan
 python scripts/test.py platform linux
 
-# Native Windows PowerShell, Job Objects, ACL and app boundaries.
+# Native Windows PowerShell, Job Objects, ACL and deployment checks.
 python scripts/test.py platform windows --plan
 python scripts/test.py platform windows
 
-# Inspect affected selection, including committed, staged, unstaged and untracked changes.
+# Inspect affected selection before running it.
 python scripts/test.py dev --changed-from <full-base-sha> --plan
 python scripts/test.py dev --changed-from <full-base-sha>
 python scripts/test.py integration --changed-from <full-base-sha> --plan
 
-# Candidate acceptance: one complete run on an exact, clean source checkout.
+# Complete acceptance on the exact clean candidate.
 python scripts/test.py full --expected-sha <full-candidate-sha> --output /tmp/tmcp-acceptance-<unique-id>
 
-# Read-only check of an already deployed node. Use its exact expected public release string.
+# Read-only liveness and release check of an already deployed node.
 python scripts/test.py node --url https://node.example --expected-release <version-shortsha>
 ```
 
 `component` accepts `auth`, `mesh`, `storage`, `contracts`, `commands`, `slots`,
-`events`, `tasks`, `agents`, `testing`, `deployment`, and `all`. The source
-owners, reviewed component allowlist, mixed-function tiers and dependency graph are
-in `scripts/test_plan.py`. Unreviewed modules remain in integration until their
-responsibilities are separated. SQLite transaction tests are component checks when
-storage itself is the subject; a POSIX-looking filename is not a platform requirement.
-Integration mode includes requested component checks and their transitive boundaries;
-platform checks remain a separate explicit batch. `--plan` prints exact selectors,
-reasons and deferred integration/platform coverage. None of these modes is a release gate.
+`events`, `tasks`, `agents`, `testing`, `deployment`, and `all`. The source owners,
+component allowlist, mixed-function layers and dependency graph live in
+`scripts/test_plan.py`. Unreviewed modules remain in integration. Integration mode
+includes its requested component checks and their transitive boundaries; platform
+checks form a separate explicit batch. `--plan` prints selectors, reasons and
+coverage deferred to the other layers. A plan is not a passing behavior check.
 
-Affected selection uses declared source owners, direct test imports of source modules
-and transitive test-helper imports. An import can select a consumer whose filename
-does not match the owner's patterns (for example WorkWindowStore or Android scope).
-Source boundary plans also include consumers of the owner's declared ports.
-Documentation selects current documentation/artifact contracts. A shared/unclassified
-input, dependency lock, deleted test or unresolved import graph expands to every
-reviewed component check, with integration/platform coverage printed separately.
-It does not silently start a full release run. `integration --changed-from` explicitly
-selects the affected integration batch. This is staged feedback, not a proof that
-unselected runtime paths are unaffected. Frontend checks still use the console's
-Vitest/build commands; Python `full` does not run them.
-The three dedicated modules under `qa/` are also separate explicit pytest targets
-(50 collected cases in this audit); the default `testpaths` and Python `full` target
-only `tests/`. The layer inventory above describes that existing runner's corpus.
+Frontend checks use the console's Vitest and build commands. Python `full` targets
+all of `tests/` and does not run the console or `qa/windows/`. Native Windows tests
+have the explicit `platform windows` target and require a Windows test environment.
+The former Linux QA modules duplicated current owners under `tests/` and were
+removed during the atomic-test cleanup.
 
-The plan's `routes` records each changed source path, owner or explicit unknown
-status, fallback reason and boundary breadth. Shared auth/storage and managed-session
-policy contracts keep direct component feedback but expose **all** remaining
-integration/platform checks; their dynamic/injected consumers are not narrowed by
-filename guesses. `integration --changed-from` selects that broad non-platform batch
-only when explicitly requested. Native checks stay deferred. Direct source import
-edges are static evidence, not a claim of complete runtime import transitivity.
+## Selection and acceptance evidence
 
-The M3 source snapshot has 187 tracked files (182 Python modules and five
-assets): 114 have an owner route and 73 use the explicit unknown route. The unreviewed
-families are 20 HTTP adapters, 21 shared application modules, 14 shared core modules,
-two adapters and 16 package/composition modules. Examples are `http/persistent.py`,
-`application/base.py`, `core/orchestration.py`, `adapters/mcp_identity.py` and `app.py`.
-Their full family fallbacks are in `UNKNOWN_SOURCE_FAMILIES`; a new/unmapped source
-also selects every reviewed component check and exposes all boundaries. No module
-silently disappears from affected coverage. The current inventory guard checks
-visible source routes and complete component/integration/platform function coverage.
+Affected selection uses declared source owners, direct source imports and transitive
+test-helper imports. Changes to a helper can select consumers whose filenames do
+not match the owner patterns. Source boundary plans also include consumers of the
+owner's declared ports. Prose-only changes under `docs/` and `skills/`, or to
+`README.md` and `AGENTS.md`, do not select executable tests. Changes to generated
+artifacts remain subject to their executable contract owners.
 
-Subscription capture and its dedicated selectors are deferred on this M3 branch;
-the runtime capture commit is not included. Events still exposes current app/auth,
-binding and subscription-commit boundaries. A runtime/lifecycle or trust-policy
-change needs its corresponding integration/platform coverage before release acceptance.
+A shared or unclassified input, dependency lock, deleted test or unresolved import
+graph expands to every reviewed component check and exposes integration/platform
+coverage separately. Shared storage, authorization and managed-session contracts
+also expose all remaining boundaries. The plan's `routes` identify each changed
+source path, its owner or explicit unknown status, the fallback reason and boundary
+breadth. Unknown source families are declared in `UNKNOWN_SOURCE_FAMILIES`.
+`integration --changed-from` runs the affected non-platform boundaries only when
+explicitly requested. Static import edges guide feedback; they do not prove every
+runtime dependency.
 
-Mixed modules select explicit test functions, preserving their parameterization.
-A stale mixed-function declaration blocks the plan. Paths use POSIX separators on
-every host, so a file is not repeated as both `tests\\file.py` and `tests/file.py`.
-An empty feedback plan reports `no_tests_selected` and its deferred coverage; it
-never invokes pytest with no selectors and accidentally runs the default suite.
+Mixed modules select named functions and preserve pytest parameterization. A stale
+mixed-function declaration blocks planning. Paths use POSIX separators on every
+host. An empty feedback plan reports `no_tests_selected` and never invokes pytest
+without selectors. All component, integration and platform declarations refer to
+current tests; helper-only modules remain available to their import consumers.
 
-Development checks include exact generated compact-artifact provenance so a stale
-source hash is caught before the long release run.
+Full mode forbids selectors, checks the exact SHA and requires a clean checkout.
+It removes inherited pytest filters and Python optimization, counts collection and
+fixture errors, requires every collected case to pass with none deselected, and
+checks for source changes before issuing eligible evidence. `--allow-dirty` is a
+diagnostic option and cannot produce eligible full-test evidence. No retries,
+xfail conversions, disabled assertions or hidden omissions replace the full run.
 
-The full mode forbids selectors, checks the exact SHA, and requires a clean checkout.
-It strips inherited pytest filters and Python optimization, counts setup/teardown and
-collection errors, checks that all collected tests passed and none were deselected,
-and detects changed source before creating eligible evidence. `--allow-dirty` is an
-explicit diagnostic mode, never accepted full-test evidence. No automatic retries,
-xfail conversions, disabled assertions, or hidden test omissions are used.
+The report's `full_test_evidence_eligible` flag certifies those complete test
+requirements only. Deployment approval and live acceptance remain separate from
+this source test result. The source-only critical gate in
+`scripts/stab_release_gate.sh` likewise keeps its exact-SHA, clean-checkout and
+pinned SQLite ABI requirements. Its explicit targets refer to the current storage,
+command, task, message, Fleet and execution owners; a missing target blocks the
+gate. Neither a scoped source gate nor a node liveness check replaces full evidence.
 
-The report's `full_test_evidence_eligible` flag means only that these complete test
-requirements passed. It **does not authorize deployment** or certify Mesh rolling
-compatibility. Release approval separately binds the exact source/tree, artifact,
-full report, compatibility evidence, preservation guarantees and operator decision.
-A short node check does not replace any of these.
+## Current test scope
 
-The scoped cleanup separates the eight listed SQLite/Fleet/auth/agent/session/
-Events/persistent modules. Pure rules, projections, router contracts and own SQLite
-transactions are reviewed component checks; real app/auth/store bridges and native
-shell/filesystem checks have separate physical modules. Extraction reuses assertions
-and inputs. The current `task_context_ttl_seconds` replaces exercising the previous
-`task_lease_seconds` alias. No migration was removed based on a versioned filename.
+The cleanup removes duplicate obligations, legacy import/signature guarantees,
+retired Fleet identity replication and old-schema/rolling-compatibility scenarios.
+It also removes source-text assertions, nested test-runner suites, stress loops,
+benchmarks and chains that exercised several independent operations. A versioned
+filename alone does not establish that its behavior is obsolete: the current Fleet
+projection/source modules still own current functionality.
 
-The historical capture-based inventory and case counts are recorded in
-[test-scope-cleanup.md](test-scope-cleanup.md); they are not collection evidence for
-this M3 transfer. The inventory guard checks the current source and complete
-component/integration/platform function partition without executing those suites.
-Integration includes its requested component checks. Existing managed EventStore
-cases remain component checks. Separate IDs reuse existing loop/assertion inputs.
+A retained test exercises one current outcome. Existing lower-level owners replace
+repeated workflow assertions: task storage owns its durable state, Access Mesh
+message storage owns ACK/reply state, and persistent lifecycle owns permits and
+session fencing. Fleet control, projection and recovery are tested at their own
+store boundaries with neighboring nodes injected. Native execution checks retain
+the operating-system boundary needed for process cancellation, socket/peer fencing
+and bounded output. Failure guards remain when they protect current authorization,
+durable data or command ownership.
 
-Actual ASGI lifespan/auth checks need a genuine secure verifier-key file. Windows
-cannot satisfy its POSIX mode check; the audit does not patch stat/permissions or
-claim Linux acceptance. The native neighbor is doubled only in wiring checks that
-do not test processes; native modules retain actual bash. Two symlink checks require
-real creation/atomic replacement and remain platform checks. Preparation allowlists
-retain the two relocated native files' former schema/empty-database reuse.
+Specific removals and their remaining owners are recorded in
+[test-scope-cleanup.md](test-scope-cleanup.md). Historical counts are audit evidence,
+not assertions embedded in the suite. Report current collected counts and full-run
+results from the exact source being reviewed. Runtime changes, environment changes
+and test removal can affect duration differently; a shorter run alone does not
+prove correctness.
 
-Affected plans traverse helper edges before intersecting final selectors with
-`test_files(root)`. Consumers stay selected while `conftest.py` and other fixture-only
-modules cannot become final pytest targets. The existing import-plan regression
-covers both layers; no separate safeguard suite was introduced.
+## Isolation and report retention
 
-## Isolation, profiling and retention
+Every run uses temporary SQLite databases, runtime configuration, output, working
+directories, sockets, Fleet metadata and Mesh state. Inherited `TERMINAL_MCP_*`
+settings are removed. No test-state fallback uses production paths. Reports retain
+Python/dependency versions, exact argv, source identity, phase timings, per-test
+outcomes and hashes of evidence. Existing report directories are never overwritten.
+Fixture setup totals are inclusive; they must not be added as exclusive wall time.
 
-Every run has separate temporary SQLite databases, runtime config, output, working
-directory, sockets, Fleet metadata and Mesh state. Inherited `TERMINAL_MCP_*` settings
-are removed. No test-state fallback points at production paths. The report stores
-Python/dependency versions, exact argv and source identity, phase timings, per-test
-outcomes, inclusive fixture setup times, CPU/RSS/load and SHA256 hashes of evidence.
-Fixture totals are inclusive and must not be added together as exclusive wall time.
-A fixture or helper invoked inside the test body remains part of pytest's call phase.
+The runner directs `TMPDIR`, `TMP` and `TEMP` into its isolated test state. It removes
+that state after pass, failure or timeout, while keeping the report, JUnit XML and
+logs separately. Use `--keep-state` for a concrete failure investigation when the
+per-test files are needed. The source-only gate also removes its test directories;
+`TMCP_GATE_KEEP_TEST_STATE=1` preserves them explicitly for incident reproduction.
+Optional `--sample` diagnostics and `--fresh-preparation` remain available to
+investigate a named problem; neither changes which tests are selected. The ordinary
+workflow does not run a separate benchmark or repeat the suite to estimate cost.
 
-`--sample` enables a 50 ms read-only stack sampler. Samples from different threads
-may overlap and are not additive elapsed time. Use identical instrumentation for
-comparisons. `--fresh-preparation` exercises the original preparation paths without
-selecting fewer tests. `--keep-state` retains the complete run state for diagnosis;
-otherwise the isolated test-state directory is removed after every run (pass, fail or
-timeout).
-Pytest removes passed tests' tmp_path files at teardown. The runner directs TMPDIR,
-TMP and TEMP into the isolated test state, then removes that entire state on completion.
-Use
-`--keep-state` only for an explicit debugging run; it preserves per-test directories.
-Structured receipts, JUnit XML, profiles and pytest logs remain in the separate report
-directory after cleanup, and existing report directories are never overwritten.
-The source-only release gate (scripts/stab_release_gate.sh) cleans its isolated pytest
-and tempfile directories after any completed gate, keeping driver.log, pytest.log,
-runtime.txt and RESULT.txt. Set TMCP_GATE_KEEP_TEST_STATE=1 explicitly to preserve
-a gate's test databases for incident reproduction.
+The `node` command uses HTTPX for a bounded `GET /health/live`. It checks liveness
+and the public release string, rejects URL credentials and distinguishes an HTTP
+failure from a CDN challenge. It cannot establish the full source SHA or exercise
+authenticated management routes. Deployment acceptance must verify its artifact
+identity and configured MCP/OAuth/management routes through the existing workflow.
 
-The `node` command uses the supported HTTPX client and performs only `GET /health/live`
-with bounded timeouts. It verifies liveness and the public release string, rejects URL
-credentials, and distinguishes a CDN challenge from an application HTTP failure.
-It cannot establish the full source SHA, authenticated management functionality or
-Mesh compatibility. The deployment workflow must additionally verify its local
-artifact identity and configured MCP/OAuth/management routes.
+## Preparation reuse
 
-## Preparation reuse and retained guarantees
+`tests/conftest.py` contains explicit preparation allowlists for the remaining
+behavior modules. This cleanup only removes stale entries and follows renamed
+owners; it does not change the preparation implementation or runtime source.
 
-The allowlists in `tests/conftest.py` are explicit. No runtime source is changed.
-Behavior tests may reuse two kinds of preparation:
+1. Immutable MCP schema dictionaries are produced by the original generator and
+   cached with a bounded key. Every consumer receives a deep copy. Generator
+   identity and arguments form the key; unknown or unhashable inputs use the real
+   generator. Static model catalogs reuse schema dictionaries without replacing
+   runtime validators. Generator/contract tests use their original paths.
+2. Selected behavior tests seed a new main SQLite database from a verified empty
+   current-version schema. SQLite's backup API seals the template, all application
+   tables must be empty, and publication is restricted to absent files inside the
+   run's temporary directory. Existing databases are untouched. The complete real
+   `initialize()` method still runs, including validation, recovery and transactions.
+   Every database has independent contents and a separate inode.
 
-1. Immutable MCP schema dictionaries are built by the original generator, then stored
-   in a bounded cache. Every consumer receives a deep copy. Function identity and
-   generator arguments form the key; unknown/unhashable input uses the real generator.
-   Static input and role-output model catalogs also reuse only model_json_schema
-   dictionaries; BaseModel itself and unknown/dynamic models are never patched.
-   Runtime validators, real HTTP/MCP adapters, processes and network boundaries remain
-   unchanged. Contract/catalog/generator tests stay outside this allowlist.
-2. Selected behavioral tests seed a new main SQLite database from a verified empty,
-   current-version schema. SQLite's backup API seals the template; every application
-   table must be empty. Publication is atomic and restricted to absent files inside
-   that run's temporary directory. Existing databases are untouched. **The complete
-   original initialize method still runs**, including migrations, validation, recovery
-   and real transactions. Each database has independent contents and a separate inode.
-
-Dedicated fresh-install, schema migration, restart/recovery, locking, durability,
-process and TCP-partition tests retain their original storage preparation. The long
-real-time Mesh timeout budget and inherited-FD stress tests are retained unchanged.
-No sleep or fixture size was reduced merely to improve the reported total.
-
-New regression tests compare cached metadata against original generator output,
-verify independent nested values and restoration, execute real concurrent cache/seed
-creation, check refusal to overwrite or escape the sandbox, reject nonempty templates,
-and run real migration/restart recovery after seeding. Nested real pytest runs verify
-that automatic allowlist activation works and `--fresh-preparation` disables it.
-
-## Removed tests
-
-The immutable-preparation optimization removed no tests. The later cleanup follows
-the user's current policy: remove guarantees of previous import aliases/signatures
-and retired peer-message scenarios, while keeping current authorization, slot,
-storage and upgrade obligations. Each removal or replacement is recorded in
-[test-scope-cleanup.md](test-scope-cleanup.md). Versioned filenames alone remain
-insufficient evidence of retirement. Native ExecutionPort cases were moved intact
-to a platform module, not deleted. Further mixed modules remain visible in the
-integration/platform batches pending responsibility-focused refactoring.
-
-## Benchmark protocol
-
-Measure before and after on the same Secondary host and interpreter, serially, with
-fresh state directories, the same hash seed and the same profiler. Record background
-load and concurrent jobs. Use `--fresh-preparation` versus the default on the same SHA
-for direct attribution; compare identical collected test IDs and outcomes. When a
-new runtime candidate also changes, report its full-suite result separately rather
-than crediting all difference to preparation reuse. Retain raw JSON/JUnit/log evidence.
-
-Initial exact `8e78c905fd53b2ceab41a04f3005fa0fa0a881fe` reference on Secondary:
-2748 passed, no skipped/xfail/failed tests; pytest 800.93 s, wrapper 803.73 s;
-collection 10.68 s, setup 65.99 s, call 720.61 s, teardown 1.23 s. This is a baseline,
-not a claim that the uncorrected candidate is safe to deploy. Subsequent measured
-results belong in the task handoff alongside the exact tested source and raw artifacts.
-
-Parallel test execution is not enabled. The existing suite contains shared process,
-network and global-state boundaries whose independence has not been established for
-all modules. These real checks remain part of every complete candidate acceptance.
+Current initialization, durability, locking and native-process owners retain the
+preparation their operation requires. Real ASGI authentication checks use a genuine
+secure verifier-key file; Linux-specific permission checks do not establish native
+Windows acceptance. Native Windows checks must run on their own platform.
+Parallel pytest execution is not enabled: remaining process and global-state
+boundaries have not all been proven independent.

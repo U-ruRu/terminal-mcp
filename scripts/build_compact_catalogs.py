@@ -17,7 +17,6 @@ from terminal_mcp.mcp.compact_contracts import (  # noqa: E402
     build,
     dump,
     encoded,
-    generate,
 )
 
 
@@ -154,29 +153,19 @@ def main() -> int:
     expected = outputs()
     # The runtime only needs small description/hash metadata; generated sidecars
     # remain offline review artifacts and are deliberately not loaded by FastMCP.
-    import asyncio
-
     catalog = {}
     generated = build()
-    native_before, native_after, _, native_coverage = asyncio.run(generate(mesh=False))
     for role in ROLE_NAMES:
-        variants = [(role, generated["before"], generated["after"], generated["coverage"])]
-        if role != "access":
-            variants.append((role + "_native", native_before, native_after, native_coverage))
-        for catalog_role, before, after, coverage in variants:
-            catalog[catalog_role] = {}
-            for item in after[role]["tools"]:
-                key = role + "." + item["name"]
-                catalog[catalog_role][item["name"]] = {
-                    "description": item["description"],
-                    "base_description": next(
-                        previous["description"]
-                        for previous in before[role]["tools"]
-                        if previous["name"] == item["name"]
-                    ),
-                    "strict_input_sha256": coverage[key]["strict_input_sha256"],
-                    "strict_output_sha256": coverage[key]["strict_output_sha256"],
-                }
+        catalog[role] = {}
+        before = {tool["name"]: tool for tool in generated["before"][role]["tools"]}
+        for item in generated["after"][role]["tools"]:
+            key = role + "." + item["name"]
+            catalog[role][item["name"]] = {
+                "description": item["description"],
+                "base_description": before[item["name"]]["description"],
+                "strict_input_sha256": generated["coverage"][key]["strict_input_sha256"],
+                "strict_output_sha256": generated["coverage"][key]["strict_output_sha256"],
+            }
     catalog_path = REPO / "src/terminal_mcp/mcp/agent_catalogs.json"
     catalog_bytes = dump(catalog)
     if args.write:

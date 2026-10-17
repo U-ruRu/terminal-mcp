@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from test_compact_response_independent import _current_role_service
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.mcp.role_outputs import RoleHealthOutput, TaskClaimOutput
@@ -12,7 +13,7 @@ from terminal_mcp.mcp.roles import (
 
 
 def _service():
-    return SimpleNamespace(persistent=None)
+    return _current_role_service()
 
 
 def _tool_map(role):

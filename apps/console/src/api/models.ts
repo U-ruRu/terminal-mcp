@@ -366,6 +366,7 @@ export type NativeAccessTrustReadModel = {
 }
 
 export type ManagedFleetControlReadModel = {
+  namespaceTransitionSupported?: boolean
   nativeAccessTrust?: NativeAccessTrustReadModel
   schemaVersion: number
   fleetId: string

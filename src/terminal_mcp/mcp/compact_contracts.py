@@ -539,23 +539,22 @@ def output_summary(schema: dict) -> str:
     return " | ".join(entries)
 
 
-def contract_models(role: str, *, mesh: bool = True) -> dict[str, type]:
+def contract_models(role: str) -> dict[str, type]:
     if role == "access":
         return {"session": IssuerSessionInput, "get_events": GetEventsInput}
     models = {name: model for (r, name), model in ROLE_TOOL_MODELS.items() if r == role}
-    if mesh:
-        models["session"] = AttachInput
-        models["message"] = MeshMessageInput
-        if role == "coordinator":
-            models["agent_observe"] = MeshAgentObserveInput
-        if role == "executor":
-            models["command_read"] = MeshCommandReadInput
-            models["task_comment"] = MeshTaskCommentInput
+    models["session"] = AttachInput
+    models["message"] = MeshMessageInput
+    if role == "coordinator":
+        models["agent_observe"] = MeshAgentObserveInput
+    if role == "executor":
+        models["command_read"] = MeshCommandReadInput
+        models["task_comment"] = MeshTaskCommentInput
     return models
 
 
-def servers(*, mesh: bool = True) -> dict:
-    service = SimpleNamespace(persistent=None, access_mesh=object() if mesh else None)
+def servers() -> dict:
+    service = SimpleNamespace(persistent=None, access_mesh=object())
     return {
         "access": build_access_mcp(SimpleNamespace(service=service), publish_agent_contract=False),
         "executor": build_role_mcp(service, "executor", publish_agent_contract=False),
@@ -760,13 +759,13 @@ def compile_tool(
     return published, strict, coverage
 
 
-async def generate(*, mesh: bool = True) -> tuple[dict, dict, dict, dict]:
+async def generate() -> tuple[dict, dict, dict, dict]:
     sources, after, coverage, before = {}, {}, {}, {}
     notes = _annotations()
-    built = servers(mesh=mesh)
+    built = servers()
     for role in ROLE_NAMES:
         server = built[role]
-        names = contract_models(role, mesh=mesh)
+        names = contract_models(role)
         base_tools = [
             t.model_dump(mode="json", by_alias=True, exclude_none=True)
             for t in await server.list_tools()

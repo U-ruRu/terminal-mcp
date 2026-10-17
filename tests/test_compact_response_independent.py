@@ -128,12 +128,30 @@ def _message(mode="notify", *, text="incoming", msg_id="acceptance:msg:one"):
     }
 
 
+def _current_role_service():
+    """Current role envelope with already-satisfied intent and no attached session."""
+
+    async def observe_intent_call(_actor, *, require_intent):
+        return {}
+
+    mesh = SimpleNamespace(
+        store=SimpleNamespace(attached_slot=lambda _key: None, touch=lambda _key: None),
+        connection_key=lambda _actor: "current-role-fixture",
+        observe_intent_call=observe_intent_call,
+        intent_call_context=lambda _status: nullcontext(),
+    )
+    return SimpleNamespace(persistent=None, access_mesh=mesh)
+
+
 def _server(monkeypatch, role, *, mesh=None, **responses):
     async def touch_provider(*_args, **_kwargs):
         return None
 
+    service = _current_role_service()
+    if mesh is not None:
+        service.access_mesh = mesh
     app = SimpleNamespace(
-        service=SimpleNamespace(persistent=None, access_mesh=mesh),
+        service=service,
         session_gate=SimpleNamespace(touch_provider=touch_provider),
     )
     for operation, response in responses.items():
