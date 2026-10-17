@@ -61,6 +61,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         interface = self._interface(path)
         if not interface:
             return await call_next(request)
+        mesh_control = path == "/actions/fleet/control" or path.startswith(
+            "/actions/fleet/control/"
+        )
+        if mesh_control and (
+            request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+            or path == "/actions/fleet/control/enrollment"
+        ):
+            return await self._paired_mesh_control(request, call_next)
         mode = self.s.mode_for(interface)
         context_token = bind_admission_context(None)
         if mode == "none":
@@ -108,6 +116,42 @@ class AuthMiddleware(BaseHTTPMiddleware):
         except Exception as exc:
             reset_admission_context(context_token)
             return self._deny(str(exc), path)
+        try:
+            return await call_next(request)
+        finally:
+            reset_admission_context(context_token)
+
+    async def _paired_mesh_control(self, request, call_next):
+        """Topology decisions and enrollment secrets require a live app pairing."""
+        path = request.url.path
+        header = request.headers.get("authorization", "")
+        token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+        if not token:
+            return self._deny("pairing_required", path)
+        context_token = bind_admission_context(None)
+        try:
+            claims = await self.auth.verify_access(token, ["terminal:read", "terminal:execute"])
+            client_id = str(claims.get("sub") or "")
+            device = (
+                await self.pairing_store.active_device_for_client(client_id) if client_id else None
+            )
+            if device is None:
+                raise PermissionError("pairing_required")
+            admission = verified_admission_context(
+                auth_mode="oauth",
+                token=token,
+                claims=claims,
+                credentials=self.auth.credentials,
+                transport="actions",
+            )
+            if admission is None:
+                raise PermissionError("pairing_required")
+            request.state.oauth_claims = claims
+            reset_admission_context(context_token)
+            context_token = bind_admission_context(admission)
+        except Exception:
+            reset_admission_context(context_token)
+            return self._deny("pairing_required", path)
         try:
             return await call_next(request)
         finally:

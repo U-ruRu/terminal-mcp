@@ -21,6 +21,7 @@ from terminal_mcp.storage.tasks import TaskStore
 class LocalSlots:
     def __init__(self, node_id, slots, attached):
         self.local_node_id, self.slots, self.attached = node_id, slots, attached
+        self.namespace_id = "standalone-" + node_id
         # This attachment-only double has no Event subscriptions or holds.
         # Production AccessMeshStore always owns the durable hold component.
         self.recipient_holds = SimpleNamespace(local_recipients=lambda: [])

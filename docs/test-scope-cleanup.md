@@ -174,3 +174,26 @@ Native lifecycle, operator HTTP, intent freshness, public names and event-end
 fixtures now use start/end on Access and numeric attach on roles. They obtain
 native identity through the current registration, without the removed issuer/code
 or verbose legacy session response. The integrated selected set passes 42 tests.
+
+
+## Paired topology, primary handoff and durable Move
+
+Application topology mutations and enrollment require an active paired OAuth
+device with read and execute scopes before the configured general auth mode.
+The new test_mesh_pairing_boundary component module covers paired, unpaired,
+revoked, read-only, static bearer and auth-mode-none admissions. The integrated
+auth boundary selection passes 24 tests.
+
+The topology/registry integration selection passes 80 tests. Primary handoff
+checks whole-registry digest/certificate validation, stale replay rejection and
+app-designated succession. test_mesh_primary_handoff and test_mesh_topology_upgrade
+are component modules; test_mesh_move_boundary and test_mesh_topology_recovery
+exercise the real multi-router seams and remain integration modules. Existing
+source-registry, policy and message modules retain their coverage.
+
+Move uses one-use app enrollment independently of peer ingress, durable prepare
+and completion receipts, and authoritative source activity checks. Tests include
+lost prepare replies, blocked busy admission without a stranded source fence,
+retry after ingress rotation, large registry payloads and one-time conversion
+of a single populated historical topology. No old multi-authority runtime is
+retained when a historical topology requires explicit resolution.

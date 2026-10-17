@@ -13,11 +13,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer, select_peer_transport
 from terminal_mcp.fleet.control_storage import FleetControlError
+from terminal_mcp.fleet.primary_handoff import PrimaryHandoffControl
 from terminal_mcp.fleet.topology_control import TopologyControl
 from terminal_mcp.mesh_vpn import prune_detached_peers
 
 
-class ManagedFleetControl(TopologyControl):
+class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
     """Managed topology and AccessPolicy on top of the existing Fleet v1 control store."""
 
     DEFAULT_POLICY = {
@@ -49,6 +50,7 @@ class ManagedFleetControl(TopologyControl):
         self._deferred_reconcile_task: asyncio.Task | None = None
         self._deferred_reconcile_requested = False
         self._stopped = asyncio.Event()
+        self._started = False
         self.native_access = None
         self.namespace_sync = namespace_sync
         self._namespace_lock = asyncio.Lock()
@@ -65,7 +67,10 @@ class ManagedFleetControl(TopologyControl):
             await self.store.namespace_completed(namespace)
 
     async def start(self, interval_seconds: float | None = None) -> None:
+        self._started = True
         if self._reconcile_task is not None:
+            return
+        if not await self.store.reconciliation_required():
             return
         self._stopped.clear()
         interval = max(
@@ -82,6 +87,7 @@ class ManagedFleetControl(TopologyControl):
         )
 
     async def stop(self) -> None:
+        self._started = False
         self._stopped.set()
         tasks = [task for task in (self._reconcile_task, self._deferred_reconcile_task) if task]
         self._reconcile_task = None
@@ -91,6 +97,18 @@ class ManagedFleetControl(TopologyControl):
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _refresh_reconcile_task(self) -> None:
+        if not self._started:
+            return
+        if await self.store.reconciliation_required():
+            await self.start()
+            return
+        task = self._reconcile_task
+        self._reconcile_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _run_deferred_reconcile(self) -> None:
         try:
@@ -122,6 +140,7 @@ class ManagedFleetControl(TopologyControl):
 
     async def reconcile_pending(self) -> dict:
         await self._complete_namespace()
+        await self._recover_primary_handoffs()
         await self._recover_membership_changes()
         state = await self.snapshot()
         if state.get("managed"):
@@ -154,10 +173,11 @@ class ManagedFleetControl(TopologyControl):
         return await self.replicate() if pending else state
 
     async def _reconcile_loop(self, interval_seconds: float) -> None:
-        while not self._stopped.is_set():
+        while not self._stopped.is_set() and self._reconcile_task is asyncio.current_task():
             await asyncio.sleep(interval_seconds)
             try:
                 await self.reconcile_pending()
+                await self._refresh_reconcile_task()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -185,6 +205,11 @@ class ManagedFleetControl(TopologyControl):
         return token or None
 
     async def enrollment_descriptor(self) -> dict:
+        descriptor = await self._prepared_enrollment_descriptor()
+        descriptor["auth_token"] = await self.store.issue_enrollment_credential()
+        return descriptor
+
+    async def _prepared_enrollment_descriptor(self) -> dict:
         identity = await self._ensure_local_identity()
         return {
             "node_id": self.store.node_id,
@@ -200,6 +225,7 @@ class ManagedFleetControl(TopologyControl):
         *,
         first_apply_control_node_id: str | None = None,
         allow_detached_peer: bool = False,
+        transition_operation_id: str | None = None,
     ) -> str | None:
         token = self._bearer_token(authorization)
         if token is None:
@@ -208,14 +234,43 @@ class ManagedFleetControl(TopologyControl):
         identity = await self._ensure_local_identity()
         ingress_token = str(identity.get("ingress_token") or "")
         if ingress_token and secrets.compare_digest(token, ingress_token):
-            if peer_instance_id == self.store.control_node_id:
-                return peer_instance_id
+            local = await self.store.managed_node(self.store.node_id)
             node = await self.store.managed_node(peer_instance_id)
-            if node is not None and (node.get("state") != "detached" or allow_detached_peer):
+            current_mesh = (local or {}).get("mesh_id")
+            if (
+                node is not None
+                and current_mesh is not None
+                and node.get("mesh_id") == current_mesh
+                and node.get("state") != "detached"
+            ):
                 return peer_instance_id
-            if first_apply_control_node_id and peer_instance_id == first_apply_control_node_id:
+            if node is not None and allow_detached_peer:
                 return peer_instance_id
+            if first_apply_control_node_id == peer_instance_id:
+                transition = await self.store.topology_transition(self.store.node_id)
+                if (
+                    transition
+                    and transition["coordinator_id"] == peer_instance_id
+                    and transition["phase"] in {"prepared", "committed"}
+                ):
+                    return peer_instance_id
+        if (
+            first_apply_control_node_id == peer_instance_id
+            and await self.store.accepts_enrollment_credential(token)
+        ):
+            return peer_instance_id
 
+        if transition_operation_id:
+            transition = await self.store.topology_transition(self.store.node_id)
+            if (
+                transition
+                and transition["operation_id"] == transition_operation_id
+                and transition["coordinator_id"] == peer_instance_id
+                and transition["phase"] in {"prepared", "committed"}
+                and transition["payload"].get("reentry_token")
+                and secrets.compare_digest(token, transition["payload"]["reentry_token"])
+            ):
+                return peer_instance_id
         return None
 
     async def _management_peer(self, node_id: str) -> FleetPeer | None:
@@ -253,7 +308,10 @@ class ManagedFleetControl(TopologyControl):
             response.raise_for_status()
             body = response.json()
         if not body.get("ok"):
-            raise FleetControlError(str(body.get("code") or "control_mutation_failed"))
+            raise FleetControlError(
+                str(body.get("code") or "control_mutation_failed"),
+                blockers=body.get("blockers"),
+            )
         state = body.get("control")
         if not isinstance(state, dict):
             raise FleetControlError("control_mutation_invalid")
@@ -335,6 +393,12 @@ class ManagedFleetControl(TopologyControl):
                 str(payload.get("target_mesh_id") or ""),
                 expected_topology_revision=payload.get("expected_topology_revision"),
             )
+        if operation == "primary":
+            return await self.change_primary(
+                node_id=str(payload.get("node_id") or ""),
+                operation_id=str(payload.get("operation_id") or ""),
+                expected_topology_revision=payload.get("expected_topology_revision"),
+            )
         if operation == "update-policy":
             return await self.update_policy(
                 duration_seconds=int(payload["duration_seconds"]),
@@ -354,13 +418,6 @@ class ManagedFleetControl(TopologyControl):
                 public_key=str(payload.get("public_key") or ""),
                 expected_trust_revision=payload.get("expected_trust_revision"),
             )
-        if operation == "release-node":
-            node_id = str(payload.get("node_id") or "")
-            if authenticated_peer_id is not None and authenticated_peer_id != node_id:
-                raise FleetControlError("control_release_peer_mismatch")
-            control = await self._commit_release_node(node_id)
-            self._schedule_deferred_reconcile()
-            return control
         if operation == "reconcile":
             return await self.replicate()
         raise FleetControlError("control_operation_invalid")
@@ -483,23 +540,18 @@ class ManagedFleetControl(TopologyControl):
                 },
             )
         if not self.is_control_node:
-            previous_control = self.store.control_node_id
-            if previous_control != self.store.node_id:
-                await self._forward_mutation_to(
-                    previous_control,
-                    "release-node",
-                    {"node_id": self.store.node_id},
-                )
-            await self.store.claim_local_control_authority()
-            await self._complete_namespace()
-            self._sync_control_node(self.store.control_node_id)
+            await self.detach_node(self.store.node_id)
+            if not self.is_control_node:
+                raise FleetControlError("mesh_transition_pending")
         selected_mesh = mesh_id or f"mesh-{secrets.token_hex(8)}"
         state = await self._membership_change(
-            node_id=self.store.node_id, target_mesh_id=selected_mesh,
+            node_id=self.store.node_id,
+            target_mesh_id=selected_mesh,
             mutate=lambda: self.store.adopt_managed(
-                mesh_id=selected_mesh, display_name=display_name,
-                nodes=self._initial_control_node(), policy=self.policy_controller.snapshot(),
-                attach_local_control=True,
+                mesh_id=selected_mesh,
+                display_name=display_name,
+                nodes=self._initial_control_node(),
+                policy=self.policy_controller.snapshot(),
             ),
         )
         await self._apply_local(state)
@@ -522,13 +574,30 @@ class ManagedFleetControl(TopologyControl):
                     "expected_topology_revision": expected_topology_revision,
                 },
             )
-        state = await self.store.delete_managed_mesh(
-            target_mesh_id,
-            expected_topology_revision=expected_topology_revision,
+        if not state.get("managed"):
+            return state
+        if self._member_mesh(state, self.store.node_id) != target_mesh_id:
+            raise FleetControlError("managed_mesh_not_found")
+        if (
+            expected_topology_revision is not None
+            and state["revisions"]["topology"] != expected_topology_revision
+        ):
+            raise FleetControlError("topology_revision_conflict")
+        # Each acknowledged Detach is durable. A retry resumes with the remaining
+        # members; the primary retains the registry until the last member leaves.
+        members = sorted(
+            node["node_id"]
+            for node in state["nodes"]
+            if node["node_id"] != self.store.node_id
+            and node["state"] != "detached"
+            and node.get("mesh_id") == target_mesh_id
         )
-        await self._apply_local(state)
-        await self.replicate()
-        return await self.snapshot()
+        for node_id in members:
+            await self.detach_node(node_id)
+            current = await self.store.managed_node(node_id)
+            if current and current["state"] != "detached":
+                raise FleetControlError("mesh_transition_pending")
+        return await self.detach_node(self.store.node_id)
 
     async def rename(
         self,
@@ -581,29 +650,25 @@ class ManagedFleetControl(TopologyControl):
             )
         peer = (
             FleetPeer(node_id, origin, public_key, auth_token)
-            if node_id != self.store.node_id and all((origin, public_key, auth_token)) else None
+            if node_id != self.store.node_id and all((origin, public_key, auth_token))
+            else None
         )
+        membership = {
+            "node_id": node_id,
+            "mesh_id": mesh_id,
+            "origin": origin,
+            "public_key": public_key,
+            "auth_token": auth_token,
+            "expected_topology_revision": expected_topology_revision,
+        }
         state = await self._membership_change(
-            node_id=node_id, target_mesh_id=mesh_id, peer=peer,
-            mutate=lambda: self.store.upsert_managed_node(
-                node_id=node_id, mesh_id=mesh_id, origin=origin,
-                public_key=public_key, auth_token=auth_token,
-                expected_topology_revision=expected_topology_revision,
-            ),
+            node_id=node_id,
+            target_mesh_id=mesh_id,
+            peer=peer,
+            on_prepared_peer=lambda prepared: membership.update(auth_token=prepared.auth_token),
+            mutate=lambda: self.store.upsert_managed_node(**membership),
         )
         await self._apply_local(state)
-        await self.replicate()
-        return await self.snapshot()
-
-    async def _commit_release_node(self, node_id: str) -> dict:
-        state = await self.store.release_managed_node(node_id)
-        await self._apply_local(state)
-        return await self.snapshot()
-
-    async def release_node(self, node_id: str) -> dict:
-        if not self.is_control_node:
-            return await self._forward_mutation("release-node", {"node_id": node_id})
-        await self._commit_release_node(node_id)
         await self.replicate()
         return await self.snapshot()
 
@@ -611,9 +676,11 @@ class ManagedFleetControl(TopologyControl):
         self, node_id: str, *, expected_topology_revision: int | None = None
     ) -> dict:
         state = await self._membership_change(
-            node_id=node_id, target_mesh_id=None,
+            node_id=node_id,
+            target_mesh_id=None,
             mutate=lambda: self.store.detach_managed_node(
-                node_id, expected_topology_revision=expected_topology_revision,
+                node_id,
+                expected_topology_revision=expected_topology_revision,
             ),
         )
         if node_id == self.store.node_id:
@@ -697,9 +764,11 @@ class ManagedFleetControl(TopologyControl):
                 },
             )
         state = await self._membership_change(
-            node_id=node_id, target_mesh_id=target_mesh_id,
+            node_id=node_id,
+            target_mesh_id=target_mesh_id,
             mutate=lambda: self.store.move_managed_node(
-                node_id, target_mesh_id,
+                node_id,
+                target_mesh_id,
                 expected_topology_revision=expected_topology_revision,
             ),
         )
@@ -826,6 +895,12 @@ class ManagedFleetControl(TopologyControl):
     async def reconcile_local(self) -> dict:
         await self._complete_namespace()
         await self._ensure_local_identity()
+        try:
+            await self._recover_primary_handoffs()
+        except (httpx.TransportError, httpx.HTTPStatusError):
+            # The durable guard remains closed while the background reconciler
+            # retries activation; operator pairing and diagnostics can start.
+            pass
         state = await self.snapshot()
         self._sync_control_node(str(state["control_node_id"]))
         await self._finish_local_membership(state)
@@ -852,7 +927,15 @@ class ManagedFleetControl(TopologyControl):
         }
         bootstrap_tokens.update(managed_tokens)
 
-        if incoming_control != self.store.control_node_id:
+        verified_certificates = await self._verified_primary_certificates(public_snapshot)
+        certified_primary_change = verified_certificates is not None
+        if incoming_control != self.store.control_node_id and not certified_primary_change:
+            current = await self.snapshot()
+            current_mesh = self._member_mesh(current, self.store.node_id)
+            if current_mesh and current_mesh == self._member_mesh(
+                public_snapshot, self.store.node_id
+            ):
+                raise FleetControlError("mesh_primary_certificate_required")
             identity = await self._ensure_local_identity()
             presented_local_token = managed_tokens.get(self.store.node_id)
             if not presented_local_token or not secrets.compare_digest(
@@ -865,15 +948,21 @@ class ManagedFleetControl(TopologyControl):
         if self._member_mesh(current, self.store.node_id) != next_mesh:
             transition = await self.store.topology_transition(self.store.node_id)
             operation_id = (
-                transition["operation_id"] if transition and transition["phase"] == "prepared"
+                transition["operation_id"]
+                if transition and transition["phase"] == "prepared"
                 else f"replica-{incoming_control}-{snapshot['revisions']['topology']}"
             )
             await self.prepare_local_transition(
-                operation_id=operation_id, target_mesh_id=next_mesh,
+                operation_id=operation_id,
+                target_mesh_id=next_mesh,
                 target_authority_id=incoming_control if next_mesh else self.store.node_id,
                 coordinator_id=source_node_id,
             )
 
+        if verified_certificates:
+            # Persist only the verified authority chain before the state commit,
+            # so a crash cannot leave an accepted authority without its proof.
+            await self.store.record_primary_certificates(verified_certificates)
         state = await self.store.apply_managed_replica(
             public_snapshot,
             bootstrap_tokens=bootstrap_tokens,
@@ -942,9 +1031,8 @@ class ManagedFleetControl(TopologyControl):
         if self.native_access is not None:
             await self.native_access.apply_fleet_policy(state)
         if not state.get("managed"):
-            if (
-                self.native_access is not None
-                and hasattr(self.native_access.store, "clear_managed_proof")
+            if self.native_access is not None and hasattr(
+                self.native_access.store, "clear_managed_proof"
             ):
                 if self.native_access.store.clear_managed_proof():
                     self.native_access.replication.reset_proof_evidence()
@@ -957,6 +1045,7 @@ class ManagedFleetControl(TopologyControl):
                 )
             await self._restore_local_policy()
             self._restore_bootstrap_runtime(use_peers=False)
+            await self._refresh_reconcile_task()
             return
 
         all_nodes = state.get("nodes") or []
@@ -971,9 +1060,8 @@ class ManagedFleetControl(TopologyControl):
         )
         policy = state.get("policy")
         if local_mesh_id is None:
-            if (
-                self.native_access is not None
-                and hasattr(self.native_access.store, "clear_managed_proof")
+            if self.native_access is not None and hasattr(
+                self.native_access.store, "clear_managed_proof"
             ):
                 if self.native_access.store.clear_managed_proof():
                     self.native_access.replication.reset_proof_evidence()
@@ -1081,6 +1169,7 @@ class ManagedFleetControl(TopologyControl):
             policy_revision=int(revisions.get("access_policy") or 0),
             error=None,
         )
+        await self._refresh_reconcile_task()
 
     @staticmethod
     def _topology_signature(state: dict) -> tuple:
@@ -1134,7 +1223,23 @@ class ManagedFleetControl(TopologyControl):
             }
         )
         internal = dict(state)
+        internal["nodes"] = [
+            dict(
+                node,
+                public_key=node.get("public_key") or identity["public_key"],
+                origin=node.get("origin") or self.public_base_url,
+            )
+            if node.get("node_id") == self.store.node_id
+            else node
+            for node in state.get("nodes", [])
+        ]
         internal["_peer_material"] = materials
+        local_mesh = self._member_mesh(state, self.store.node_id)
+        internal["_primary_handoffs"] = [
+            handoff["certificate"]
+            for handoff in await self.store.primary_handoffs()
+            if handoff["mesh_id"] == local_mesh and handoff["phase"] in {"committed", "completed"}
+        ]
         return internal
 
     async def replicate(
@@ -1182,12 +1287,19 @@ class ManagedFleetControl(TopologyControl):
                         self._topology_signature(acknowledged) != self._topology_signature(state)
                     ):
                         raise RuntimeError("control_apply_not_converged")
-                    transitioned = next((
-                        row for row in state.get("nodes", [])
-                        if row.get("node_id") == peer.instance_id
-                    ), None)
-                    if transitioned and transitioned.get("state") == "draining" \
-                            and transitioned.get("mesh_id") is None:
+                    transitioned = next(
+                        (
+                            row
+                            for row in state.get("nodes", [])
+                            if row.get("node_id") == peer.instance_id
+                        ),
+                        None,
+                    )
+                    if (
+                        transitioned
+                        and transitioned.get("state") == "draining"
+                        and transitioned.get("mesh_id") is None
+                    ):
                         await self.store.release_managed_node(peer.instance_id)
                     transition = await self.store.topology_transition(peer.instance_id)
                     if transition and transition["phase"] == "committed":

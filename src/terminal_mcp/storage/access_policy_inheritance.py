@@ -34,6 +34,15 @@ def _write(db, *, revision, policy, inherit_policy, parent):
 def _propagate(store, db, policy):
     if store.registry_authority_id != store.local_node_id:
         return
+    if (
+        store.registry_mesh_id
+        and db.execute(
+            "SELECT upgrade_pending FROM access_mesh_registry_scope WHERE singleton=1"
+        ).fetchone()[0]
+    ):
+        # The old issuers can hold later revisions absent from this primary.
+        # Do not manufacture competing revisions before their registry union.
+        return
     resolved = SlotPolicy(**policy)
     # Bounded pages, indexed issuer selection; no network while a transaction is open.
     after = ""

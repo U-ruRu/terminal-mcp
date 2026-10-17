@@ -35,7 +35,6 @@ async def managed(control):
         display_name="Alpha",
         nodes=[{"node_id": "home", "public_key": public}],
         policy=POLICY,
-        attach_local_control=True,
     )
     return control
 

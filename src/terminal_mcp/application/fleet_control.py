@@ -7,6 +7,7 @@ import httpx
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.mesh import MeshApplication, MeshApplicationError
 from terminal_mcp.application.operator import OperatorApplication
+from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.core.persistent_policy import PersistentPolicyError
 from terminal_mcp.fleet.control_storage import FleetControlError
 
@@ -152,6 +153,11 @@ class FleetControlApplication:
                     return await self._controller.prepare_local_transition(
                         **payload, coordinator_id=actor.peer_node_id
                     )
+                if action == "complete":
+                    return await self._controller.complete_member_transition(
+                        **payload,
+                        node_id=actor.peer_node_id,
+                    )
                 return await self._controller.abort_local_transition(
                     **payload, coordinator_id=actor.peer_node_id
                 )
@@ -176,6 +182,48 @@ class FleetControlApplication:
                     node_id, target_mesh_id, expected_topology_revision=expected_topology_revision
                 )
             )
+
+    async def primary(
+        self,
+        actor: ActorContext,
+        *,
+        node_id: str,
+        operation_id: str,
+        expected_topology_revision: int | None,
+    ):
+        OperatorApplication._require_operator(actor)
+        with actor.bind():
+            return await self._mutation(
+                self._controller.change_primary(
+                    node_id=node_id,
+                    operation_id=operation_id,
+                    expected_topology_revision=expected_topology_revision,
+                )
+            )
+
+    async def internal_primary(self, actor: ActorContext, *, action: str, payload: dict):
+        MeshApplication._require_peer(actor)
+        with actor.bind():
+            try:
+                if action == "prepare":
+                    return await self._controller.prepare_primary_import(
+                        **payload,
+                        source_node_id=actor.peer_node_id,
+                    )
+                if action == "activate":
+                    return await self._controller.activate_primary_import(
+                        **payload,
+                        source_node_id=actor.peer_node_id,
+                    )
+                return await self._controller.abort_primary_import(
+                    **payload,
+                    source_node_id=actor.peer_node_id,
+                )
+            except (FleetControlError, AccessMeshError) as exc:
+                result = {"ok": False, "code": exc.code, "error": exc.code}
+                if getattr(exc, "blockers", None):
+                    result["blockers"] = exc.blockers
+                return result
 
     async def policy(
         self,
@@ -234,9 +282,16 @@ class FleetControlApplication:
                 control = await self._controller.execute_forwarded(
                     operation, payload, authenticated_peer_id=actor.peer_node_id
                 )
-            except (FleetControlError, ValueError, KeyError) as exc:
+            except (FleetControlError, AccessMeshError) as exc:
+                result = {"ok": False, "code": exc.code, "error": exc.code}
+                if getattr(exc, "blockers", None):
+                    result["blockers"] = exc.blockers
+                return result
+            except (ValueError, KeyError) as exc:
                 raise MeshApplicationError("conflict", str(exc)) from exc
             result = {"ok": True, "control": control}
+            if operation == "primary":
+                result["control"] = await self._controller._internal_replication_snapshot(control)
             if operation == "detach-node":
                 result["mutation"] = self._controller.mutation_completion(
                     control, force_pending=True

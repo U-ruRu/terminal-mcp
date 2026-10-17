@@ -93,7 +93,7 @@ class MeshWireMessage(_Strict):
     sender_name: str = Field(min_length=1, max_length=120)
     text: str = Field(min_length=1, max_length=16384)
     target: str = Field(min_length=1, max_length=120)
-    scope: Literal["local", "fleet"]
+    scope: Literal["local"]
     mode: Literal["notify", "ack", "alert"]
     require_reply: bool
     alert: bool
@@ -790,10 +790,8 @@ class AccessMeshMessaging:
         text_limit=None,
     ):
         try:
-            if scope not in {"local", "fleet"} or detail not in {"summary", "full"}:
+            if scope != "local" or detail not in {"summary", "full"}:
                 raise MeshMessagingError("input_validation_failed")
-            if scope == "fleet":
-                raise MeshMessagingError("feature_disabled")
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise MeshMessagingError("input_validation_failed")
             if type(require_reply) is not bool or type(alert) is not bool:

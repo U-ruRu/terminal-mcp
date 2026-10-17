@@ -19,6 +19,7 @@ def messages(monkeypatch):
     slot = SimpleNamespace(logical_agent_id="receiver", issuer_id="node-a", slot_id="slot")
     slots = SimpleNamespace(
         local_node_id="node-a",
+        namespace_id="standalone-node-a",
         local_slots=lambda **kwargs: [slot],
         observed_identity=lambda *args, **kwargs: {
             "logical_agent_id": "receiver",
@@ -80,3 +81,11 @@ async def test_local_send_commits_without_requesting_or_scheduling_peers(message
     messages.mesh.resolve.assert_awaited_once_with(actor, ManagedOperation.MESSAGE_SEND)
     messages.store.accept.assert_called_once()
     messages.replication.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retired_message_scope_is_rejected_before_admission(messages):
+    result = await messages.message(ActorContext(principal_id="sender"), scope="fleet", text="x")
+    assert result["code"] == "input_validation_failed"
+    messages.mesh.resolve.assert_not_awaited()
+    messages.store.accept.assert_not_called()

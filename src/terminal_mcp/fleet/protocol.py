@@ -23,10 +23,11 @@ SOURCE_CAPABILITIES = frozenset(
 
 AUTHORITY_CAPABILITIES = frozenset(
     {
-        "fleet.authority.v1",
-        "fleet.authority.monotonic-permit.v1",
-        "fleet.authority.message-gate.v1",
-        "fleet.authority.transfer.v1",
+        "mesh.control.v1",
+        "mesh.control.topology-transition.v1",
+        "mesh.control.primary-handoff.v1",
+        "mesh.access.registry.v1",
+        "mesh.access.scope-fence.v1",
     }
 )
 

@@ -5,6 +5,7 @@ import hashlib
 import json
 import secrets
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -13,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.fleet.protocol import validate_capabilities, validate_protocol_id
+from terminal_mcp.fleet.topology_migration import migrate_single_mesh
 from terminal_mcp.fleet.topology_transition import TopologyTransitionStore
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import (
@@ -33,7 +35,7 @@ class FleetControlError(RuntimeError):
 class FleetControlStore(TopologyTransitionStore):
     """Critical monotonic Fleet routing metadata; never owns slot/session truth."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(
         self,
@@ -257,6 +259,18 @@ class FleetControlStore(TopologyTransitionStore):
                         payload_json TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS mesh_primary_handoffs(
+                        operation_id TEXT PRIMARY KEY,
+                        mesh_id TEXT NOT NULL,
+                        from_node_id TEXT NOT NULL,
+                        to_node_id TEXT NOT NULL,
+                        phase TEXT NOT NULL CHECK(phase IN (
+                            'prepared','imported','committed','completed','aborted'
+                        )),
+                        certificate_json TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
                     CREATE TABLE IF NOT EXISTS access_policy(
                         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                         duration_seconds INTEGER NOT NULL CHECK(duration_seconds>0),
@@ -271,9 +285,12 @@ class FleetControlStore(TopologyTransitionStore):
                     """
                 )
 
-                policy_columns = {row[1] for row in await (
-                    await db.execute("PRAGMA table_info(access_policy)")
-                ).fetchall()}
+                policy_columns = {
+                    row[1]
+                    for row in await (
+                        await db.execute("PRAGMA table_info(access_policy)")
+                    ).fetchall()
+                }
                 if "legacy_admission_enabled" in policy_columns:
                     await db.execute(
                         "ALTER TABLE access_policy DROP COLUMN legacy_admission_enabled"
@@ -285,8 +302,9 @@ class FleetControlStore(TopologyTransitionStore):
                         await db.execute("PRAGMA table_info(managed_identity)")
                     ).fetchall()
                 }
-                if "ingress_token" not in identity_columns:
-                    await db.execute("ALTER TABLE managed_identity ADD COLUMN ingress_token TEXT")
+                for field in ("ingress_token", "enrollment_token", "enrollment_expires_at"):
+                    if field not in identity_columns:
+                        await db.execute(f"ALTER TABLE managed_identity ADD COLUMN {field} TEXT")
 
                 node_columns = {
                     row[1]
@@ -323,6 +341,12 @@ class FleetControlStore(TopologyTransitionStore):
                         )
                     await db.execute("UPDATE managed_nodes SET mesh_id=NULL WHERE state='detached'")
 
+                await migrate_single_mesh(
+                    db,
+                    node_id=self.node_id,
+                    version=existing_version,
+                    stamp=stamp,
+                )
                 if existing_version is None:
                     await db.execute(
                         "INSERT OR REPLACE INTO control_schema(singleton,version) VALUES(1,?)",
@@ -375,7 +399,8 @@ class FleetControlStore(TopologyTransitionStore):
                             "INSERT INTO control_namespace VALUES(1,?,NULL,?) "
                             "ON CONFLICT(singleton) DO UPDATE SET "
                             "home_fleet_id=excluded.home_fleet_id,pending_fleet_id=NULL,"
-                            "updated_at=excluded.updated_at", (self.fleet_id, stamp),
+                            "updated_at=excluded.updated_at",
+                            (self.fleet_id, stamp),
                         )
                     # The persisted control authority is runtime state. The env value is
                     # only a bootstrap default and must not overwrite an explicit rehome.
@@ -428,7 +453,8 @@ class FleetControlStore(TopologyTransitionStore):
                 )
                 ingress_token = secrets.token_urlsafe(32)
                 await db.execute(
-                    "UPDATE managed_identity SET ingress_token=?,updated_at=? WHERE singleton=1",
+                    "UPDATE managed_identity SET ingress_token=?,enrollment_token=NULL,"
+                    "enrollment_expires_at=NULL,updated_at=? WHERE singleton=1",
                     (ingress_token, stamp),
                 )
                 # Pairing and node identity have separate owners. Mesh credentials
@@ -438,6 +464,7 @@ class FleetControlStore(TopologyTransitionStore):
                 await db.execute("DELETE FROM fleet_members WHERE node_id!=?", (self.node_id,))
                 await db.execute("DELETE FROM authority_routes")
                 await db.execute("DELETE FROM authority_transfers")
+                await db.execute("DELETE FROM mesh_primary_handoffs")
                 await db.execute(
                     "UPDATE managed_nodes SET mesh_id=NULL,state='detached',last_error=NULL,"
                     "updated_at=?",
@@ -655,6 +682,44 @@ class FleetControlStore(TopologyTransitionStore):
             "updated_at": row[5],
         }
 
+    async def issue_enrollment_credential(self) -> str:
+        """Issue an app-only Join credential; peer transport never receives it."""
+        token = secrets.token_urlsafe(32)
+        expiry = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+        async with self._connect("mesh_enrollment_issue") as db:
+            await db.execute(
+                "UPDATE managed_identity SET enrollment_token=?,enrollment_expires_at=? "
+                "WHERE singleton=1",
+                (token, expiry),
+            )
+            await db.commit()
+        return token
+
+    async def consume_enrollment_credential(self, token: str) -> None:
+        async with self._connect("mesh_enrollment_consume") as db:
+            await db.execute(
+                "UPDATE managed_identity SET enrollment_token=NULL,enrollment_expires_at=NULL "
+                "WHERE singleton=1 AND enrollment_token=?",
+                (token,),
+            )
+            await db.commit()
+
+    async def accepts_enrollment_credential(self, token: str) -> bool:
+        async with self._connect("mesh_enrollment_check") as db:
+            row = await (
+                await db.execute(
+                    "SELECT enrollment_token,enrollment_expires_at FROM managed_identity "
+                    "WHERE singleton=1",
+                )
+            ).fetchone()
+        return bool(
+            row
+            and row[0]
+            and row[1]
+            and datetime.fromisoformat(row[1]) > datetime.now(UTC)
+            and secrets.compare_digest(token, row[0])
+        )
+
     async def managed_identity(self) -> dict | None:
         async with self._connect("fleet_control_managed_identity_read") as db:
             row = await (
@@ -836,7 +901,6 @@ class FleetControlStore(TopologyTransitionStore):
         nodes: list[dict],
         policy: dict,
         now: str | None = None,
-        attach_local_control: bool = False,
     ) -> dict:
         if self.node_id != self.control_node_id:
             raise FleetControlError("control_authority_required")
@@ -896,8 +960,7 @@ class FleetControlStore(TopologyTransitionStore):
                         )
                     ).fetchone()
                     if (
-                        attach_local_control
-                        and existing_mesh[1] == display_name
+                        existing_mesh[1] == display_name
                         and local_node is not None
                         and local_node[0] == mesh_id
                         and local_node[1] == "active"
@@ -905,8 +968,16 @@ class FleetControlStore(TopologyTransitionStore):
                         await db.commit()
                         return await self.control_state(include_secrets=False)
                     raise FleetControlError("mesh_already_exists")
-                if attach_local_control:
-                    await db.execute("UPDATE managed_meshes SET active=0,updated_at=?", (stamp,))
+                remaining = await (
+                    await db.execute(
+                        "SELECT node_id FROM managed_nodes WHERE node_id!=? AND "
+                        "mesh_id IS NOT NULL AND mesh_id!=? AND state!='detached'",
+                        (self.node_id, mesh_id),
+                    )
+                ).fetchone()
+                if remaining:
+                    raise FleetControlError("mesh_primary_handoff_required")
+                await db.execute("UPDATE managed_meshes SET active=0,updated_at=?", (stamp,))
                 topology = await self._bump_revision(db, "topology", stamp)
                 if existing_mesh is None:
                     await db.execute(
@@ -986,24 +1057,23 @@ class FleetControlStore(TopologyTransitionStore):
                                 item["node_id"],
                             ),
                         )
-                if attach_local_control:
+                await db.execute(
+                    "UPDATE managed_nodes SET mesh_id=?,state='active',"
+                    "desired_topology_revision=?,last_error=NULL,updated_at=? "
+                    "WHERE node_id IN (" + ",".join("?" for _ in normalized) + ")",
+                    (mesh_id, topology, stamp, *(item["node_id"] for item in normalized)),
+                )
+                if self.fleet_id != mesh_id:
                     await db.execute(
-                        "UPDATE managed_nodes SET mesh_id=?,state='active',"
-                        "desired_topology_revision=?,last_error=NULL,updated_at=? "
-                        "WHERE node_id=?",
-                        (mesh_id, topology, stamp, self.node_id),
+                        "INSERT INTO control_namespace VALUES(1,?,?,?) "
+                        "ON CONFLICT(singleton) DO UPDATE SET "
+                        "pending_fleet_id=excluded.pending_fleet_id,"
+                        "updated_at=excluded.updated_at",
+                        (self.fleet_id, mesh_id, stamp),
                     )
-                    if self.fleet_id != mesh_id:
-                        await db.execute(
-                            "INSERT INTO control_namespace VALUES(1,?,?,?) "
-                            "ON CONFLICT(singleton) DO UPDATE SET "
-                            "pending_fleet_id=excluded.pending_fleet_id,"
-                            "updated_at=excluded.updated_at",
-                            (self.fleet_id, mesh_id, stamp),
-                        )
-                        await db.execute(
-                            "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (mesh_id,)
-                        )
+                    await db.execute(
+                        "UPDATE control_meta SET fleet_id=? WHERE singleton=1", (mesh_id,)
+                    )
                 await db.execute(
                     "UPDATE managed_nodes SET desired_topology_revision=? WHERE state!='detached'",
                     (topology,),
@@ -1012,57 +1082,7 @@ class FleetControlStore(TopologyTransitionStore):
             except Exception:
                 await db.rollback()
                 raise
-        if attach_local_control:
-            self.fleet_id = mesh_id
-        return await self.control_state(include_secrets=False)
-
-    async def delete_managed_mesh(
-        self,
-        mesh_id: str,
-        *,
-        expected_topology_revision: int | None = None,
-    ) -> dict:
-        if self.node_id != self.control_node_id:
-            raise FleetControlError("control_authority_required")
-        mesh_id = validate_protocol_id(mesh_id, "mesh_id")
-        stamp = utc_text()
-        async with self._connect("fleet_control_mesh_delete") as db:
-            await db.execute("BEGIN IMMEDIATE")
-            try:
-                mesh = await (
-                    await db.execute(
-                        "SELECT active FROM managed_meshes WHERE mesh_id=?",
-                        (mesh_id,),
-                    )
-                ).fetchone()
-                if mesh is None or not bool(mesh[0]):
-                    raise FleetControlError("managed_mesh_not_found")
-                topology, trust, _ = await self._control_revisions(db)
-                if expected_topology_revision is not None and topology != int(
-                    expected_topology_revision
-                ):
-                    raise FleetControlError("topology_revision_conflict")
-                topology = await self._bump_revision(db, "topology", stamp)
-                trust = await self._bump_revision(db, "trust", stamp)
-                await db.execute(
-                    "UPDATE managed_meshes SET active=0,updated_at=? WHERE mesh_id=?",
-                    (stamp, mesh_id),
-                )
-                await db.execute(
-                    "UPDATE managed_nodes SET mesh_id=NULL,"
-                    "desired_topology_revision=?,desired_trust_revision=?,"
-                    "last_error=NULL,updated_at=? WHERE mesh_id=? AND state!='detached'",
-                    (topology, trust, stamp, mesh_id),
-                )
-                await db.execute(
-                    "UPDATE managed_nodes SET desired_topology_revision=?,"
-                    "desired_trust_revision=? WHERE state!='detached'",
-                    (topology, trust),
-                )
-                await db.commit()
-            except Exception:
-                await db.rollback()
-                raise
+        self.fleet_id = mesh_id
         return await self.control_state(include_secrets=False)
 
     async def rename_managed_mesh(
@@ -1140,6 +1160,14 @@ class FleetControlStore(TopologyTransitionStore):
                 ).fetchone()
                 if mesh is None or not bool(mesh[0]):
                     raise FleetControlError("managed_mesh_not_found")
+                local = await (
+                    await db.execute(
+                        "SELECT mesh_id FROM managed_nodes WHERE node_id=? AND state!='detached'",
+                        (self.node_id,),
+                    )
+                ).fetchone()
+                if local is None or local[0] != mesh_id:
+                    raise FleetControlError("mesh_destination_primary_required")
                 topology, trust, policy_revision = await self._control_revisions(db)
                 if expected_topology_revision is not None and topology != int(
                     expected_topology_revision
@@ -1339,6 +1367,14 @@ class FleetControlStore(TopologyTransitionStore):
                 ).fetchone()
                 if mesh is None or not bool(mesh[0]):
                     raise FleetControlError("managed_mesh_not_found")
+                local = await (
+                    await db.execute(
+                        "SELECT mesh_id FROM managed_nodes WHERE node_id=? AND state!='detached'",
+                        (self.node_id,),
+                    )
+                ).fetchone()
+                if local is None or local[0] != target_mesh_id:
+                    raise FleetControlError("mesh_destination_primary_required")
                 row = await (
                     await db.execute(
                         "SELECT mesh_id,state FROM managed_nodes WHERE node_id=?",
@@ -1563,6 +1599,8 @@ class FleetControlStore(TopologyTransitionStore):
                 }
             )
         active_mesh_ids = {item["mesh_id"] for item in normalized_meshes}
+        if len(active_mesh_ids) != 1:
+            raise FleetControlError("mesh_single_scope_required")
 
         revisions = snapshot.get("revisions") or {}
         topology = int(revisions.get("topology") or 0)
@@ -1612,6 +1650,17 @@ class FleetControlStore(TopologyTransitionStore):
                     "applied_policy_revision": int(item.get("applied_policy_revision") or 0),
                 }
             )
+
+        primary_mesh = next(
+            (
+                node["mesh_id"]
+                for node in normalized_nodes
+                if node["node_id"] == incoming_control_node_id and node["state"] != "detached"
+            ),
+            None,
+        )
+        if primary_mesh not in active_mesh_ids:
+            raise FleetControlError("mesh_primary_member_required")
 
         async with self._connect("fleet_control_managed_replica_apply") as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -1749,9 +1798,7 @@ class FleetControlStore(TopologyTransitionStore):
     async def pending_namespace(self) -> str | None:
         async with self._connect("fleet_namespace_pending") as db:
             row = await (
-                await db.execute(
-                    "SELECT pending_fleet_id FROM control_namespace WHERE singleton=1"
-                )
+                await db.execute("SELECT pending_fleet_id FROM control_namespace WHERE singleton=1")
             ).fetchone()
         return str(row[0]) if row and row[0] else None
 
@@ -1759,7 +1806,8 @@ class FleetControlStore(TopologyTransitionStore):
         async with self._connect("fleet_namespace_completed") as db:
             await db.execute(
                 "UPDATE control_namespace SET pending_fleet_id=NULL "
-                "WHERE singleton=1 AND pending_fleet_id=?", (namespace,)
+                "WHERE singleton=1 AND pending_fleet_id=?",
+                (namespace,),
             )
             await db.commit()
 

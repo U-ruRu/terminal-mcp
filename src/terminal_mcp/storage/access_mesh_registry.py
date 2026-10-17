@@ -12,9 +12,12 @@ import hashlib
 import json
 import secrets
 from contextlib import nullcontext
+from contextvars import ContextVar
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.core.access_mesh_scope import assert_registry_scope
+
+_RUNTIME_IMPORT_CONNECTION = ContextVar("mesh_runtime_import_connection", default=None)
 
 REGISTRY_TABLES = (
     "access_mesh_slot_replicas",
@@ -96,7 +99,73 @@ class AccessRegistryStore:
             "SELECT mesh_id,authority_id FROM access_mesh_registry_scope WHERE singleton=1"
         ).fetchone()
         if row and row[0] and row[1] != authenticated_peer_id:
+            if (
+                authenticated_peer_id == self.local_node_id
+                and _RUNTIME_IMPORT_CONNECTION.get() is db
+            ):
+                return
             raise AccessMeshError("access_mesh_untrusted_issuer")
+
+    def import_runtime_event(self, event, *, _connection, issued_kind=None, mutation_number=None):
+        """Convert one proven local registration in the one-time offline transaction.
+
+        A member can stage its old local identities for the primary's union. This
+        port is unavailable after migration completion and does not authorize
+        ordinary member issuance, peer events or a topology transition.
+        """
+        db = _connection
+        if not db.in_transaction:
+            raise AccessMeshError("mesh_runtime_import_invalid")
+        self.assert_registry_ready(db)
+        scope = db.execute(
+            "SELECT upgrade_pending,transition_id FROM access_mesh_registry_scope WHERE singleton=1"
+        ).fetchone()
+        receipt_table = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unified_runtime_migration'"
+        ).fetchone()
+        receipt = (
+            db.execute("SELECT 1 FROM unified_runtime_migration WHERE singleton=1").fetchone()
+            if receipt_table
+            else None
+        )
+        if not scope["upgrade_pending"] or scope["transition_id"] is not None or receipt:
+            raise AccessMeshError("mesh_runtime_import_invalid")
+        agent_digest = hashlib.sha256(event.logical_agent_id.encode()).hexdigest()[:32]
+        expected_slot = "upgrade-" + agent_digest
+        spec = {
+            "SlotIssued": ("runtime-upgrade-", {1}),
+            "SessionUpdated": ("runtime-upgrade-session-", {2}),
+            "SlotSuspended": ("runtime-upgrade-suspend-", {2, 3}),
+        }.get(event.kind)
+        if (
+            spec is None
+            or event.issuer_id != self.local_node_id
+            or event.slot_id != expected_slot
+            or event.event_id != spec[0] + expected_slot
+            or event.revision not in spec[1]
+            or (event.kind == "SlotIssued" and issued_kind not in {"temporary", "persistent"})
+            or (event.kind != "SlotIssued" and (issued_kind or mutation_number))
+        ):
+            raise AccessMeshError("mesh_runtime_import_invalid")
+        owner = db.execute(
+            "SELECT 1 FROM logical_agents a JOIN access_mesh_native_owners n "
+            "USING(logical_agent_id) WHERE a.logical_agent_id=? AND a.authority_node_id=? "
+            "AND a.state NOT IN ('deleted','deleting') AND n.issuer_id=? AND n.slot_id=?",
+            (event.logical_agent_id, self.local_node_id, self.local_node_id, expected_slot),
+        ).fetchone()
+        if owner is None:
+            raise AccessMeshError("mesh_runtime_import_invalid")
+        token = _RUNTIME_IMPORT_CONNECTION.set(db)
+        try:
+            return self.apply_event(
+                event,
+                authenticated_peer_id=self.local_node_id,
+                issued_kind=issued_kind,
+                mutation_number=mutation_number,
+                _connection=db,
+            )
+        finally:
+            _RUNTIME_IMPORT_CONNECTION.reset(token)
 
     def registry_verification_keys(self):
         keys = tuple(

@@ -189,6 +189,9 @@ def complete_upgrade(store, *, member_ids=()):
         defaults = db.execute(
             "SELECT policy_json,parent_json FROM access_mesh_operator_defaults WHERE singleton=1"
         ).fetchone()
+        # The write lock keeps admission closed until policy propagation and
+        # the completion receipt commit together with the completed union.
+        db.execute("UPDATE access_mesh_registry_scope SET upgrade_pending=0 WHERE singleton=1")
         if store.registry_mesh_id and defaults and defaults["parent_json"]:
             from terminal_mcp.storage.access_policy_inheritance import _propagate
 
@@ -203,7 +206,6 @@ def complete_upgrade(store, *, member_ids=()):
             "authoritative_registry_v1:" + store.namespace_id,
             {"member_ids": sorted(member_ids or store.trusted_issuers), "registry_rows": counts},
         )
-        db.execute("UPDATE access_mesh_registry_scope SET upgrade_pending=0 WHERE singleton=1")
 
 
 def accept_primary_completion(store, namespace_id):

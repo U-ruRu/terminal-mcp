@@ -58,6 +58,22 @@ class NodeMoveRequest(StrictRequest):
     expected_topology_revision: int | None = Field(default=None, ge=0)
 
 
+class PrimaryRequest(StrictRequest):
+    node_id: str = Field(min_length=1, max_length=64)
+    operation_id: str = Field(min_length=1, max_length=128)
+    expected_topology_revision: int | None = Field(default=None, ge=0)
+
+
+class PrimaryPrepareRequest(StrictRequest):
+    certificate: dict
+    registry: dict
+
+
+class PrimaryActivateRequest(StrictRequest):
+    operation_id: str = Field(min_length=1, max_length=128)
+    state: dict
+
+
 class AccessPolicyRequest(StrictRequest):
     duration_seconds: int = Field(ge=1)
     warning_after_seconds: int = Field(ge=1)
@@ -92,6 +108,7 @@ class TransitionPrepareRequest(StrictRequest):
     operation_id: str = Field(min_length=1, max_length=128)
     target_mesh_id: str | None = Field(default=None, min_length=1, max_length=64)
     target_authority_id: str = Field(min_length=1, max_length=64)
+    preserve_registry: bool = False
 
 
 class TransitionAbortRequest(StrictRequest):
@@ -99,7 +116,7 @@ class TransitionAbortRequest(StrictRequest):
 
 
 def build_fleet_control_router(controller, replication, *, application=None) -> APIRouter:
-    router = APIRouter(tags=["fleet-control"])
+    router = APIRouter(tags=["mesh-control"])
     target = application if application is not None else FleetControlApplication(controller)
 
     def operator_actor() -> ActorContext:
@@ -116,12 +133,17 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
         *,
         first_apply_control_node_id=None,
         allow_detached_peer: bool = False,
+        transition_operation_id: str | None = None,
     ):
+        options = (
+            {"transition_operation_id": transition_operation_id} if transition_operation_id else {}
+        )
         verified_peer_id = await controller.authenticate_management_peer(
             peer_id,
             authorization,
             first_apply_control_node_id=first_apply_control_node_id,
             allow_detached_peer=allow_detached_peer,
+            **options,
         )
         if verified_peer_id is None:
             raise HTTPException(status_code=401, detail="invalid fleet peer")
@@ -242,6 +264,14 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
         except MeshApplicationError as exc:
             raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
+    @router.post("/actions/fleet/control/primary", operation_id="changeMeshPrimary")
+    async def primary(body: PrimaryRequest):
+        actor = operator_actor()
+        try:
+            return await target.primary(actor, **body.model_dump())
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
+
     @router.post("/actions/fleet/control/policy/reset", operation_id="resetManagedAccessPolicy")
     async def policy_reset(body: ResetPolicyRequest):
         actor = operator_actor()
@@ -288,7 +318,6 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
         actor = await authenticate(
             x_terminal_mcp_peer,
             authorization,
-            allow_detached_peer=operation == "release-node",
         )
         try:
             return await target.internal_mutate(actor, operation=operation, payload=body.payload)
@@ -318,12 +347,41 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
         authorization: str = Header(default=""),
     ):
         actor = await authenticate(
-            x_terminal_mcp_peer, authorization,
+            x_terminal_mcp_peer,
+            authorization,
             first_apply_control_node_id=x_terminal_mcp_peer,
+            transition_operation_id=body.operation_id,
         )
-        return await target.internal_transition(
-            actor, action="prepare", payload=body.model_dump()
-        )
+        payload = body.model_dump()
+        payload["transition_credential"] = controller._bearer_token(authorization)
+        return await target.internal_transition(actor, action="prepare", payload=payload)
+
+    @router.post("/internal/fleet/control/primary/prepare", include_in_schema=False)
+    async def primary_prepare(
+        body: PrimaryPrepareRequest,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = await authenticate(x_terminal_mcp_peer, authorization)
+        return await target.internal_primary(actor, action="prepare", payload=body.model_dump())
+
+    @router.post("/internal/fleet/control/primary/activate", include_in_schema=False)
+    async def primary_activate(
+        body: PrimaryActivateRequest,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = await authenticate(x_terminal_mcp_peer, authorization)
+        return await target.internal_primary(actor, action="activate", payload=body.model_dump())
+
+    @router.post("/internal/fleet/control/primary/abort", include_in_schema=False)
+    async def primary_abort(
+        body: TransitionAbortRequest,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = await authenticate(x_terminal_mcp_peer, authorization)
+        return await target.internal_primary(actor, action="abort", payload=body.model_dump())
 
     @router.post("/internal/fleet/control/transition/abort", include_in_schema=False)
     async def transition_abort(
@@ -332,11 +390,20 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
         authorization: str = Header(default=""),
     ):
         actor = await authenticate(
-            x_terminal_mcp_peer, authorization,
+            x_terminal_mcp_peer,
+            authorization,
             first_apply_control_node_id=x_terminal_mcp_peer,
+            transition_operation_id=body.operation_id,
         )
-        return await target.internal_transition(
-            actor, action="abort", payload=body.model_dump()
-        )
+        return await target.internal_transition(actor, action="abort", payload=body.model_dump())
+
+    @router.post("/internal/fleet/control/transition/complete", include_in_schema=False)
+    async def transition_complete(
+        body: TransitionAbortRequest,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = await authenticate(x_terminal_mcp_peer, authorization, allow_detached_peer=True)
+        return await target.internal_transition(actor, action="complete", payload=body.model_dump())
 
     return router

@@ -1,7 +1,8 @@
 """Atomic upgrade unions, stale-scope rejection and application-history retention."""
 
+import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import httpx
 import pytest
@@ -11,12 +12,103 @@ from test_access_mesh_replication_http import Routes, actor, node
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
 from terminal_mcp.core.access_mesh_scope import REGISTRY_NAMESPACE
 from terminal_mcp.storage.access_mesh_messages import AccessMeshMessageStore
-from terminal_mcp.storage.access_mesh_registry_upgrade import migrate_receipt_kinds
+from terminal_mcp.storage.access_mesh_registry_upgrade import (
+    complete_upgrade,
+    migrate_receipt_kinds,
+)
 
 
 def pending(store):
     with store._connect() as db:
         db.execute("UPDATE access_mesh_registry_scope SET upgrade_pending=1")
+
+
+@pytest.mark.asyncio
+async def test_pending_union_preserves_slot_revisions_until_policy_completion(tmp_path):
+    from terminal_mcp.storage.sqlite import SqliteRepository
+
+    await SqliteRepository(tmp_path / "registry.db", tmp_path / "output.db").initialize()
+    store = registry(tmp_path / "registry.db")
+    store.install_registry_scope(mesh_id="mesh-x", authority_id="a")
+    seed_slot(store)
+    with store._connect() as db:
+        db.execute("UPDATE access_mesh_slot_replicas SET inherit_policy=1")
+    before = store.registry_slot("slot-a")
+    pending(store)
+    policy = SlotPolicy(20, 10)
+    store.sync_parent_defaults(
+        {
+            "source": "mesh",
+            "revision": 2,
+            "policy": asdict(policy),
+            "mesh_id": "mesh-x",
+            "control_node_id": "a",
+        }
+    )
+    assert store.registry_slot("slot-a") == before
+    complete_upgrade(store)
+    after = store.registry_slot("slot-a")
+    assert after.revision == before.revision + 1 and after.policy == policy
+    assert not store.registry_upgrade_pending
+    complete_upgrade(store)
+    assert store.registry_slot("slot-a") == after
+
+
+@pytest.mark.asyncio
+async def test_member_runtime_import_is_once_and_does_not_enable_local_issuance(tmp_path):
+    from terminal_mcp.storage.sqlite import SqliteRepository
+
+    path = tmp_path / "registry.db"
+    await SqliteRepository(path, tmp_path / "output.db").initialize()
+    store = registry(path, "b")
+    store.install_registry_scope(mesh_id="mesh-x", authority_id="a")
+    agent_id = "preserved-local-agent"
+    digest = hashlib.sha256(agent_id.encode()).hexdigest()[:32]
+    slot_id = "upgrade-" + digest
+    event = AccessSlotEvent(
+        issuer_id="b",
+        slot_id=slot_id,
+        logical_agent_id=agent_id,
+        revision=1,
+        event_id="runtime-upgrade-" + slot_id,
+        kind="SlotIssued",
+        policy=SlotPolicy(10, 5),
+        code_tag=store.code_tag("b", "1234"),
+    )
+    with store._connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute(
+            "INSERT INTO logical_agents(logical_agent_id,display_name,authority_node_id,"
+            "authority_epoch,created_at,updated_at) VALUES(?,'retained','b',1,'old','old')",
+            (agent_id,),
+        )
+        db.execute("INSERT INTO access_mesh_native_owners VALUES(?,'b',?)", (agent_id, slot_id))
+        pending_number = {
+            "number": "1234",
+            "attempt_id": "runtime-upgrade-" + digest,
+            "started_at": store.clock(),
+        }
+        db.execute("UPDATE access_mesh_registry_scope SET upgrade_pending=0")
+        with pytest.raises(AccessMeshError, match="mesh_runtime_import_invalid"):
+            store.import_runtime_event(
+                event, _connection=db, issued_kind="persistent", mutation_number=pending_number
+            )
+        db.execute("UPDATE access_mesh_registry_scope SET upgrade_pending=1")
+        store.import_runtime_event(
+            event, _connection=db, issued_kind="persistent", mutation_number=pending_number
+        )
+        with pytest.raises(AccessMeshError, match="access_mesh_untrusted_issuer"):
+            store.apply_event(
+                event, authenticated_peer_id="b", issued_kind="persistent", _connection=db
+            )
+        db.execute("CREATE TABLE unified_runtime_migration(singleton INTEGER PRIMARY KEY)")
+        db.execute("INSERT INTO unified_runtime_migration VALUES(1)")
+        with pytest.raises(AccessMeshError, match="mesh_runtime_import_invalid"):
+            store.import_runtime_event(
+                event, _connection=db, issued_kind="persistent", mutation_number=pending_number
+            )
+    assert store.registry_slot(slot_id).logical_agent_id == agent_id
+    assert store.registry_authority_id == "a"
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,6 @@ async def test_repeated_mesh_create_preserves_committed_revision(tmp_path):
             "alert_after_seconds": 1320,
             "rearm_after_seconds": 180,
         },
-        attach_local_control=True,
     )
     initial = await store.adopt_managed(**creation)
     repeated = await store.adopt_managed(**creation)
