@@ -8,6 +8,7 @@ from typing import Any
 
 import aiosqlite
 
+from terminal_mcp.core.native_admission import assert_native_write_admission_async
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
@@ -95,6 +96,15 @@ class TaskStore:
             await db.execute("PRAGMA busy_timeout=1000")
             await db.execute("PRAGMA foreign_keys=ON")
             yield db
+
+    @staticmethod
+    async def _begin_mutation(db):
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await assert_native_write_admission_async(db)
+        except BaseException:
+            await db.rollback()
+            raise
 
     @staticmethod
     async def _assert_task_revision(db, namespace, task_id, expected_revision):
@@ -248,6 +258,7 @@ class TaskStore:
         self._validate_state(state)
         now = now or utc_text()
         async with self._connect() as db:
+            await self._begin_mutation(db)
             await db.execute(
                 "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,"
                 "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,revision,created_at,updated_at) "
@@ -337,7 +348,7 @@ class TaskStore:
         normalized = self._normalize_dependencies(namespace, dependencies)
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 # A receipt is committed atomically with the task and its created event.
                 # Replay resolves the original task ID before normal duplicate detection.
@@ -816,7 +827,7 @@ class TaskStore:
             where += " AND revision=?"
             params.append(int(expected_revision))
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             cur = await db.execute(
                 f"UPDATE work_items SET {','.join(assignments)} WHERE {where}", params
             )
@@ -857,7 +868,7 @@ class TaskStore:
         self._validate_state(state)
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 row = await (
                     await db.execute(
@@ -1031,7 +1042,7 @@ class TaskStore:
             params.append(value)
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 # A previously committed identical write is recognized before
                 # stale-CAS classification or ownership checks.
@@ -1332,6 +1343,7 @@ class TaskStore:
     ):
         """Durable admission fence, serialized against a late remote claim commit."""
         async with self._connect() as db:
+            await self._begin_mutation(db)
             await db.execute(
                 "INSERT INTO work_claim_session_fences VALUES(?,?,?,?,?) "
                 "ON CONFLICT(logical_agent_id,work_session_id,session_epoch) DO NOTHING",
@@ -1351,7 +1363,7 @@ class TaskStore:
         from terminal_mcp.storage.claim_leases import release_session_claims
 
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 count = await release_session_claims(
                     db,
@@ -1485,7 +1497,7 @@ class TaskStore:
     ):
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 existing = await (
@@ -1629,6 +1641,7 @@ class TaskStore:
     ) -> bool:
         now = now or utc_text()
         async with self._connect() as db:
+            await self._begin_mutation(db)
             cur = await db.execute(
                 "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
                 (now, namespace, task_id, owner.kind, owner.owner_id),
@@ -1650,7 +1663,7 @@ class TaskStore:
     ) -> bool | TaskCommittedRecord:
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 leased = await (
@@ -1780,6 +1793,7 @@ class TaskStore:
         now = now or utc_text()
         params.insert(0, now)
         async with self._connect() as db:
+            await self._begin_mutation(db)
             cur = await db.execute(
                 f"UPDATE work_claims SET released_at=? WHERE {' AND '.join(where)}", params
             )
@@ -1839,7 +1853,7 @@ class TaskStore:
         now = now or utc_text()
         normalized = self._normalize_dependencies(namespace, dependencies)
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             exists = await (
                 await db.execute(
                     "SELECT 1 FROM work_items WHERE namespace=? AND task_id=?", (namespace, task_id)
@@ -1913,7 +1927,7 @@ class TaskStore:
     ):
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 await self._assert_claim_snapshot(db, namespace, task_id, expected_claim_ids)
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
@@ -2055,7 +2069,7 @@ class TaskStore:
     ):
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 await self._assert_claim_snapshot(db, namespace, task_id, expected_claim_ids)
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
@@ -2182,7 +2196,7 @@ class TaskStore:
         now = now or utc_text()
 
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 current = await (
@@ -2326,7 +2340,7 @@ class TaskStore:
         """Append a checkpoint and update the latest pointer without content CAS."""
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 exists = await (
                     await db.execute(
@@ -2367,7 +2381,7 @@ class TaskStore:
         """Exact per-author duplicate detection and append are one transaction."""
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             try:
                 exists = await (
                     await db.execute(
@@ -2425,7 +2439,7 @@ class TaskStore:
     ):
         now = now or utc_text()
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
+            await self._begin_mutation(db)
             await self._assert_task_revision(db, namespace, task_id, expected_revision)
             cur = await db.execute(
                 "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at,"

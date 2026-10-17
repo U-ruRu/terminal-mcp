@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 from collections import Counter
 
+from terminal_mcp.core.native_admission import NativeWriteAdmissionError
 from terminal_mcp.core.orchestration import (
     live_task_claims,
     parse_utc,
@@ -1001,6 +1002,8 @@ class TaskCoordinator:
                 dependency_override=dependency_override,
                 now=now,
             )
+        except NativeWriteAdmissionError:
+            raise
         except Exception as exc:
             if isinstance(exc, ValueError) and str(exc) == "request_id_conflict":
                 return {
@@ -1035,6 +1038,8 @@ class TaskCoordinator:
                             ),
                             replayed=True,
                         )
+                except NativeWriteAdmissionError:
+                    raise
                 except Exception:
                     # A read failure also leaves the commit status unknown.
                     pass
@@ -1201,6 +1206,8 @@ class TaskCoordinator:
             )
             result["code"] = "already_claimed"
             return result
+        except NativeWriteAdmissionError:
+            raise
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.claim: {exc}", "warnings": warnings}
         self._inc("terminal_mcp_task_claims_total")
@@ -1284,6 +1291,8 @@ class TaskCoordinator:
             )
         except KeyError:
             return {"ok": False, "code": "task_not_found", "error": "task_not_found"}
+        except NativeWriteAdmissionError:
+            raise
         except (TypeError, ValueError):
             return {"ok": False, "code": "input_validation_failed", "error": "invalid checkpoint"}
         return await self._result(namespace, task_id, [], committed_task=committed)
@@ -1302,6 +1311,8 @@ class TaskCoordinator:
             )
         except KeyError:
             return {"ok": False, "code": "task_not_found", "error": "task_not_found"}
+        except NativeWriteAdmissionError:
+            raise
         except ValueError as exc:
             if str(exc) == "duplicate_comment":
                 return {"ok": False, "code": "duplicate_comment", "error": "duplicate_comment"}
@@ -1350,6 +1361,8 @@ class TaskCoordinator:
                 "error": f"task.relate: {exc}",
                 "warnings": [],
             }
+        except NativeWriteAdmissionError:
+            raise
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.relate: {exc}", "warnings": []}
         return await self._result(namespace, task_id, [], committed_task=committed)
@@ -1439,6 +1452,8 @@ class TaskCoordinator:
             )
         except KeyError:
             return {"ok": False, "code": "task_not_found", "error": "task_not_found"}
+        except NativeWriteAdmissionError:
+            raise
         except ValueError:
             return {"ok": False, "code": "invalid_state", "error": "invalid_state"}
         return await self._result(namespace, task_id, [], committed_task=committed)
@@ -1753,6 +1768,8 @@ class TaskCoordinator:
                 code="revision_conflict",
                 details={"current_revision": exc.actual},
             )
+        except NativeWriteAdmissionError:
+            raise
         except (KeyError, ValueError) as exc:
             if isinstance(exc, ValueError) and str(exc) == "already_changed":
                 return {
@@ -1842,6 +1859,8 @@ class TaskCoordinator:
                 capture_task=True,
                 event_payload=payload,
             )
+        except NativeWriteAdmissionError:
+            raise
         except ValueError as exc:
             if "changed before review" in str(exc):
                 return {

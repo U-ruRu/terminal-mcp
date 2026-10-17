@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from native_runtime_helpers import native_agent
 
 import terminal_mcp.core.persistent_backend as backend_module
 from terminal_mcp.core.persistent_backend import PersistentBackend
@@ -42,6 +43,10 @@ class _Gate:
 async def _backend(tmp_path, monkeypatch):
     repo = SqliteRepository(tmp_path / "commands.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
+    native, _ = native_agent(
+        repo.path, IDENTITY["logical_agent_id"], node_id="node-a",
+        session_id=IDENTITY["work_session_id"],
+    )
     terminal = SimpleNamespace(
         queue_workers=1,
         least_loaded_queue=AsyncMock(return_value=1),
@@ -54,6 +59,7 @@ async def _backend(tmp_path, monkeypatch):
         task_coordinator=None,
         task_store=None,
         agent_policy=SimpleNamespace(command_preview_chars=160),
+        access_mesh=SimpleNamespace(store=native, clock=native.clock),
     )
     backend = PersistentBackend(service, _Lifecycle())
     backend._execution_authority = AsyncMock(

@@ -8,6 +8,8 @@ import terminal_mcp.core.persistent_backend as persistent_backend_module
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.commands import CommandApplication
 from terminal_mcp.application.requests import CmdReadRequest, CmdRecoveryRequest
+from terminal_mcp.core.native_admission import current_native_write_admission
+from terminal_mcp.core.orchestration import utc_now
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.read_contract import decode_cursor, encode_cursor
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -74,6 +76,7 @@ class _FakeTerminal:
         return self.default_queue
 
     async def submit(self, command):
+        assert current_native_write_admission() is None
         if self.mode == "backlogged":
             return
         command.status = "running"
@@ -113,6 +116,9 @@ def _fake_backend(mode, *, default_queue=1):
         task_coordinator=None,
         task_store=None,
         agent_policy=SimpleNamespace(command_preview_chars=160),
+        access_mesh=SimpleNamespace(
+            store=SimpleNamespace(namespace_id="fixture"), clock=utc_now
+        ),
     )
     return terminal, _FastPathBackend(service, _Lifecycle())
 

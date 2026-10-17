@@ -15,6 +15,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.orchestration import utc_now
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.mcp import roles
 
@@ -302,6 +303,9 @@ async def test_run_never_polls_or_sleeps_to_obtain_a_later_status(monkeypatch):
         task_coordinator=None,
         task_store=None,
         agent_policy=SimpleNamespace(command_preview_chars=80),
+        access_mesh=SimpleNamespace(
+            store=SimpleNamespace(namespace_id="fixture"), clock=utc_now
+        ),
     )
     backend = _RunFixtureBackend(service, _RunFixtureLifecycle())
     monkeypatch.setattr(

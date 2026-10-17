@@ -3,6 +3,13 @@ from __future__ import annotations
 import asyncio
 import secrets
 
+from terminal_mcp.core.access_mesh_scope import REGISTRY_NAMESPACE
+from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.native_admission import (
+    NativeWriteAdmission,
+    NativeWriteAdmissionError,
+    native_write_admission,
+)
 from terminal_mcp.core.orchestration import normalize_preview, utc_text
 from terminal_mcp.core.persistent_admission import (
     current_admission_context,
@@ -67,10 +74,12 @@ class PersistentBackend:
                 )
 
     @staticmethod
-    def _error(exc: SessionExecutionError) -> dict:
+    def _error(exc: SessionExecutionError | NativeWriteAdmissionError) -> dict:
         result = {"ok": False, "code": exc.code, "error": exc.code}
-        if exc.blockers:
+        if getattr(exc, "blockers", None):
             result["blockers"] = exc.blockers
+        if isinstance(exc, NativeWriteAdmissionError):
+            result["outcome"] = "not_committed"
         return result
 
     async def _idempotent(
@@ -140,6 +149,22 @@ class PersistentBackend:
             return result
         except PersistentStoreError as exc:
             return self._error(SessionExecutionError(exc.code, blockers=exc.blockers))
+
+    def _capture_write_admission(
+        self, logical_agent_id, work_session_id, session_epoch, operation
+    ) -> NativeWriteAdmission:
+        """Pin the namespace before resolve or any other asynchronous preflight."""
+        mesh = getattr(self.service, "access_mesh", None)
+        if mesh is None:
+            raise SessionExecutionError("session_attach_required")
+        return NativeWriteAdmission(
+            namespace_id=REGISTRY_NAMESPACE.get() or mesh.store.namespace_id,
+            logical_agent_id=logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+            operation=operation,
+            clock=mesh.clock,
+        )
 
     async def _execution_authority(
         self,
@@ -369,6 +394,9 @@ class PersistentBackend:
                 "path": "command",
             }
         try:
+            admission = self._capture_write_admission(
+                logical_agent_id, work_session_id, session_epoch, ManagedOperation.COMMAND_RUN
+            )
             async with self.lifecycle.operation_guard(logical_agent_id):
                 session = await self._execution_authority(
                     logical_agent_id,
@@ -404,20 +432,21 @@ class PersistentBackend:
                 for _ in range(32):
                     try:
                         command_hash = secrets.token_hex(4)
-                        command = await self.repo.create(
-                            cmd,
-                            status="queued",
-                            cmd_hash=command_hash,
-                            agent_id=logical_agent_id,
-                            command_type="persistent_run",
-                            command_preview=normalize_preview(
-                                cmd, self.service.agent_policy.command_preview_chars
-                            ),
-                            queue_id=selected_queue,
-                            logical_agent_id=logical_agent_id,
-                            work_session_id=work_session_id,
-                            session_epoch=session_epoch,
-                        )
+                        with native_write_admission(admission):
+                            command = await self.repo.create(
+                                cmd,
+                                status="queued",
+                                cmd_hash=command_hash,
+                                agent_id=logical_agent_id,
+                                command_type="persistent_run",
+                                command_preview=normalize_preview(
+                                    cmd, self.service.agent_policy.command_preview_chars
+                                ),
+                                queue_id=selected_queue,
+                                logical_agent_id=logical_agent_id,
+                                work_session_id=work_session_id,
+                                session_epoch=session_epoch,
+                            )
                         break
                     except Exception as exc:
                         if exc.__class__.__name__ != "IntegrityError":
@@ -426,15 +455,16 @@ class PersistentBackend:
                     raise RuntimeError("unable to allocate unique command hash")
                 await self.terminal.submit(command)
                 if self.task_coordinator and selected:
-                    await self.task_coordinator.record_command(
-                        logical_agent_id,
-                        command.cmd_hash,
-                        "persistent_run",
-                        selected,
-                        logical_agent_id=logical_agent_id,
-                        work_session_id=work_session_id,
-                        session_epoch=session_epoch,
-                    )
+                    with native_write_admission(admission):
+                        await self.task_coordinator.record_command(
+                            logical_agent_id,
+                            command.cmd_hash,
+                            "persistent_run",
+                            selected,
+                            logical_agent_id=logical_agent_id,
+                            work_session_id=work_session_id,
+                            session_epoch=session_epoch,
+                        )
             current = await self.repo.get(command.cmd_hash)
             queue_position = await self.repo.queue_position(command.cmd_hash)
             current = current or command
@@ -472,7 +502,7 @@ class PersistentBackend:
                     "execution_started": bool(command.claimed_at or command.started_at),
                     "postcommit_warning": type(exc).__name__,
                 }
-            if isinstance(exc, SessionExecutionError):
+            if isinstance(exc, (SessionExecutionError, NativeWriteAdmissionError)):
                 return self._error(exc)
             return {"ok": False, "code": "run_failed", "error": str(exc)}
 
@@ -494,6 +524,9 @@ class PersistentBackend:
             }
         command = None
         try:
+            admission = self._capture_write_admission(
+                logical_agent_id, work_session_id, session_epoch, ManagedOperation.COMMAND_RECOVERY
+            )
             async with self.lifecycle.operation_guard(logical_agent_id):
                 await self._execution_authority(
                     logical_agent_id,
@@ -504,27 +537,29 @@ class PersistentBackend:
                 )
                 for _ in range(32):
                     try:
-                        command = await self.repo.create(
-                            cmd,
-                            status="running",
-                            cmd_hash=secrets.token_hex(4),
-                            agent_id=logical_agent_id,
-                            command_type="persistent_recovery",
-                            command_preview=normalize_preview(
-                                cmd, self.service.agent_policy.command_preview_chars
-                            ),
-                            queue_id=None,
-                            logical_agent_id=logical_agent_id,
-                            work_session_id=work_session_id,
-                            session_epoch=session_epoch,
-                        )
+                        with native_write_admission(admission):
+                            command = await self.repo.create(
+                                cmd,
+                                status="running",
+                                cmd_hash=secrets.token_hex(4),
+                                agent_id=logical_agent_id,
+                                command_type="persistent_recovery",
+                                command_preview=normalize_preview(
+                                    cmd, self.service.agent_policy.command_preview_chars
+                                ),
+                                queue_id=None,
+                                logical_agent_id=logical_agent_id,
+                                work_session_id=work_session_id,
+                                session_epoch=session_epoch,
+                            )
                         break
                     except Exception as exc:
                         if exc.__class__.__name__ != "IntegrityError":
                             raise
                 if command is None:
                     raise RuntimeError("unable to allocate unique command hash")
-            duration_ms = await self.terminal.recovery(command, timeout_seconds=20)
+            with native_write_admission(admission):
+                duration_ms = await self.terminal.recovery(command, timeout_seconds=20)
             current = await self.repo.get(command.cmd_hash) or command
             total = await self.repo.count_lines(command.cmd_hash)
             start = max(total - 500, 0)
@@ -543,7 +578,7 @@ class PersistentBackend:
             }
         except asyncio.CancelledError:
             raise
-        except SessionExecutionError as exc:
+        except (SessionExecutionError, NativeWriteAdmissionError) as exc:
             return self._error(exc)
         except Exception as exc:
             if command is not None:
@@ -645,6 +680,9 @@ class PersistentBackend:
         if self.task_coordinator is None:
             return {"ok": False, "code": "task_unavailable", "error": "task unavailable"}
         try:
+            admission = self._capture_write_admission(
+                logical_agent_id, work_session_id, session_epoch, ManagedOperation(f"task.{action}")
+            )
             async with self.lifecycle.operation_guard(logical_agent_id):
                 await self._execution_authority(
                     logical_agent_id,
@@ -697,8 +735,9 @@ class PersistentBackend:
                         # revision and must not replace the committed result.
                     return result
 
-                return await mutate_once()
-        except SessionExecutionError as exc:
+                with native_write_admission(admission):
+                    return await mutate_once()
+        except (SessionExecutionError, NativeWriteAdmissionError) as exc:
             return self._error(exc)
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
