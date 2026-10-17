@@ -12,6 +12,10 @@ from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
+from terminal_mcp.application.access_mesh_registry import (
+    REGISTRY_BINDING,
+    AccessRegistryApplication,
+)
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
@@ -39,7 +43,7 @@ _INTENT_SAFE = READ_OPERATIONS | frozenset(
 )
 
 
-class AccessMeshApplication:
+class AccessMeshApplication(AccessRegistryApplication):
     def __init__(
         self,
         store: AccessMeshStore,
@@ -182,7 +186,8 @@ class AccessMeshApplication:
             nodes = state.get("nodes") or []
             local = next(
                 (
-                    node for node in nodes
+                    node
+                    for node in nodes
                     if node.get("node_id") == self.store.local_node_id
                     and node.get("state") != "detached"
                 ),
@@ -190,14 +195,18 @@ class AccessMeshApplication:
             )
             mesh_id = local.get("mesh_id") if local else None
             authority = state.get("control_node_id")
-            member_ids = {
-                node["node_id"]
-                for node in nodes
-                if isinstance(node, dict)
-                and isinstance(node.get("node_id"), str)
-                and node.get("mesh_id") == mesh_id
-                and node.get("state") != "detached"
-            } if mesh_id else set()
+            member_ids = (
+                {
+                    node["node_id"]
+                    for node in nodes
+                    if isinstance(node, dict)
+                    and isinstance(node.get("node_id"), str)
+                    and node.get("mesh_id") == mesh_id
+                    and node.get("state") != "detached"
+                }
+                if mesh_id
+                else set()
+            )
             if mesh_id and authority in member_ids and self.store.local_node_id in member_ids:
                 allowed = frozenset(member_ids)
                 managed_mesh_id = mesh_id
@@ -218,6 +227,11 @@ class AccessMeshApplication:
             self.store.managed_trust_required = managed_mesh_id is not None
             self.managed_trust_enabled = managed_mesh_id is not None
             self.managed_trust_mesh_id = managed_mesh_id
+            await asyncio.to_thread(
+                self.store.install_registry_scope,
+                mesh_id=managed_mesh_id,
+                authority_id=authority if managed_mesh_id else self.store.local_node_id,
+            )
 
     @staticmethod
     def require_write(actor: ActorContext) -> None:
@@ -231,6 +245,8 @@ class AccessMeshApplication:
 
     def connection_key(self, actor: ActorContext) -> str:
         """Index trusted caller evidence, never an agent-provided identity field."""
+        if REGISTRY_BINDING.get() is not None:
+            return REGISTRY_BINDING.get()
         if not actor.principal_id or not actor.provider or not actor.provider_metadata:
             raise AccessMeshError("identity_metadata_missing")
         try:
@@ -284,7 +300,12 @@ class AccessMeshApplication:
         access_code: str | None = None,
     ) -> dict:
         self.require_write(actor)
+        await asyncio.to_thread(self.store.assert_registry_ready)
         if session_number is not None:
+            if not self.registry_authoritative:
+                if self.replication is None:
+                    raise AccessMeshError("mesh_primary_unavailable")
+                await self.replication.refresh_registry_slot(session_number)
             winner = await asyncio.to_thread(self.store.numbers.winner, session_number)
             rotated = await asyncio.to_thread(self.store.rotated_code_slot, session_number)
             if rotated is not None and winner is not None:
@@ -708,6 +729,8 @@ class AccessMeshApplication:
         receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
+        if not self.registry_authoritative:
+            raise AccessMeshError("mesh_not_primary")
         if kind not in {"legacy", "persistent"}:
             raise AccessMeshError("invalid_mode")
         if kind == "legacy" and not self.legacy_enabled:
@@ -716,7 +739,7 @@ class AccessMeshApplication:
             attempt_id = "nr_" + secrets.token_urlsafe(16)
             announcement_deadline = None
             reserved_number = None
-            if self.replication is not None:
+            if self.replication is not None and not self.store.registry_mesh_id:
                 (
                     reserved_number,
                     attempt_id,
@@ -830,8 +853,10 @@ class AccessMeshApplication:
         inherit_policy: bool | None = None,
     ) -> dict:
         self.require_write(actor)
+        if not self.registry_authoritative:
+            raise AccessMeshError("mesh_not_primary")
         async with self._issuer_lock:
-            slot = await asyncio.to_thread(self.store.slot, self.store.local_node_id, slot_id)
+            slot = await asyncio.to_thread(self.store.registry_slot, slot_id)
             if slot is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
             if slot.revision != expected_revision:
@@ -840,7 +865,7 @@ class AccessMeshApplication:
             rotation_attempt = None
             rotation_deadline = None
             if kind == "AccessCodeRotated":
-                if self.replication is not None:
+                if self.replication is not None and not self.store.registry_mesh_id:
                     (
                         code,
                         rotation_attempt,
@@ -980,6 +1005,11 @@ class AccessMeshApplication:
     async def issuer_session(
         self, actor: ActorContext, *, action: str, mode=None, code=None
     ) -> dict:
+        forwarded = await self.proxy_registry(
+            actor, "session", {"action": action, "mode": mode, "code": code}
+        )
+        if forwarded is not None:
+            return forwarded
         if action not in {"start", "end", "status"}:
             raise AccessMeshError("invalid_request")
         if action != "status":

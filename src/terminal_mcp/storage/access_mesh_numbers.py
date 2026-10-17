@@ -100,8 +100,8 @@ class MeshSessionNumbers:
         # separately: an active/rearmable slot retains its number.
         as_of = as_of or self.stamp(self.store.clock())
         if db.execute(
-            "SELECT 1 FROM access_mesh_recipient_holds "
-            "WHERE number=? AND state='held' LIMIT 1", (number,)
+            "SELECT 1 FROM access_mesh_recipient_holds WHERE number=? AND state='held' LIMIT 1",
+            (number,),
         ).fetchone():
             return True
         # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
@@ -199,7 +199,7 @@ class MeshSessionNumbers:
     ):
         """Merge immutable identities; later-started session wins future operations."""
         self.validate(number)
-        if issuer_id not in self.store.trusted_issuers:
+        if not self.store.registry_issuer_trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_peer")
         if source_peer_id is not None and source_peer_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
@@ -312,9 +312,7 @@ class MeshSessionNumbers:
 
     def _repair_local_cycle(self, db, claim, start, delta):
         """Rebase cached dates without granting a new cycle or reviving a slot."""
-        tables = {
-            row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if {"access_mesh_local_sessions", "logical_agent_work_sessions"} <= tables:
             rows = db.execute(
                 "SELECT s.work_session_id,s.hard_expires_at FROM access_mesh_local_sessions l "
@@ -523,7 +521,7 @@ class MeshSessionNumbers:
         source_peer_id=None,
     ):
         self.validate(number)
-        if issuer_id not in self.store.trusted_issuers:
+        if not self.store.registry_issuer_trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_peer")
         if not slot_id or not event_id:
             raise AccessMeshError("invalid_session_identity")
@@ -751,7 +749,7 @@ class MeshSessionNumbers:
 
     def record_end(self, *, number, cycle_key, issuer_id, slot_id, event_id, ended_at):
         self.validate(number)
-        if issuer_id not in self.store.trusted_issuers:
+        if not self.store.registry_issuer_trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_peer")
         if not all(
             isinstance(value, str) and 1 <= len(value) <= 256

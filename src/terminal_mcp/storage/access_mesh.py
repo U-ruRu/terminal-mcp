@@ -32,6 +32,7 @@ from terminal_mcp.core.access_mesh_grants import (
 )
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.session_end_reasons import session_end_reason
+from terminal_mcp.storage.access_mesh_registry import AccessRegistryStore
 
 _mutation_receipt: ContextVar[dict | None] = ContextVar("mesh_issuer_receipt", default=None)
 _mutation_number: ContextVar[dict | None] = ContextVar("mesh_session_number", default=None)
@@ -60,7 +61,7 @@ def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     return slot_cycle(slot, now)
 
 
-class AccessMeshStore(LocalAccessMesh):
+class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
     """Native storage adapter; construct after the parent directory exists."""
 
     def __init__(
@@ -95,6 +96,7 @@ class AccessMeshStore(LocalAccessMesh):
         from terminal_mcp.storage.access_mesh_recipient_holds import MeshRecipientHolds
 
         self.recipient_holds = MeshRecipientHolds(self)
+        self.initialize_registry()
 
     def _archive_cipher(self):
         key = hmac.new(
@@ -149,9 +151,9 @@ class AccessMeshStore(LocalAccessMesh):
             f"terminal-mcp-managed-native-access-proof-v1:{mesh_id}:{authority_id}".encode(),
             hashlib.sha256,
         ).digest()
-        if (
-            self._managed_proof_key == key
-            and getattr(self, "_managed_proof_scope", None) == (mesh_id, authority_id)
+        if self._managed_proof_key == key and getattr(self, "_managed_proof_scope", None) == (
+            mesh_id,
+            authority_id,
         ):
             return False
         nonce = secrets.token_bytes(12)
@@ -781,6 +783,7 @@ class AccessMeshStore(LocalAccessMesh):
         return self.canonical_slot(self._snapshot(row))
 
     def attach(self, *, issuer_id: str, code: str, connection_key: str) -> SlotSnapshot:
+        self.assert_registry_ready()
         slot = super().attach(issuer_id=issuer_id, code=code, connection_key=connection_key)
         self.touch(connection_key)
         return slot
@@ -1248,6 +1251,7 @@ class AccessMeshStore(LocalAccessMesh):
         stamp = _text(now)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.assert_registry_ready(db)
             row = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (slot.issuer_id, slot.slot_id),
@@ -1356,8 +1360,8 @@ class AccessMeshStore(LocalAccessMesh):
             rows = db.execute(
                 "SELECT c.sequence,s.* FROM access_mesh_slot_catalog c "
                 "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) "
-                "WHERE c.issuer_id=? AND c.sequence>? ORDER BY c.sequence LIMIT ?",
-                (self.local_node_id, after, limit),
+                "WHERE c.sequence>? ORDER BY c.sequence LIMIT ?",
+                (after, limit),
             ).fetchall()
         return [(row["sequence"], self._snapshot(row)) for row in rows]
 
@@ -1415,11 +1419,11 @@ class AccessMeshStore(LocalAccessMesh):
         with self._connect() as db:
             row = db.execute(
                 "SELECT revision,event_json FROM access_mesh_event_log "
-                "WHERE issuer_id=? AND slot_id=? AND "
+                "WHERE slot_id=? AND "
                 "json_extract(event_json,'$.kind') IN "
                 "('SlotIssued','SessionStarted','SessionUpdated') "
                 "ORDER BY revision DESC LIMIT 1",
-                (self.local_node_id, slot_id),
+                (slot_id,),
             ).fetchone()
         if row is None:
             return None
@@ -1434,10 +1438,10 @@ class AccessMeshStore(LocalAccessMesh):
         with self._connect() as db:
             row = db.execute(
                 "SELECT revision,event_json FROM access_mesh_event_log "
-                "WHERE issuer_id=? AND slot_id=? AND "
+                "WHERE slot_id=? AND "
                 "json_extract(event_json,'$.kind')='SessionEnded' "
                 "ORDER BY revision DESC LIMIT 1",
-                (self.local_node_id, slot_id),
+                (slot_id,),
             ).fetchone()
         if row is None:
             return None
@@ -1574,8 +1578,8 @@ class AccessMeshStore(LocalAccessMesh):
         fields |= optional
         if (
             authenticated_peer_id != raw["issuer_id"]
-            or authenticated_peer_id not in self.trusted_issuers
-        ):
+            and authenticated_peer_id != self.registry_authority_id
+        ) or authenticated_peer_id not in self.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_issuer")
         try:
             from terminal_mcp.core.access_mesh_grants import SlotPolicy
@@ -1619,6 +1623,7 @@ class AccessMeshStore(LocalAccessMesh):
             raise AccessMeshError("access_mesh_invalid_snapshot") from exc
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.assert_registry_ready(db)
             old = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),

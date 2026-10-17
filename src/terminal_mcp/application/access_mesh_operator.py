@@ -85,6 +85,11 @@ class AccessMeshOperator:
 
     async def slots(self, actor, *, limit=20, cursor=None):
         self.require_operator(actor)
+        forwarded = await self.mesh.proxy_registry(
+            actor, "slots", {"limit": limit, "cursor": cursor}
+        )
+        if forwarded is not None:
+            return forwarded
         scope = {"kind": "access.operator.slots", "node": self.store.local_node_id}
         after = decode_cursor(cursor, scope)
         rows = await asyncio.to_thread(self.store.issuer_slots, after=after, limit=limit + 1)
@@ -98,13 +103,19 @@ class AccessMeshOperator:
 
     async def get(self, actor, *, slot_id):
         self.require_operator(actor)
-        slot = await asyncio.to_thread(self.store.slot, self.store.local_node_id, slot_id)
+        forwarded = await self.mesh.proxy_registry(actor, "get", {"slot_id": slot_id})
+        if forwarded is not None:
+            return forwarded
+        slot = await asyncio.to_thread(self.store.registry_slot, slot_id)
         if slot is None:
             raise AccessMeshError("access_mesh_slot_not_found")
         return {"ok": True, "slot": await asyncio.to_thread(self._view, slot)}
 
     async def defaults(self, actor):
         self.require_operator(actor)
+        forwarded = await self.mesh.proxy_registry(actor, "defaults", {})
+        if forwarded is not None:
+            return forwarded
         return {"ok": True, **await asyncio.to_thread(self.mesh.defaults_state)}
 
     async def mutate(
@@ -150,6 +161,11 @@ class AccessMeshOperator:
                 else {}
             ),
         }
+        forwarded = await self.mesh.proxy_registry(
+            actor, "mutate", {**payload, "idempotency_key": idempotency_key}
+        )
+        if forwarded is not None:
+            return forwarded
         spec = self._spec(actor, idempotency_key, payload)
         async with self.mesh._issuer_session_lock:
             previous = await asyncio.to_thread(
@@ -199,7 +215,7 @@ class AccessMeshOperator:
                 )
                 self.mesh.defaults, self.mesh.legacy_enabled = resolved, enabled
                 return result
-            slot = await asyncio.to_thread(self.store.slot, self.store.local_node_id, slot_id)
+            slot = await asyncio.to_thread(self.store.registry_slot, slot_id)
             if slot is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
             if slot.revision != expected_revision:

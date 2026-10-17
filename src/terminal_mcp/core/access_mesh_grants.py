@@ -616,7 +616,7 @@ class LocalAccessMesh:
         if not isinstance(code, str) or not re.fullmatch(r"[0-9]{4}", code):
             raise AccessMeshError("access_mesh_invalid_code")
         keys = [self._managed_proof_key or self._proof_key]
-        if issuer_id == self.local_node_id:
+        if issuer_id == self.local_node_id or getattr(self, "registry_mesh_id", None):
             keys.extend((self._proof_key, *self._local_proof_history))
         tags = []
         for key in keys:
@@ -769,17 +769,26 @@ class LocalAccessMesh:
         Transport must first authenticate the sending peer. An event claiming to
         come from another issuer cannot change this issuer's local replica.
         """
-        if authenticated_peer_id != event.issuer_id or event.issuer_id not in self.trusted_issuers:
+        authority = getattr(self, "registry_authority_id", self.local_node_id)
+        relayed = bool(
+            getattr(self, "registry_mesh_id", None) and authenticated_peer_id == authority
+        )
+        if not relayed and (
+            authenticated_peer_id != event.issuer_id or event.issuer_id not in self.trusted_issuers
+        ):
             raise AccessMeshError("access_mesh_untrusted_issuer")
         recipients = tuple(dict.fromkeys(broadcast_to))
         if recipients and (
-            event.issuer_id != self.local_node_id
+            (event.issuer_id != self.local_node_id and self.local_node_id != authority)
             or any(p not in self.trusted_issuers or p == self.local_node_id for p in recipients)
         ):
             raise AccessMeshError("access_mesh_untrusted_peer")
         with self._connect() if _connection is None else nullcontext(_connection) as db:
             if _connection is None:
                 db.execute("BEGIN IMMEDIATE")
+            guard = getattr(self, "assert_registry_ready", None)
+            if guard is not None:
+                guard(db)
             old = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),
@@ -981,7 +990,10 @@ class LocalAccessMesh:
         _required_identifier(connection_key)
         # Old, persisted claims never re-authorize a node after it leaves the
         # Mesh or moves to a different Mesh/authority.
-        if issuer_id not in self.trusted_issuers:
+        trusted = getattr(
+            self, "registry_issuer_trusted", lambda value: value in self.trusted_issuers
+        )
+        if not trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_issuer")
         if (
             issuer_id != self.local_node_id
@@ -995,6 +1007,9 @@ class LocalAccessMesh:
         tags = self.code_tags(issuer_id, code)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            guard = getattr(self, "assert_registry_ready", None)
+            if guard is not None:
+                guard(db)
             placeholders = ",".join("?" for _ in tags)
             rows = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas "

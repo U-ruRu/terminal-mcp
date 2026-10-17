@@ -106,6 +106,7 @@ COMPONENT_MODULES = frozenset(
         "test_access_identity_guard.py",
         "test_access_mesh_future_policy.py",
         "test_access_mesh_grants.py",
+        "test_access_mesh_registry_storage.py",
         "test_access_mesh_message_application.py",
         "test_access_mesh_message_storage.py",
         "test_access_mesh_negotiation_contract.py",

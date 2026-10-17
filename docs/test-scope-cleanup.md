@@ -111,3 +111,16 @@ The Console Join preflight check for a controller with members now accepts the
 paired application's request. The server owns transition safety and registry
 preservation; membership history and namespace names are not client admission
 conditions. Existing connection lifecycle/cache-isolation and i18n checks are reused.
+
+
+## Unified Mesh: primary ACS registry
+
+The current Mesh registry is authoritative on its primary. New component module
+`test_access_mesh_registry_storage.py` checks durable scope fencing, local erasure
+without source revocation, exact registry handoff and historical issuer acceptance.
+New integration module `test_access_mesh_registry_http.py` reuses the existing
+two-node transport fixture for four atomic boundaries: forwarding issuance,
+hydrating attach from the primary, namespace rejection and primary unavailability.
+Existing grant, replication and lifecycle checks remain the regression owners.
+Secondary scoped validation: 25 passed; Ruff and diff checks passed.
+This source stage is not a deployment or final architecture acceptance receipt.
