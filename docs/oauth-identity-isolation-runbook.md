@@ -211,3 +211,26 @@ quarantine/restore procedure approved by the release owner.
 
 All four negative scenarios must pass on the final exact SHA and receive
 independent QA acceptance before integrating or deploying this patch.
+
+## First ChatGPT login after standalone reset
+
+ChatGPT may send a newly generated public OAuth `client_id` on
+`GET /oauth/authorize` even when the fresh standalone database has no client
+registrations. A missing client is **not** a reason to reject an otherwise
+well-formed login request if the redirect is an exact HTTPS ChatGPT connector
+callback (`https://chatgpt.com/connector/oauth/<connector-id>`) and the S256
+PKCE challenge is valid.
+
+The GET renders the username/password form without creating records. On POST,
+the owner's configured OAuth credentials and requested scopes are verified
+first. Only then does the server atomically bind that client ID to the exact
+callback and issue a code. A mismatched existing client binding cannot be
+replaced. Malformed IDs, other hosts, redirects with queries, invalid PKCE and
+failed logins do not create registrations. Existing registered clients and the
+normal `/oauth/register` workflow are unchanged.
+
+The login still requires root-owned `0600` files
+`/etc/terminal-mcp/credentials/oauth-username` and `oauth-password`. A clean
+deployment should validate the presence of these credentials before expecting
+interactive OAuth login to succeed. Neither copying an old OAuth database nor
+pre-inserting a row per ChatGPT connector is necessary.

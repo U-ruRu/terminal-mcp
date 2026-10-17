@@ -1,7 +1,9 @@
 import base64
 import hmac
 import logging
+import re
 from html import escape
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -11,6 +13,35 @@ from terminal_mcp.auth.credentials import OAuthCredentialFileError
 logger = logging.getLogger(__name__)
 
 FORM = """<!doctype html><html><body><h1>terminal-mcp</h1><form method="post"><input type="hidden" name="client_id" value="{client_id}"><input type="hidden" name="redirect_uri" value="{redirect_uri}"><input type="hidden" name="scope" value="{scope}"><input type="hidden" name="state" value="{state}"><input type="hidden" name="code_challenge" value="{code_challenge}"><input type="hidden" name="code_challenge_method" value="S256"><label>Username <input name="username"></label><label>Password <input type="password" name="password"></label><button>Authorize</button></form></body></html>"""  # noqa: E501
+
+
+_CHATGPT_CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{16,128}")
+_CHATGPT_CALLBACK_PATH = re.compile(r"/connector/oauth/[A-Za-z0-9_-]{8,128}")
+_S256_CODE_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43,128}")
+
+
+def _chatgpt_first_login_allowed(
+    client_id: str, redirect_uri: str, code_challenge: str, code_challenge_method: str
+) -> bool:
+    """Allow a new ChatGPT public client only with its exact, HTTPS callback and PKCE."""
+    if (
+        not _CHATGPT_CLIENT_ID.fullmatch(client_id)
+        or not _S256_CODE_CHALLENGE.fullmatch(code_challenge)
+        or code_challenge_method != "S256"
+        or any(ord(char) < 32 for char in redirect_uri)
+    ):
+        return False
+    try:
+        callback = urlsplit(redirect_uri)
+    except ValueError:
+        return False
+    return (
+        callback.scheme == "https"
+        and callback.netloc == "chatgpt.com"
+        and bool(_CHATGPT_CALLBACK_PATH.fullmatch(callback.path))
+        and not callback.query
+        and not callback.fragment
+    )
 
 
 def build_oauth_router(settings, auth, store):
@@ -103,10 +134,16 @@ def build_oauth_router(settings, auth, store):
         code_challenge_method: str = "",
     ):
         client = await store.get_client(client_id)
+        redirect_allowed = (
+            redirect_uri in client[2].split("\n")
+            if client
+            else _chatgpt_first_login_allowed(
+                client_id, redirect_uri, code_challenge, code_challenge_method
+            )
+        )
         if (
             response_type != "code"
-            or not client
-            or redirect_uri not in client[2].split("\n")
+            or not redirect_allowed
             or code_challenge_method != "S256"
             or not code_challenge
         ):
@@ -133,13 +170,15 @@ def build_oauth_router(settings, auth, store):
         password: str = Form(),
     ):
         client = await store.get_client(client_id)
+        first_login = not client and _chatgpt_first_login_allowed(
+            client_id, redirect_uri, code_challenge, code_challenge_method
+        )
         requested = set(scope.split())
         allowed = set(settings.oauth_required_scopes.split())
         valid = (
-            client
-            and redirect_uri in client[2].split("\n")
+            (bool(client and redirect_uri in client[2].split("\n")) or first_login)
             and code_challenge_method == "S256"
-            and code_challenge
+            and bool(code_challenge)
             and requested.issubset(allowed)
         )
         if valid:
@@ -150,6 +189,16 @@ def build_oauth_router(settings, auth, store):
                 return HTMLResponse("authorization unavailable", 503)
         if not valid:
             return HTMLResponse("authorization denied", 403)
+        if first_login:
+            # The browser must prove the owner's credentials *before* we persist
+            # an externally supplied client ID. Never broaden an existing binding.
+            registered = await store.register_authenticated_chatgpt_client(client_id, redirect_uri)
+            if (
+                not registered
+                or registered[4] != "none"
+                or redirect_uri not in registered[2].split("\n")
+            ):
+                return HTMLResponse("authorization denied", 403)
         code = await store.create_code(
             client_id,
             redirect_uri,

@@ -72,6 +72,24 @@ class OAuthStore:
             await db.commit()
         return cid, secret
 
+    async def register_authenticated_chatgpt_client(self, client_id: str, redirect_uri: str):
+        """Bind a verified first-login public client without replacing an existing ID."""
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
+            await db.execute(
+                "INSERT INTO oauth_clients "
+                "(client_id,client_secret_hash,redirect_uris,client_name,auth_method,created_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(client_id) DO NOTHING",
+                (client_id, None, redirect_uri, "ChatGPT", "none", int(time.time())),
+            )
+            cursor = await db.execute(
+                "SELECT client_id,client_secret_hash,redirect_uris,client_name,auth_method "
+                "FROM oauth_clients WHERE client_id=?",
+                (client_id,),
+            )
+            client = await cursor.fetchone()
+            await db.commit()
+            return client
+
     async def get_client(self, cid):
         async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             return await (

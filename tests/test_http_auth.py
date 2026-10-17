@@ -51,14 +51,17 @@ def test_oauth_register_returns_usable_client(oauth):
     assert registered[3] == "Connector"
 
 
-def test_oauth_authorization_returns_bound_pkce_code(oauth):
+@pytest.mark.parametrize("unknown_client", [False, True])
+def test_oauth_authorization_returns_bound_pkce_code(oauth, unknown_client):
     client, store, client_id = oauth
+    callback = CHATGPT_CALLBACK if unknown_client else CALLBACK
+    client_id = EXTERNAL_CLIENT_ID if unknown_client else client_id
 
     response = client.post(
         "/oauth/authorize",
         data={
             "client_id": client_id,
-            "redirect_uri": CALLBACK,
+            "redirect_uri": callback,
             "scope": "terminal:read",
             "state": "request-state",
             "code_challenge": pkce(VERIFIER),
@@ -71,10 +74,10 @@ def test_oauth_authorization_returns_bound_pkce_code(oauth):
     assert response.status_code == 303
     redirect = urlparse(response.headers["location"])
     query = parse_qs(redirect.query)
-    assert response.headers["location"].startswith(CALLBACK + "?")
+    assert response.headers["location"].startswith(callback + "?")
     assert query["state"] == ["request-state"]
     record = asyncio.run(store.get_code(query["code"][0]))
-    assert record[:4] == (client_id, CALLBACK, "terminal:read", pkce(VERIFIER))
+    assert record[:4] == (client_id, callback, "terminal:read", pkce(VERIFIER))
 
 
 def test_oauth_token_exchanges_valid_pkce_code(oauth):
@@ -136,3 +139,81 @@ def test_oauth_refresh_returns_rotated_credential(oauth):
     assert response.json()["refresh_token"] != refresh
     assert response.json()["scope"] == "terminal:read"
     assert asyncio.run(store.rotate_refresh(refresh)) is None
+
+
+CHATGPT_CALLBACK = "https://chatgpt.com/connector/oauth/qOkRcFaILaei"
+EXTERNAL_CLIENT_ID = "8QYoQq0HG7y3Btrr2XuK8ioSeuIiR5YS"
+
+
+def _first_login_request():
+    return {
+        "client_id": EXTERNAL_CLIENT_ID,
+        "redirect_uri": CHATGPT_CALLBACK,
+        "scope": "terminal:read terminal:execute",
+        "state": "first-login-state",
+        "code_challenge": pkce(VERIFIER),
+        "code_challenge_method": "S256",
+    }
+
+
+def test_unknown_chatgpt_client_shows_login_without_registration(oauth):
+    client, store, _ = oauth
+    response = client.get(
+        "/oauth/authorize", params={"response_type": "code", **_first_login_request()}
+    )
+    assert response.status_code == 200
+    assert 'name="username"' in response.text
+    assert asyncio.run(store.get_client(EXTERNAL_CLIENT_ID)) is None
+
+
+@pytest.mark.parametrize(
+    "bad_callback",
+    [
+        "https://example.invalid/callback",
+        "http://chatgpt.com/connector/oauth/qOkRcFaILaei",
+        "https://chatgpt.com.example.invalid/connector/oauth/qOkRcFaILaei",
+        "https://chatgpt.com/connector/oauth/qOkRcFaILaei?extra=1",
+        "https://chatgpt.com/connector/oauth/qOkRcFaILaei/extra",
+        "https://chatgpt.com:443/connector/oauth/qOkRcFaILaei",
+        "https://[malformed",
+    ],
+)
+def test_first_login_rejects_untrusted_redirect(oauth, bad_callback):
+    client, store, _ = oauth
+    request = _first_login_request()
+    request["redirect_uri"] = bad_callback
+    response = client.get("/oauth/authorize", params={"response_type": "code", **request})
+    assert response.status_code == 400
+    assert asyncio.run(store.get_client(EXTERNAL_CLIENT_ID)) is None
+
+
+def test_first_login_rejects_weak_pkce(oauth):
+    client, store, _ = oauth
+    request = _first_login_request()
+    request["code_challenge"] = "short"
+    response = client.get("/oauth/authorize", params={"response_type": "code", **request})
+    assert response.status_code == 400
+    assert asyncio.run(store.get_client(EXTERNAL_CLIENT_ID)) is None
+
+
+def test_external_client_id_cannot_replace_existing_redirect(oauth):
+    _, store, _ = oauth
+    initial = asyncio.run(
+        store.register_authenticated_chatgpt_client(EXTERNAL_CLIENT_ID, CHATGPT_CALLBACK)
+    )
+    conflicting = asyncio.run(
+        store.register_authenticated_chatgpt_client(
+            EXTERNAL_CLIENT_ID, "https://chatgpt.com/connector/oauth/differentCallback"
+        )
+    )
+    assert conflicting == initial
+    assert conflicting[2] == CHATGPT_CALLBACK
+
+
+def test_unknown_client_failed_owner_login_leaves_database_unchanged(oauth):
+    client, store, _ = oauth
+    fields = _first_login_request()
+    fields.update({"username": "invalid", "password": "invalid"})
+    result = client.post("/oauth/authorize", data=fields)
+    assert result.status_code == 403
+    assert asyncio.run(store.get_client(EXTERNAL_CLIENT_ID)) is None
