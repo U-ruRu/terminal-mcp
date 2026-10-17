@@ -66,7 +66,7 @@ prove a retired API or UI artifact is absent were removed.
 |---|---|
 | Old `test_agents`, `test_agents_native`, session restart and private access-code command flows | Current provider/principal admission: `test_managed_session_gate`, `test_managed_identity_authority`, `test_managed_session_application`. Window continuity: `test_work_window_store`. Actual execution: `test_execution_port_native`. |
 | Auth/schema adoption, v0/v24 upgrade fixtures, old OAuth anchor QA | `test_identity_isolation` verifies a fresh seal, a missing installation anchor and a foreign database. `test_access_identity_guard::test_existing_runtime_refuses_missing_protected_auth` verifies current startup refusal. `test_access_authority` keeps missing/corrupt key handling. No historical migration is needed to prepare these states. |
-| Whole-application legacy Actions route roster | `test_http_actions_schema` owns current operation ID and canonical task request binding. `test_http_auth`, `test_persistent_http` and `test_console_snapshot` exercise actual current HTTP operations. No assertion that native M3 routes are absent remains. |
+| Whole-application legacy Actions route roster | `test_http_actions_schema` owns current operation ID and canonical task request binding. `test_http_auth`, `test_access_slot_native_http` and `test_console_snapshot` exercise actual current HTTP operations. No assertion that native M3 routes are absent remains. |
 | Full OAuth registration → authorization → exchange → refresh → restart workflows | `test_http_auth` has individual registration, authorization-code, valid exchange, PKCE refusal and refresh checks against the current OAuth router and its own store. Refresh concurrency belongs to `test_oauth_store_refresh`; device exchange and revocation belong to `test_pairing_exchange`. |
 | Window start/restart/extend/end chains, many-window recovery stress and duplicate public QA | `test_work_window_store` owns restart within the same window, concurrent start, policy snapshots, provider binding and queued-command blockers. `test_window_recovery` owns one due claim, no-due result, lease exclusion/reclaim and expiry race. `test_access_mesh_session_numbers` owns reservation/collision/reuse. |
 | Notify → ACK → reply → expiry → restart message scenarios | `test_access_mesh_message_storage` owns notify read receipt, idempotent ACK, alert reply obligation, reply commit/rollback, expiry and pruning separately. `test_local_message_sender_receipts` owns the aggregate sender projection. `test_access_mesh_messages_v2` owns current send/target/discovery behavior. |
@@ -237,3 +237,18 @@ node without network polling, follower-to-Standalone and follower-to-new-Mesh
 cache recovery, plus cancellation of an old in-flight refresh at the transition
 boundary. The preserved-binding upgrade admission regression tests both primary
 and member. Scope mappings remove only references to deleted test modules.
+
+
+## Unified Mesh: full-gate fixture alignment
+
+The former per-agent Mesh revoke/drain facade and its route epochs are retired. The three tests in `test_mesh_session_authority_review.py` are removed because current authority is covered at the actual registry and signed topology boundaries:
+
+| Retired assertion | Current owner |
+| --- | --- |
+| A non-authority peer cannot revoke a foreign session | `test_access_mesh_replication_http::test_authenticated_peer_cannot_spoof_event_issuer`; `test_access_mesh_registry_http::test_previous_primary_cannot_commit_cycle_after_handoff` |
+| A stale authority epoch is rejected | `test_mesh_primary_handoff::test_old_primary_certificate_cannot_reclaim_a_later_authority`; the previous-primary registry test above |
+| Current authority may finish the session | `test_access_mesh_registry_http::test_member_acs_end_closes_the_shared_cycle`; `test_access_mesh_replication_http::test_http_delivery_applies_committed_event_and_acknowledges_outbox` |
+
+`test_persistent_http.py` is replaced by `test_access_slot_native_http.py`: both operator create/delete scenarios now use `/actions/access/mutate`, assert the native numeric identity and verify that deletion retires the registration and number. `test_http_actions_schema` binds the current `/actions/tasks` request schema and rejects reappearance of the retired mutation route. Task ownership fixtures create a real native work session before claiming its lease.
+
+The full runner now gives each test its own fallback state paths. Explicit test configuration, production node-identity checks, migration checks, full-source SHA validation and zero-skip evidence requirements remain intact. Mesh trust, VPN and control test doubles implement the current namespace and transition ports; they do not relax production checks.

@@ -180,7 +180,6 @@ COMPONENT_MODULES = frozenset(
         "test_mcp_provider_evidence.py",
         "test_mesh_bootstrap_auth_isolation_401.py",
         "test_mesh_create_retry_idempotency.py",
-        "test_mesh_session_authority_review.py",
         "test_oauth_store_refresh.py",
         "test_output_retention.py",
         "test_persistent_idempotency_storage.py",
@@ -208,7 +207,7 @@ PLATFORM_MODULES = frozenset(
     {
         "test_execution_port_native.py",
         "test_installer.py",
-        "test_persistent_http.py",
+        "test_access_slot_native_http.py",
         "test_queue.py",
         "test_runtime_finalization.py",
         "test_service.py",

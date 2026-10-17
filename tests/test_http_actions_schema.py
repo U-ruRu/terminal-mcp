@@ -20,7 +20,8 @@ def test_action_router_run_operation_id(schema):
     assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
 
 
-def test_task_route_binds_the_canonical_request_schema(schema):
-    operation = schema["paths"]["/actions/task"]["post"]
+def test_task_list_route_binds_the_canonical_request_schema(schema):
+    operation = schema["paths"]["/actions/tasks"]["post"]
     ref = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
-    assert ref == "#/components/schemas/TaskRequest"
+    assert ref == "#/components/schemas/TasksRequest"
+    assert "/actions/task" not in schema["paths"]
