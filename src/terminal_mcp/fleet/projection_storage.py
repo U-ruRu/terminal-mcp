@@ -194,8 +194,13 @@ class FleetProjectionStore:
                         "VALUES(1,?,?,?,?,1,0,?)",
                         (*expected, stamp),
                     )
-                elif tuple(meta) != expected:
+                elif tuple(meta)[1:] != expected[1:]:
                     raise FleetProjectionError("fleet_projection identity does not match metadata")
+                elif meta[0] != self.fleet_id:
+                    await db.execute(
+                        "UPDATE projection_meta SET fleet_id=?,updated_at=? WHERE singleton=1",
+                        (self.fleet_id, stamp),
+                    )
                 await db.commit()
             except Exception:
                 await db.rollback()
