@@ -63,6 +63,9 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path, action):
 def _run_doctor_with_ingress_status(
     tmp_path,
     ingress_status: str,
+    *,
+    local_mesh_status: str = "401",
+    public_mesh_status: str = "401",
 ):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -87,7 +90,9 @@ def _run_doctor_with_ingress_status(
         "    printf '204' ;;\n"
         "  *'/connect'*) printf '200' ;;\n"
         "  *'/console/ws-ticket'*) printf '401' ;;\n"
-        "  *'/console/fleet/v1/'*) printf '401' ;;\n"
+        '  *"127.0.0.1:8080/console/fleet/v1/"*) '
+        "printf '%s' \"$FAKE_LOCAL_MESH_STATUS\" ;;\n"
+        "  *'/console/fleet/v1/'*) printf '%s' \"$FAKE_PUBLIC_MESH_STATUS\" ;;\n"
         "esac\n"
         "exit 0\n"
     )
@@ -106,6 +111,8 @@ def _run_doctor_with_ingress_status(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_CURL_LOG": str(curl_log),
         "FAKE_INGRESS_STATUS": ingress_status,
+        "FAKE_LOCAL_MESH_STATUS": local_mesh_status,
+        "FAKE_PUBLIC_MESH_STATUS": public_mesh_status,
         "TERMINAL_MCP_INSTALL_ROOT": str(tmp_path / "install"),
         "TERMINAL_MCP_ENV_DIR": str(env_dir),
         "TERMINAL_MCP_DATA_DIR": str(tmp_path / "data"),
@@ -219,3 +226,21 @@ def test_doctor_probes_console_fallback_and_read_v2_surfaces(tmp_path):
         "/console/fleet/v1/ws-ticket",
     ):
         assert route in curl_log
+
+
+def test_doctor_accepts_missing_mesh_console_only_on_standalone(tmp_path):
+    result, curl_log = _run_doctor_with_ingress_status(
+        tmp_path, "401", local_mesh_status="404", public_mesh_status="404"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "/console/fleet/v1/probe" in curl_log
+    assert "/console/fleet/v1/snapshot" not in curl_log
+    assert "/actions/console/snapshot" in curl_log
+
+
+def test_doctor_rejects_public_mesh_missing_when_local_mesh_is_enabled(tmp_path):
+    result, _ = _run_doctor_with_ingress_status(
+        tmp_path, "401", local_mesh_status="401", public_mesh_status="404"
+    )
+    assert result.returncode != 0
+    assert "Public Mesh Console route check failed" in result.stderr

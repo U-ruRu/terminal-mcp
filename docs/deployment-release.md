@@ -172,3 +172,16 @@ new administrator password and public origin. It creates new credentials and has
 no automatic rollback target pointing at the old installation. Hot-update recovery
 continues to preserve the current security state. A deployment requires its own
 authorization; publishing a canonical source commit performs no deployment.
+
+### Standalone Console ingress acceptance
+
+The common Console `/connect`, snapshot preflight and unauthenticated
+WebSocket-ticket endpoints are required on both Mesh and standalone nodes.
+The `/console/fleet/v1/*` projection API is optional: standalone nodes
+without the local Fleet projection return `404`, while Mesh nodes exposing
+that projection return `401` to unauthenticated requests. Deployment checks
+must first inspect the local `/console/fleet/v1/probe` route. If local is
+`404`, require public `404` and skip the other absent projection routes. If
+local is `401`, require public `401` on all projection routes. Any other
+local status or local/public mismatch fails activation, preserving the
+reverse-proxy security check on actual Mesh deployments.

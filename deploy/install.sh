@@ -207,6 +207,25 @@ check_public_console_ingress(){
     return 1
   fi
 
+  # Fleet projection routes are not mounted on standalone nodes. Discover that
+  # from the *local* application, never from a possibly broken public proxy.
+  local local_mesh_probe_status public_mesh_probe_status
+  local_mesh_probe_status=$(public_status GET "${READINESS_URL%/health/ready}/console/fleet/v1/probe")
+  if [ "$local_mesh_probe_status" = "404" ]; then
+    public_mesh_probe_status=$(
+      public_status GET "${public_base_url%/}/console/fleet/v1/probe" -H "Origin: $console_origin"
+    )
+    if [ "$public_mesh_probe_status" != "404" ]; then
+      echo "Standalone Console route mismatch: local Mesh probe 404, public returned ${public_mesh_probe_status:-request_error}" >&2
+      return 1
+    fi
+    return 0
+  fi
+  if [ "$local_mesh_probe_status" != "401" ]; then
+    echo "Local Mesh Console route check failed: probe returned ${local_mesh_probe_status:-request_error}, expected 401 or standalone 404" >&2
+    return 1
+  fi
+
       while IFS='|' read -r method route json_body; do
         [ -n "$route" ] || continue
         if [ -n "$json_body" ]; then
