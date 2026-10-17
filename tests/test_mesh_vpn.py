@@ -194,7 +194,9 @@ def test_managed_transport_refresh_preserves_pinned_access_identity():
 
     pinned = FleetPeer("bacloud", "https://public-bac.example", "pinned-signing", "pinned-token")
     initial = FleetConfig("firstbyte", "signing-key", (pinned,), 5.0, 3.0)
-    store = SimpleNamespace(trusted_issuers=frozenset({"bacloud"}))
+    store = SimpleNamespace(
+        registry_mesh_id="transport-test", trusted_issuers=frozenset({"bacloud"})
+    )
     transport = AccessMeshReplication(SimpleNamespace(store=store), initial)
     controller = ManagedFleetControl(
         SimpleNamespace(),

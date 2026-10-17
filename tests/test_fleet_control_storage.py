@@ -127,7 +127,7 @@ async def test_standalone_state_restores_local_policy():
     policy = PolicyProbe()
     private, _ = keypair()
     controller = ManagedFleetControl(
-        SimpleNamespace(control_node_id="home"),
+        SimpleNamespace(control_node_id="home", pending_namespace=AsyncMock(return_value=None)),
         FleetConfig("home", private, (), 1.0, 1.0),
         policy,
         public_base_url="https://home.example",
@@ -145,6 +145,7 @@ async def test_replica_policy_restores_standalone_membership():
     private, _ = keypair()
     store = SimpleNamespace(
         control_node_id="home",
+        pending_namespace=AsyncMock(return_value=None),
         managed_peer_material=AsyncMock(return_value=[]),
         managed_node=AsyncMock(return_value=None),
         mark_managed_applied=AsyncMock(),
