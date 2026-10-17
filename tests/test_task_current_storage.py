@@ -1,5 +1,6 @@
 """Atomic task obligations from retired service-level workflow scenarios."""
 
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -89,6 +90,32 @@ async def test_one_logical_owner_cannot_claim_a_second_task(store):
         await store.claim_owner("current", "second", owner, claim_intent="Other work")
 
     assert error.value.task_id == "first"
+
+
+@pytest.mark.asyncio
+async def test_historical_claim_does_not_block_or_change_with_current_ownership(store):
+    await store.create_task("current", "one", "Retained application task")
+    with sqlite3.connect(store.path) as db:
+        cursor = db.execute(
+            "INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at,claim_intent,"
+            "owner_kind,owner_id) VALUES('current','one','retired-session',"
+            "'2025-01-01T00:00:00Z','archived work','legacy_session','retired-session')"
+        )
+        old_id = cursor.lastrowid
+        before = db.execute("SELECT * FROM work_claims WHERE id=?", (old_id,)).fetchone()
+
+    result = await TaskCoordinator(store).mutate(
+        "native-worker", action="claim", namespace="current", task_id="one", claim_intent="Work"
+    )
+
+    assert result["ok"] is True
+    assert [
+        (claim["owner_kind"], claim["owner_id"])
+        for claim in await store.active_claims("current", "one")
+    ] == [("logical_agent", "native-worker")]
+    with sqlite3.connect(store.path) as db:
+        assert db.execute("SELECT * FROM work_claims WHERE id=?", (old_id,)).fetchone() == before
+    assert len(await store.historical_claims_for_agent("retired-session")) == 1
 
 
 @pytest.mark.asyncio

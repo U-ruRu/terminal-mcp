@@ -5,7 +5,6 @@ from datetime import timedelta
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.orchestration import (
     find_scope_overlaps,
-    live_task_claims,
     parse_utc,
     public_agent_name,
     public_session_ref,
@@ -110,17 +109,16 @@ class AgentHistory:
         if self.task_store is None:
             return []
         priorities = {3: "P0", 2: "P1", 1: "P2", 0: "P3"}
-        rows = await self.task_store.claims_for_agent(agent_id, active_only=True)
+        rows = await self.task_store.historical_claims_for_agent(agent_id, active_only=True)
         result = []
         for item in rows:
-            claims = await live_task_claims(
-                self.task_store,
-                self.store,
-                item["namespace"],
-                item["task_id"],
-                idle_ttl_seconds=self.ttl_seconds,
-                max_session_seconds=self.max_session_seconds,
-            )
+            claims = [
+                claim
+                for claim in await self.task_store.claims(
+                    item["namespace"], item["task_id"], active_only=False
+                )
+                if claim["owner_kind"] == "legacy_session" and claim["released_at"] is None
+            ]
             own = next((claim for claim in claims if claim["agent_id"] == agent_id), None)
             if own is None:
                 continue

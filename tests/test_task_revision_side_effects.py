@@ -106,7 +106,6 @@ async def test_revision_race_between_preflight_and_storage_is_fenced(
 
     monkeypatch.setattr(coordinator, "_owner_error", no_owner_error)
     monkeypatch.setattr(coordinator, "_live_claims", claims)
-    monkeypatch.setattr(coordinator, "_cleanup_stale_claims", claims)
     monkeypatch.setattr(store, method, raced)
     result = await coordinator.mutate(
         "agent",

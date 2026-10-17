@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ClaimOwnerKind = Literal["legacy_session", "logical_agent"]
+ClaimOwnerKind = Literal["logical_agent"]
 PersistentSlotState = Literal["suspended", "armed", "active", "stopping", "deleting", "deleted"]
 WorkSessionState = Literal["active", "stopping", "ended", "expired", "suspended", "failed"]
 
@@ -14,14 +14,10 @@ class ClaimOwner:
     owner_id: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"legacy_session", "logical_agent"}:
+        if self.kind != "logical_agent":
             raise ValueError(f"unsupported claim owner kind: {self.kind}")
         if not self.owner_id or not self.owner_id.strip():
             raise ValueError("claim owner id is required")
-
-    @classmethod
-    def legacy_session(cls, agent_id: str) -> ClaimOwner:
-        return cls("legacy_session", agent_id)
 
     @classmethod
     def logical_agent(cls, logical_agent_id: str) -> ClaimOwner:

@@ -135,13 +135,7 @@ class TerminalService:
         )
         self.agent_views = AgentViews(self)
         self.task_coordinator = (
-            TaskCoordinator(
-                self.task_store,
-                self.agent_store,
-                metrics,
-                session_ttl_seconds=self.agent_policy.idle_ttl_seconds,
-                max_session_seconds=self.agent_policy.max_session_seconds,
-            )
+            TaskCoordinator(self.task_store, metrics=metrics)
             if self.task_store
             else None
         )

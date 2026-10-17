@@ -11,7 +11,6 @@ from terminal_mcp.core.orchestration import (
     live_task_claims,
     parse_utc,
     public_agent_name,
-    session_is_live,
     utc_now,
     utc_text,
 )
@@ -77,20 +76,9 @@ class TaskCreateResult(dict):
 class TaskCoordinator:
     """Durable task workflow with hard ownership/dependency gates and explicit evidence."""
 
-    def __init__(
-        self,
-        store,
-        agent_store=None,
-        metrics=None,
-        *,
-        session_ttl_seconds=300,
-        max_session_seconds=1500,
-    ):
+    def __init__(self, store, metrics=None):
         self.store = store
-        self.agent_store = agent_store
         self.metrics = metrics
-        self.session_ttl_seconds = session_ttl_seconds
-        self.max_session_seconds = max_session_seconds
 
     def _inc(self, name, labels=()):
         if self.metrics:
@@ -100,14 +88,7 @@ class TaskCoordinator:
                 logging.getLogger(__name__).warning("Task metric recording failed", exc_info=True)
 
     async def _live_claims(self, namespace, task_id):
-        return await live_task_claims(
-            self.store,
-            self.agent_store,
-            namespace,
-            task_id,
-            idle_ttl_seconds=self.session_ttl_seconds,
-            max_session_seconds=self.max_session_seconds,
-        )
+        return await live_task_claims(self.store, namespace, task_id)
 
     async def _dependencies(self, namespace, task_id):
         result = []
@@ -307,25 +288,6 @@ class TaskCoordinator:
                 result.append(value)
         return result
 
-    async def _cleanup_stale_claims(self, namespace, task_id):
-        active = await self.store.active_claims(namespace, task_id)
-        live = await self._live_claims(namespace, task_id)
-        live_ids = {item["id"] for item in live}
-        now = utc_text()
-        for item in active:
-            if item["id"] in live_ids:
-                continue
-            if await self.store.release_claim(namespace, task_id, item["agent_id"], now=now):
-                await self.store.add_event(
-                    namespace,
-                    task_id,
-                    "claim_released",
-                    agent_id=item["agent_id"],
-                    payload={"reason": "stale_session"},
-                    now=now,
-                )
-        return live
-
     def _external_task(self, task):
         result = dict(task)
         result["priority"] = VALUE_PRIORITY.get(int(task.get("priority", 0)), "P3")
@@ -424,25 +386,11 @@ class TaskCoordinator:
         task,
         claims,
         dependencies,
-        sessions_by_agent,
         *,
-        now=None,
         reveal_agent_ids=False,
     ):
         result = self._external_task(task)
-        current = now or utc_now()
-        if self.agent_store is not None:
-            claims = [
-                claim
-                for claim in claims
-                if claim.get("owner_kind", "legacy_session") == "logical_agent"
-                or session_is_live(
-                    sessions_by_agent.get(claim.get("owner_id") or claim["agent_id"]),
-                    now=current,
-                    idle_ttl_seconds=self.session_ttl_seconds,
-                    max_session_seconds=self.max_session_seconds,
-                )
-            ]
+        claims = [claim for claim in claims if claim.get("owner_kind") == "logical_agent"]
         views = [
             self._claim_view(
                 item,
@@ -739,12 +687,6 @@ class TaskCoordinator:
         page_limit = max(1, min(int(limit), 1000))
         required_tags = set(normalized_tags or [])
         runtime_state = await self.store.runtime_state_snapshot()
-        sessions_by_agent = {}
-        if self.agent_store is not None:
-            sessions_by_agent = {
-                session["agent_id"]: session for session in await self.agent_store.active_sessions()
-            }
-        now = utc_now()
         lane_counts = Counter()
         state_counts = Counter()
         operational_status_counts = Counter()
@@ -781,8 +723,6 @@ class TaskCoordinator:
                     row,
                     runtime_state["claims"].get((row["namespace"], row["task_id"]), []),
                     runtime_state["dependencies"].get((row["namespace"], row["task_id"]), []),
-                    sessions_by_agent,
-                    now=now,
                     reveal_agent_ids=reveal_agent_ids,
                 )
                 if (
@@ -877,16 +817,10 @@ class TaskCoordinator:
     ):
         if not namespace:
             return {"ok": False, "error": "task.namespace: required", "warnings": []}
-        if self.agent_store and _claim_owner is None:
-            session = await self.agent_store.get_session(agent_id)
-            if not session or session["state"] != "active":
-                return {
-                    "ok": False,
-                    "error": "task.agent_id: active session required",
-                    "warnings": [],
-                }
-        if _claim_owner is not None:
-            kwargs["_claim_owner"] = _claim_owner
+        owner = _claim_owner if _claim_owner is not None else ClaimOwner.logical_agent(agent_id)
+        if owner.kind != "logical_agent" or owner.owner_id != agent_id:
+            return {"ok": False, "error": "task.agent_id: logical owner mismatch", "warnings": []}
+        kwargs["_claim_owner"] = owner
         handler = getattr(self, f"_action_{action}", None) if action in ACTIONS else None
         if handler is None:
             return {
@@ -1163,9 +1097,8 @@ class TaskCoordinator:
                 missing=kwargs.get("claim_intent") is None,
             )
         warnings = []
-        live_claims = await self._cleanup_stale_claims(namespace, task_id)
-        # Stale-lease cleanup may advance the revision. The admission policy and
-        # optimistic write guard must refer to the same refreshed record.
+        live_claims = await self._live_claims(namespace, task_id)
+        # The admission policy and optimistic write guard use the same refreshed record.
         current = await self._required(namespace, task_id)
         if not current:
             return self._missing()
@@ -1221,16 +1154,13 @@ class TaskCoordinator:
             return dependency_failure
         now = utc_text()
         try:
-            owner = kwargs.get("_claim_owner")
-            claim_method = self.store.claim_owner if owner is not None else self.store.claim
-            claim_identity = owner if owner is not None else agent_id
             lease_kwargs = {}
-            if owner is not None and kwargs.get("_claim_lease") is not None:
+            if kwargs.get("_claim_lease") is not None:
                 lease_kwargs["lease"] = kwargs["_claim_lease"]
-            committed = await claim_method(
+            committed = await self.store.claim_owner(
                 namespace,
                 task_id,
-                claim_identity,
+                kwargs["_claim_owner"],
                 claim_intent=claim_intent,
                 exclusive=not bool(current.get("cooperative")),
                 event_payload={"warnings": [item["code"] for item in warnings]},
@@ -1287,15 +1217,12 @@ class TaskCoordinator:
         if not own and claims:
             # An already-released owner's retry is idempotent even while
             # cooperative co-owners retain their own live claims.
-            owner = kwargs.get("_claim_owner")
+            owner = kwargs["_claim_owner"]
             history = await self.store.claims(namespace, task_id, active_only=False)
             previously_released = any(
                 claim.get("released_at") is not None
-                and (
-                    claim["owner_kind"] == owner.kind and claim["owner_id"] == owner.owner_id
-                    if owner is not None
-                    else claim["agent_id"] == agent_id
-                )
+                and claim["owner_kind"] == owner.kind
+                and claim["owner_id"] == owner.owner_id
                 for claim in history
             )
             if previously_released:
@@ -1328,29 +1255,16 @@ class TaskCoordinator:
                 max_length=4000,
                 missing=kwargs.get("release_reason") is None,
             )
-        owner = kwargs.get("_claim_owner")
-        if owner is None:
-            committed = await self.store.release_claim_mutation(
-                namespace,
-                task_id,
-                agent_id,
-                reason=reason,
-                now=utc_text(),
-                expected_revision=self._effective_revision(kwargs, current),
-                expected_claim_id=own["id"],
-                capture_task=True,
-            )
-        else:
-            committed = await self.store.release_owner_claim_mutation(
-                namespace,
-                task_id,
-                owner,
-                reason=reason,
-                now=utc_text(),
-                expected_revision=self._effective_revision(kwargs, current),
-                expected_claim_id=own["id"],
-                capture_task=True,
-            )
+        committed = await self.store.release_owner_claim_mutation(
+            namespace,
+            task_id,
+            kwargs["_claim_owner"],
+            reason=reason,
+            now=utc_text(),
+            expected_revision=self._effective_revision(kwargs, current),
+            expected_claim_id=own["id"],
+            capture_task=True,
+        )
         return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_checkpoint(self, agent_id, namespace, task_id, **kwargs):
@@ -1514,14 +1428,12 @@ class TaskCoordinator:
                 "error": "invalid_state",
                 "warnings": [],
             }
-        owner = kwargs.get("_claim_owner")
-        acting_id = owner.owner_id if owner is not None else agent_id
         try:
             committed = await self.store.set_workflow_state(
                 namespace,
                 task_id,
                 state,
-                agent_id=acting_id,
+                agent_id=kwargs["_claim_owner"].owner_id,
                 blocker_reason=kwargs.get("blocker_reason"),
                 result=kwargs.get("result"),
             )
@@ -1980,22 +1892,6 @@ class TaskCoordinator:
     async def health(self):
         stats = await self.store.stats()
         stale_claims = len(await self.store.stale_leased_claims())
-        now = utc_now()
-        for claim in await self.store.all_active_claims():
-            if claim.get("owner_kind", "legacy_session") == "logical_agent":
-                continue
-            session = (
-                await self.agent_store.get_session(claim.get("owner_id") or claim["agent_id"])
-                if self.agent_store
-                else None
-            )
-            if not session_is_live(
-                session,
-                now=now,
-                idle_ttl_seconds=self.session_ttl_seconds,
-                max_session_seconds=self.max_session_seconds,
-            ):
-                stale_claims += 1
         unreleased_claims = stats["active_claims"]
         live_claims = max(0, unreleased_claims - stale_claims)
         stats["unreleased_claims"] = unreleased_claims
@@ -2087,8 +1983,6 @@ class TaskCoordinator:
                 task,
                 task.claims,
                 task.dependencies,
-                task.sessions_by_agent,
-                now=task.observed_at,
             )
             if include_claim_snapshot:
                 # Project the claim from the exact write-transaction snapshot;

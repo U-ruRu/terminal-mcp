@@ -41,6 +41,25 @@ async def test_current_recovery_returns_a_bounded_page(query_plane):
 
 
 @pytest.mark.asyncio
+async def test_current_claim_recovery_excludes_archived_session_owners(query_plane):
+    from terminal_mcp.storage.tasks import TaskStore
+
+    await TaskStore(query_plane.runtime_db_path).create_task("source", "one", "Task")
+    with sqlite3.connect(query_plane.runtime_db_path) as db:
+        db.executemany(
+            "INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at,owner_kind,owner_id) "
+            "VALUES('source','one',?,'2026-01-01T00:00:00Z',?,?)",
+            [("old", "legacy_session", "old"), ("current", "logical_agent", "current")],
+        )
+
+    page = await query_plane.recovery_page(
+        scope="work_claims", generation="gen-a", barrier=3, high_water=3, limit=10
+    )
+
+    assert [item["payload"]["owner_id"] for item in page["entities"]] == ["current"]
+
+
+@pytest.mark.asyncio
 async def test_query_search_filters_current_rows(query_plane):
     page = await query_plane.query("contexts", q="second", include_count=True)
 

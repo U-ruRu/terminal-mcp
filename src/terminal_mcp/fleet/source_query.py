@@ -113,7 +113,8 @@ CURRENT_SCOPES = {
         "work_claim",
         """
         SELECT id AS k1,namespace,task_id,agent_id,claimed_at,released_at,claim_intent,
-               owner_kind,owner_id FROM work_claims WHERE released_at IS NULL""",
+               owner_kind,owner_id FROM work_claims
+        WHERE owner_kind='logical_agent' AND released_at IS NULL""",
     ),
     "tasks": CurrentScope(
         "task",

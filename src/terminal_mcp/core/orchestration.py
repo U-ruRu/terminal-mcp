@@ -48,80 +48,14 @@ def parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def session_expiry_reason(
-    session: dict | None,
-    *,
-    now: datetime | None = None,
-    idle_ttl_seconds: float,
-    max_session_seconds: float,
-) -> str | None:
-    """Return the lifecycle expiry reason for an otherwise-active Agent Session."""
-    if not session or session.get("state") != "active":
-        return None
-    current = now or utc_now()
-    age = (current - parse_utc(session["registered_at"])).total_seconds()
-    idle = (current - parse_utc(session["last_activity_at"])).total_seconds()
-    global_expires_at = session.get("global_expires_at")
-    if global_expires_at:
-        if current >= parse_utc(global_expires_at):
-            return "max_session_duration"
-    elif age >= max_session_seconds:
-        return "max_session_duration"
-    if idle >= idle_ttl_seconds:
-        return "idle_timeout"
-    return None
-
-
-def session_is_live(
-    session: dict | None,
-    *,
-    now: datetime | None = None,
-    idle_ttl_seconds: float,
-    max_session_seconds: float,
-) -> bool:
-    """Canonical predicate for whether an Agent Session may project live ownership."""
-    return bool(
-        session
-        and session.get("state") == "active"
-        and session_expiry_reason(
-            session,
-            now=now,
-            idle_ttl_seconds=idle_ttl_seconds,
-            max_session_seconds=max_session_seconds,
-        )
-        is None
-    )
-
-
 async def live_task_claims(
     task_store,
-    agent_store,
     namespace: str,
     task_id: str,
-    *,
-    idle_ttl_seconds: float,
-    max_session_seconds: float,
-    now: datetime | None = None,
 ) -> list[dict]:
-    """Project persisted claims through current Agent Session liveness, preserving claim order."""
+    """Return current logical ownership in the store's durable claim order."""
     claims = await task_store.active_claims(namespace, task_id)
-    if agent_store is None:
-        return claims
-    current = now or utc_now()
-    live = []
-    for claim in claims:
-        if claim.get("owner_kind", "legacy_session") == "logical_agent":
-            live.append(claim)
-            continue
-        session = await agent_store.get_session(claim.get("owner_id") or claim["agent_id"])
-        if session_is_live(
-            session,
-            now=current,
-            idle_ttl_seconds=idle_ttl_seconds,
-            max_session_seconds=max_session_seconds,
-        ):
-            live.append(claim)
-    return live
+    return [claim for claim in claims if claim.get("owner_kind") == "logical_agent"]
 
 
 def short_time(value: str | None) -> str:

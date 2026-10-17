@@ -8,7 +8,7 @@ from typing import Any
 
 import aiosqlite
 
-from terminal_mcp.core.orchestration import utc_now, utc_text
+from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
@@ -79,13 +79,10 @@ class TaskCommittedRecord(dict):
         task: dict,
         claims: list[dict],
         dependencies: list[dict],
-        sessions_by_agent: dict | None = None,
     ):
         super().__init__(task)
         self.claims = claims
         self.dependencies = dependencies
-        self.sessions_by_agent = sessions_by_agent or {}
-        self.observed_at = utc_now()
 
 
 class TaskStore:
@@ -122,7 +119,7 @@ class TaskStore:
         rows = await (
             await db.execute(
                 "SELECT id FROM work_claims WHERE namespace=? AND task_id=? "
-                "AND released_at IS NULL ORDER BY claimed_at,id",
+                "AND owner_kind='logical_agent' AND released_at IS NULL ORDER BY claimed_at,id",
                 (namespace, task_id),
             )
         ).fetchall()
@@ -373,7 +370,6 @@ class TaskStore:
                                 receipt["task"],
                                 receipt.get("claims", []),
                                 receipt.get("dependencies", []),
-                                receipt.get("sessions_by_agent", {}),
                             )
                         else:
                             # Compatibility with early receipt prototypes.
@@ -508,7 +504,6 @@ class TaskStore:
                                     "task": dict(committed),
                                     "claims": committed.claims,
                                     "dependencies": committed.dependencies,
-                                    "sessions_by_agent": committed.sessions_by_agent,
                                 }
                             ),
                             now,
@@ -538,7 +533,8 @@ class TaskStore:
         rows = await (
             await db.execute(
                 "SELECT id,agent_id,owner_kind,owner_id,claimed_at,released_at,claim_intent "
-                "FROM work_claims WHERE namespace=? AND task_id=? AND released_at IS NULL "
+                "FROM work_claims WHERE namespace=? AND task_id=? "
+                "AND owner_kind='logical_agent' AND released_at IS NULL "
                 "ORDER BY claimed_at,id",
                 (namespace, task_id),
             )
@@ -550,22 +546,6 @@ class TaskStore:
                 "ON w.namespace=d.dependency_namespace AND w.task_id=d.dependency_task_id "
                 "WHERE d.namespace=? AND d.task_id=? "
                 "ORDER BY d.dependency_namespace,d.dependency_task_id",
-                (namespace, task_id),
-            )
-        ).fetchall()
-        session_fields = (
-            "agent_id",
-            "registered_at",
-            "last_activity_at",
-            "state",
-            "global_expires_at",
-        )
-        sessions = await (
-            await db.execute(
-                "SELECT DISTINCT s.agent_id,s.registered_at,s.last_activity_at,s.state,"
-                "s.global_expires_at FROM agent_sessions s JOIN work_claims c "
-                "ON s.agent_id=c.owner_id WHERE c.namespace=? AND c.task_id=? "
-                "AND c.released_at IS NULL AND c.owner_kind='legacy_session'",
                 (namespace, task_id),
             )
         ).fetchall()
@@ -582,7 +562,6 @@ class TaskStore:
                 }
                 for row in dependencies
             ],
-            {row[0]: dict(zip(session_fields, row, strict=True)) for row in sessions},
         )
 
     async def get_create_receipt(
@@ -610,7 +589,6 @@ class TaskStore:
                     receipt["task"],
                     receipt.get("claims", []),
                     receipt.get("dependencies", []),
-                    receipt.get("sessions_by_agent", {}),
                 )
             return await self._committed_record_tx(db, namespace, receipt["task_id"])
 
@@ -693,7 +671,8 @@ class TaskStore:
             claim_rows = await (
                 await db.execute(
                     "SELECT id,namespace,task_id,agent_id,owner_kind,owner_id,claimed_at,claim_intent "
-                    "FROM work_claims WHERE released_at IS NULL ORDER BY claimed_at,id"
+                    "FROM work_claims WHERE owner_kind='logical_agent' "
+                    "AND released_at IS NULL ORDER BY claimed_at,id"
                 )
             ).fetchall()
             dependency_rows = await (
@@ -1239,14 +1218,16 @@ class TaskStore:
                     claimants = await (
                         await db.execute(
                             "SELECT agent_id FROM work_claims "
-                            "WHERE namespace=? AND task_id=? AND released_at IS NULL ORDER BY id",
+                            "WHERE namespace=? AND task_id=? AND owner_kind='logical_agent' "
+                            "AND released_at IS NULL ORDER BY id",
                             (namespace, task_id),
                         )
                     ).fetchall()
                     if claimants:
                         await db.execute(
                             "UPDATE work_claims SET released_at=? "
-                            "WHERE namespace=? AND task_id=? AND released_at IS NULL",
+                            "WHERE namespace=? AND task_id=? AND owner_kind='logical_agent' "
+                            "AND released_at IS NULL",
                             (now, namespace, task_id),
                         )
                         await db.executemany(
@@ -1297,7 +1278,7 @@ class TaskStore:
         return result
 
     async def claims(self, namespace: str, task_id: str, *, active_only: bool = True):
-        clause = " AND released_at IS NULL" if active_only else ""
+        clause = " AND owner_kind='logical_agent' AND released_at IS NULL" if active_only else ""
         async with self._connect() as db:
             rows = await (
                 await db.execute(
@@ -1322,10 +1303,23 @@ class TaskStore:
             ).fetchall()
         return [self._claim_record(row, include_task=True) for row in rows]
 
-    async def claims_for_agent(self, agent_id: str, *, active_only: bool = True):
-        return await self.claims_for_owner(
-            ClaimOwner.legacy_session(agent_id), active_only=active_only
-        )
+    async def historical_claims_for_agent(self, agent_id: str, *, active_only: bool = False):
+        """Read archived session references without constructing a current claim owner."""
+        clause = " AND c.released_at IS NULL" if active_only else ""
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT c.id,c.agent_id,c.owner_kind,c.owner_id,c.claimed_at,c.released_at,"
+                    "c.claim_intent,c.namespace,c.task_id,w.lane,w.priority,w.state,w.cooperative,"
+                    "w.isolation_hint FROM work_claims c JOIN work_items w "
+                    "ON w.namespace=c.namespace AND w.task_id=c.task_id "
+                    "WHERE c.owner_kind='legacy_session' AND c.owner_id=?"
+                    + clause
+                    + " ORDER BY c.claimed_at,c.id",
+                    (agent_id,),
+                )
+            ).fetchall()
+        return [self._claim_record(row, include_task=True) for row in rows]
 
     async def fence_claim_session(
         self,
@@ -1455,7 +1449,8 @@ class TaskStore:
                 (
                     await (
                         await db.execute(
-                            "SELECT COUNT(*) FROM work_claims WHERE released_at IS NULL"
+                            "SELECT COUNT(*) FROM work_claims WHERE owner_kind='logical_agent' "
+                            "AND released_at IS NULL"
                         )
                     ).fetchone()
                 )[0]
@@ -1472,33 +1467,6 @@ class TaskStore:
 
     async def active_claims(self, namespace: str, task_id: str):
         return await self.claims(namespace, task_id, active_only=True)
-
-    async def claim(
-        self,
-        namespace: str,
-        task_id: str,
-        agent_id: str,
-        *,
-        claim_intent: str = "",
-        exclusive: bool = False,
-        event_payload: Any = None,
-        dependency_override: Any = None,
-        capture_task: bool = False,
-        now: str | None = None,
-        expected_revision: int | None = None,
-    ):
-        return await self.claim_owner(
-            namespace,
-            task_id,
-            ClaimOwner.legacy_session(agent_id),
-            claim_intent=claim_intent,
-            exclusive=exclusive,
-            event_payload=event_payload,
-            dependency_override=dependency_override,
-            now=now,
-            capture_task=capture_task,
-            expected_revision=expected_revision,
-        )
 
     async def claim_owner(
         self,
@@ -1585,7 +1553,9 @@ class TaskStore:
                 if exclusive or not bool(task[0]):
                     conflicts = await (
                         await db.execute(
-                            "SELECT owner_id FROM work_claims WHERE namespace=? AND task_id=? AND released_at IS NULL AND NOT (owner_kind=? AND owner_id=?) ORDER BY claimed_at,id",
+                            "SELECT owner_id FROM work_claims WHERE namespace=? AND task_id=? "
+                            "AND owner_kind='logical_agent' AND released_at IS NULL "
+                            "AND NOT (owner_kind=? AND owner_id=?) ORDER BY claimed_at,id",
                             (namespace, task_id, owner.kind, owner.owner_id),
                         )
                     ).fetchall()
@@ -1654,13 +1624,6 @@ class TaskStore:
                 await db.rollback()
                 raise
 
-    async def release_claim(
-        self, namespace: str, task_id: str, agent_id: str, *, now: str | None = None
-    ) -> bool:
-        return await self.release_owner_claim(
-            namespace, task_id, ClaimOwner.legacy_session(agent_id), now=now
-        )
-
     async def release_owner_claim(
         self, namespace: str, task_id: str, owner: ClaimOwner, *, now: str | None = None
     ) -> bool:
@@ -1672,29 +1635,6 @@ class TaskStore:
             )
             await db.commit()
         return cur.rowcount > 0
-
-    async def release_claim_mutation(
-        self,
-        namespace: str,
-        task_id: str,
-        agent_id: str,
-        *,
-        reason: str,
-        capture_task: bool = False,
-        now: str | None = None,
-        expected_revision: int | None = None,
-        expected_claim_id: int | None = None,
-    ) -> bool | TaskCommittedRecord:
-        return await self.release_owner_claim_mutation(
-            namespace,
-            task_id,
-            ClaimOwner.legacy_session(agent_id),
-            reason=reason,
-            now=now,
-            capture_task=capture_task,
-            expected_revision=expected_revision,
-            expected_claim_id=expected_claim_id,
-        )
 
     async def release_owner_claim_mutation(
         self,
@@ -1820,19 +1760,6 @@ class TaskStore:
                 )
         return {"ok": not errors, "released_count": released_count, "errors": errors}
 
-    async def release_claims(
-        self,
-        *,
-        agent_id: str | None = None,
-        namespace: str | None = None,
-        task_id: str | None = None,
-        now: str | None = None,
-    ) -> int:
-        owner = ClaimOwner.legacy_session(agent_id) if agent_id is not None else None
-        return await self.release_owner_claims(
-            owner=owner, namespace=namespace, task_id=task_id, now=now
-        )
-
     async def release_owner_claims(
         self,
         *,
@@ -1841,7 +1768,7 @@ class TaskStore:
         task_id: str | None = None,
         now: str | None = None,
     ) -> int:
-        where = ["released_at IS NULL"]
+        where = ["owner_kind='logical_agent'", "released_at IS NULL"]
         params: list[Any] = []
         if owner is not None:
             where.extend(["owner_kind=?", "owner_id=?"])
