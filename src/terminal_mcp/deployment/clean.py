@@ -115,15 +115,35 @@ class CleanState:
         ):
             raise ValueError("existing managed state requires update or explicit clean-deploy")
 
-    def apply(self, *, protected: tuple[Path, ...] = ()) -> None:
+    def apply(self, *, protected: tuple[Path, ...] = (), retain: tuple[Path, ...] = ()) -> None:
         self.validate(protected=protected)
-        # Validate everything before the first deletion, then keep the config
-        # inventory until all external state and backups have been removed.
+        for path in retain:
+            _checked(path)
+            if any(path == p or path.is_relative_to(p) for p in protected):
+                raise ValueError("retained auth file overlaps a source or release")
+
+        def remove_unretained(path: Path) -> None:
+            if path in retain:
+                return
+            if not any(p.is_relative_to(path) for p in retain):
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
+                return
+            if path.is_dir():
+                for child in path.iterdir():
+                    remove_unretained(child)
+                if not any(p.exists() and p.is_relative_to(path) for p in retain):
+                    path.rmdir()
+
+        # Retain in place: no temporary unprotected secret copies, and an
+        # interrupted reset still has the original auth store and environment.
         for path in self.files:
-            path.unlink(missing_ok=True)
+            remove_unretained(path)
         for path in dict.fromkeys((*self.directories, self.config_directory)):
             if path.exists():
-                shutil.rmtree(path)
+                remove_unretained(path)
 
 
 def inventory(
@@ -183,6 +203,7 @@ def main() -> None:
     parser.add_argument("--extra-directory", type=Path, action="append", default=[])
     parser.add_argument("--protect", type=Path, action="append", default=[])
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--preserve-auth", action="store_true")
     parser.add_argument("--require-empty", action="store_true")
     args = parser.parse_args()
     state = inventory(
@@ -198,7 +219,13 @@ def main() -> None:
     if args.require_empty:
         state.require_empty()
     if args.apply:
-        state.apply(protected=protected)
+        retained = ()
+        if args.preserve_auth:
+            from terminal_mcp.deployment.clean_auth import paths, preflight
+
+            preflight(args.config, args.data)
+            retained = paths(args.config, args.data)[-1]
+        state.apply(protected=protected, retain=retained)
     else:
         print(
             json.dumps(

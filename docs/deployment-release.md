@@ -152,26 +152,63 @@ specific approval, real target preflight and confirmed compatibility evidence.
 ## Fresh installation and explicit state reset
 
 `bash deploy/install.sh install` requires an empty managed installation state.
-An existing environment, database, identity sidecar or retained backup must be
-handled with the appropriate operation:
+Use `update` or `release apply` to preserve the whole installation, or explicitly
+choose a clean deployment.
 
-- `update` and `release apply` preserve the current installation and migrate its data.
-- `clean-deploy` explicitly discards the previous installation's managed state.
+**Default clean deployment:**
 
-A clean deployment first builds and validates the candidate. It then stops the API
-and any installed local executor, removes managed runtime/auth/control databases,
-caches, pairing, registrations, slot replicas, configuration and local secrets,
-as well as backups in the configured backup directory and earlier release-operation
-snapshots. Custom state paths are read from the installation environment and runtime
-configuration. The configuration inventory is removed last to make interrupted
-cleanup repeatable. Linked paths and overlap with the staged release/source are
-rejected before deletion. Unrelated filesystem data lies outside this inventory.
+    bash deploy/install.sh clean-deploy
 
-`clean-deploy` uses the same installation parameters as `install`, including a
-new administrator password and public origin. It creates new credentials and has
-no automatic rollback target pointing at the old installation. Hot-update recovery
-continues to preserve the current security state. A deployment requires its own
-authorization; publishing a canonical source commit performs no deployment.
+After staging and validating the new release, this clears operational runtime
+databases, cache, backups, Mesh state and old runtime configuration. It retains
+the OAuth authorization database (including WAL, SHM, journal, access key and
+identity anchor), ChatGPT client registrations and grants, refresh tokens,
+signing/session secrets, administrator credentials and OAuth username/password
+files. Existing Console device pairing also survives by default. No new pairing
+URL is issued. Existing administrative password and trust domain are reused:
+attempted implicit authentication or issuer/public-origin rotation is rejected.
+
+**Explicit full authorization reset:**
+
+    TERMINAL_MCP_ADMIN_PASSWORD=... TERMINAL_MCP_OAUTH_USERNAME=... TERMINAL_MCP_OAUTH_PASSWORD=... bash deploy/install.sh clean-deploy --reset-auth
+
+The old auth database, sidecars, OAuth credentials, clients and tokens are
+removed; fresh secrets and credential files are created. Old tokens stop
+working. New admin and OAuth username/password inputs are mandatory before
+any destructive action.
+
+**Explicit device pairing reset:**
+
+    bash deploy/install.sh clean-deploy --reset-pairing
+
+This revokes paired-device clients and refresh tokens and removes device and
+pending-pairing records while preserving ChatGPT OAuth clients. After the
+new release is ready, the installer creates a one-time Console pairing URL
+valid for **10,800 seconds (three hours)**. It prints the link to the
+operator and saves it to `/etc/terminal-mcp/pairing-url.txt` (or the configured
+environment directory), with root-only `0600` access. An authorized server
+agent can read this file to give the link to the user. Treat the link as a
+bearer secret: anyone holding it can use it once before expiry. An expired or
+consumed link must be reissued explicitly. Both `--reset-auth` and
+`--reset-pairing` can be used together; the pairing URL is created **only**
+when `--reset-pairing` is specified.
+
+Both reset switches are exclusive to `clean-deploy`. For a new installation
+without a preexisting auth database, supply `TERMINAL_MCP_ADMIN_PASSWORD`,
+`TERMINAL_MCP_OAUTH_USERNAME` and `TERMINAL_MCP_OAUTH_PASSWORD`.
+Old auth secrets/credential paths are read from `terminal-mcp.env` and any
+configured `runtime.env`, including custom locations. Retained files remain
+in place with root-only access; only the allowlisted authorization values
+are transferred to the new environment. Runtime, Mesh and slot configuration
+are reset. Symlinks, malformed or incomplete auth state, mismatched identity
+lineage, and unauthorized trust-domain changes fail before state deletion.
+
+**Recovery:** There is no automatic old-release rollback after clean cleanup.
+If interrupted, keep the retained environment and protected auth SQLite and
+sidecars intact; rerun ordinary `clean-deploy` after correcting the reported
+failure. A partially completed pairing reset may be rerun with
+`--reset-pairing` to issue a new link. Never use `--reset-auth` as a recovery
+shortcut; it irreversibly invalidates prior OAuth clients and tokens.
 
 ### Standalone Console ingress acceptance
 

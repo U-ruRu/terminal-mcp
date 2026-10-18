@@ -36,6 +36,8 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path, action):
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "TERMINAL_MCP_ADMIN_PASSWORD": "isolated-test-only",
+        "TERMINAL_MCP_OAUTH_USERNAME": "test-owner",
+        "TERMINAL_MCP_OAUTH_PASSWORD": "isolated-oauth-test-only",
         "TERMINAL_MCP_INSTALL_ROOT": str(root),
         "TERMINAL_MCP_ENV_DIR": str(env_dir),
         "TERMINAL_MCP_DATA_DIR": str(data_dir),
@@ -244,3 +246,24 @@ def test_doctor_rejects_public_mesh_missing_when_local_mesh_is_enabled(tmp_path)
     )
     assert result.returncode != 0
     assert "Public Mesh Console route check failed" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "action,flag",
+    [
+        ("update", "--reset-auth"),
+        ("install", "--reset-pairing"),
+        ("doctor", "--reset-auth"),
+        ("ingress", "--reset-pairing"),
+    ],
+)
+def test_reset_switches_rejected_outside_clean_deploy(action, flag):
+    result = subprocess.run(
+        ["bash", "deploy/install.sh", action, flag],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "valid only with clean-deploy" in result.stderr

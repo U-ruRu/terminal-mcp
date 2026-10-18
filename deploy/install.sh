@@ -14,13 +14,22 @@ fi
 CMD=${1:-install}
 [ $# -eq 0 ] || shift
 ALLOW_DOWNGRADE=false
+RESET_AUTH=false
+RESET_PAIRING=false
+AUTH_STATE=fresh
 while [ $# -gt 0 ]; do
   case "$1" in
     --allow-downgrade) ALLOW_DOWNGRADE=true ;;
-    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|clean-deploy|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
+    --reset-auth) RESET_AUTH=true ;;
+    --reset-pairing) RESET_PAIRING=true ;;
+    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|clean-deploy [--reset-auth] [--reset-pairing]|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
   esac
   shift
 done
+if { [ "$RESET_AUTH" = true ] || [ "$RESET_PAIRING" = true ]; } && [ "$CMD" != clean-deploy ]; then
+  echo '--reset-auth and --reset-pairing are valid only with clean-deploy' >&2
+  exit 2
+fi
 if [ "$ALLOW_DOWNGRADE" = true ] && [ "$CMD" != update ]; then
   echo '--allow-downgrade is valid only with update' >&2
   exit 2
@@ -58,10 +67,19 @@ SQLITE_SOURCE_ID=3530400
 SQLITE_SOURCE_URL=https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz
 SQLITE_SOURCE_SHA3_256=454e45f61c6bd75b7420e7190732dea03ce6639c63ada47bbc592f67fc340338
 [ "$(id -u)" -eq 0 ] || { echo 'Run as root'; exit 1; }
+auth_clean(){
+  PYTHONPATH="$SOURCE/src" PYTHONDONTWRITEBYTECODE=1 python3 -m terminal_mcp.deployment.clean_auth "$1" --config "$ENV_DIR" --data "$DATA" "${@:2}"
+}
 write_env(){
-  [ -n "${TERMINAL_MCP_ADMIN_PASSWORD:-}" ] || { echo 'Set TERMINAL_MCP_ADMIN_PASSWORD'; exit 1; }
+  if [ "$AUTH_STATE" != existing ]; then
+    [ -n "${TERMINAL_MCP_ADMIN_PASSWORD:-}" ] || { echo 'Set TERMINAL_MCP_ADMIN_PASSWORD' >&2; return 1; }
+  fi
   mkdir -p "$ENV_DIR"
-  cat >"$ENV_FILE" <<ENV
+  local output="$ENV_FILE"
+  if [ "$CMD" = clean-deploy ] && [ "$RESET_AUTH" = false ] && [ "$AUTH_STATE" = existing ]; then
+    output=$(mktemp "$ENV_DIR/.terminal-mcp-env.XXXXXXXX")
+  fi
+  cat >"$output" <<ENV
 TERMINAL_MCP_HOST="127.0.0.1"
 TERMINAL_MCP_PORT="8080"
 TERMINAL_MCP_PUBLIC_BASE_URL="${TERMINAL_MCP_PUBLIC_BASE_URL:-https://server-a.example.invalid}"
@@ -81,9 +99,11 @@ TERMINAL_MCP_HEALTH_COMMAND=""
 TERMINAL_MCP_MCP_AUTH_MODE="oauth"
 TERMINAL_MCP_ACTIONS_AUTH_MODE="bearer"
 TERMINAL_MCP_ADMIN_USERNAME="${TERMINAL_MCP_ADMIN_USERNAME:-operator}"
-TERMINAL_MCP_ADMIN_PASSWORD="${TERMINAL_MCP_ADMIN_PASSWORD}"
+TERMINAL_MCP_ADMIN_PASSWORD="${TERMINAL_MCP_ADMIN_PASSWORD:-}"
 TERMINAL_MCP_ADMIN_SESSION_SECRET="$(openssl rand -hex 32)"
 TERMINAL_MCP_OAUTH_SIGNING_SECRET="$(openssl rand -hex 32)"
+TERMINAL_MCP_OAUTH_USERNAME_FILE="${TERMINAL_MCP_OAUTH_USERNAME_FILE:-$ENV_DIR/credentials/oauth-username}"
+TERMINAL_MCP_OAUTH_PASSWORD_FILE="${TERMINAL_MCP_OAUTH_PASSWORD_FILE:-$ENV_DIR/credentials/oauth-password}"
 TERMINAL_MCP_OAUTH_REQUIRED_SCOPES="${TERMINAL_MCP_OAUTH_REQUIRED_SCOPES:-terminal:read terminal:execute}"
 TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"
 TERMINAL_MCP_BEARER_CREDENTIALS_JSON="[]"
@@ -96,7 +116,14 @@ TERMINAL_MCP_MAX_ACTIVE_AGENTS="${TERMINAL_MCP_MAX_ACTIVE_AGENTS:-8}"
 TERMINAL_MCP_QUEUE_WORKERS="${TERMINAL_MCP_QUEUE_WORKERS:-4}"
 TERMINAL_MCP_QUEUE_RECONCILE_SEC="${TERMINAL_MCP_QUEUE_RECONCILE_SEC:-1.0}"
 ENV
-  chmod 600 "$ENV_FILE"
+  chmod 600 "$output"
+  if [ "$output" != "$ENV_FILE" ]; then
+    if ! auth_clean merge-env --fresh-env "$output"; then
+      rm -f -- "$output"
+      return 1
+    fi
+    mv -f -- "$output" "$ENV_FILE"
+  fi
 }
 ensure_console_origins(){
   python3 - "$ENV_FILE" "$CANONICAL_CONSOLE_ORIGINS" <<'PYORIGINS'
@@ -863,27 +890,66 @@ clean_state(){
     --backups "$BACKUPS" --extra-directory "${UNIT_FILE}.d" --protect "$SOURCE" "$@"
 }
 clean_deploy(){
-  [ -n "${TERMINAL_MCP_ADMIN_PASSWORD:-}" ] || { echo 'Set TERMINAL_MCP_ADMIN_PASSWORD' >&2; return 1; }
+  local keep_flag=() previous_runtime='' pairing_url='' username_file password_file
   [ ! -e "$ROOT/current" ] || [ -L "$ROOT/current" ] || { echo 'Current release must be a symlink' >&2; return 1; }
   clean_state >/dev/null
-  # Build and validate the new binary before stopping or deleting the old state.
+  if [ "$RESET_AUTH" = false ]; then
+    AUTH_STATE=$(auth_clean preflight) || return 1
+    keep_flag=(--preserve-auth)
+    if [ "$AUTH_STATE" = existing ]; then
+      previous_runtime=$(auth_clean runtime-path) || return 1
+    fi
+  fi
+  if [ "$RESET_AUTH" = true ] || [ "$AUTH_STATE" = fresh ]; then
+    [ -n "${TERMINAL_MCP_ADMIN_PASSWORD:-}" ] || { echo 'Set TERMINAL_MCP_ADMIN_PASSWORD' >&2; return 1; }
+    [ -n "${TERMINAL_MCP_OAUTH_USERNAME:-}" ] && [ -n "${TERMINAL_MCP_OAUTH_PASSWORD:-}" ] || {
+      echo 'Supply TERMINAL_MCP_OAUTH_USERNAME and TERMINAL_MCP_OAUTH_PASSWORD before resetting auth' >&2
+      return 1
+    }
+  fi
+  if [ "$RESET_AUTH" = true ] || [ "$AUTH_STATE" = fresh ]; then
+    username_file="${TERMINAL_MCP_OAUTH_USERNAME_FILE:-$ENV_DIR/credentials/oauth-username}"
+    password_file="${TERMINAL_MCP_OAUTH_PASSWORD_FILE:-$ENV_DIR/credentials/oauth-password}"
+    auth_clean check-bootstrap --username-file "$username_file" --password-file "$password_file" --protect "$SOURCE" --protect "$ROOT/releases"
+  fi
   stage
+  if [ "$AUTH_STATE" = existing ]; then
+    local auth_path main_path
+    auth_path=$(auth_clean auth-path)
+    main_path=$(auth_clean main-path)
+    runtime_python "$STAGED_RELEASE" -c 'import sys; from pathlib import Path; from terminal_mcp.auth.identity_migration import assert_identity_isolated; assert_identity_isolated(Path(sys.argv[1]), Path(sys.argv[2]))' "$main_path" "$auth_path"
+  fi
   clean_state --protect "$STAGED_RELEASE" >/dev/null
   if $SYSTEMCTL cat terminal-mcp >/dev/null 2>&1; then $SYSTEMCTL stop terminal-mcp; fi
   if $SYSTEMCTL cat terminal-mcp-executor >/dev/null 2>&1; then
     $SYSTEMCTL stop terminal-mcp-executor
     $SYSTEMCTL disable terminal-mcp-executor
   fi
-  clean_state --protect "$STAGED_RELEASE" --apply
-  # A clean deployment has no rollback target and never restores old credentials.
+  clean_state --protect "$STAGED_RELEASE" "${keep_flag[@]}" --apply
+  if [ "$RESET_PAIRING" = true ] && [ "$RESET_AUTH" = false ] && [ "$AUTH_STATE" = existing ]; then
+    auth_clean reset-pairing
+  fi
   rm -f -- "$ROOT/current"
   install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
   write_env
+  if [ "$RESET_AUTH" = true ] || [ "$AUTH_STATE" = fresh ]; then
+    username_file="${TERMINAL_MCP_OAUTH_USERNAME_FILE:-$ENV_DIR/credentials/oauth-username}"
+    password_file="${TERMINAL_MCP_OAUTH_PASSWORD_FILE:-$ENV_DIR/credentials/oauth-password}"
+    auth_clean bootstrap --username-file "$username_file" --password-file "$password_file"
+  fi
+  if [ -n "$previous_runtime" ] && [ "$previous_runtime" != "$ENV_FILE" ]; then
+    PYTHONPATH="$SOURCE/src" python3 -c 'from pathlib import Path; from terminal_mcp.deployment.clean import _checked; import sys; p=Path(sys.argv[1]); _checked(p); p.unlink(missing_ok=True)' "$previous_runtime"
+  fi
   ensure_env_defaults
   write_unit
   configure_console_caddy
   activate "$STAGED_RELEASE"
   $SYSTEMCTL enable terminal-mcp
+  if [ "$RESET_PAIRING" = true ]; then
+    pairing_url=$(TERMINAL_MCP_ENV_FILE_PATH="$ENV_FILE" runtime_python "$STAGED_RELEASE" -m terminal_mcp pair --ttl 10800)
+    printf '%s' "$pairing_url" | auth_clean save-link
+    printf 'Pairing URL (expires in 3 hours): %s\n' "$pairing_url"
+  fi
 }
 
 if [ "$CMD" = install ]; then
@@ -907,5 +973,5 @@ case "$CMD" in
  update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
  ingress) ensure_env_defaults; configure_console_caddy ;;
  doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_mesh_ingress; check_public_console_ingress ;;
- *) echo 'Usage: install.sh {install|clean-deploy|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
+ *) echo 'Usage: install.sh {install|clean-deploy [--reset-auth] [--reset-pairing]|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
 esac
