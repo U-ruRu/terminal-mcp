@@ -164,3 +164,36 @@ async def test_automatic_start_proxies_immutable_slot_id(app, slot, access_actor
     )
     app.store.registry_code_slot.assert_not_called()
     app.issue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_announcement_uses_authored_event_time_when_clock_advances(
+    app, slot, access_actor
+):
+    app.store.registry_authority_id = app.store.local_node_id
+    app.store.assert_registry_available = Mock()
+    app.store.apply_event = Mock()
+    app.store.registry_code_slot.return_value = slot
+    app.store.registry_slot.return_value = slot
+    # Exercise the real transition; storage and delivery remain separate ports.
+    app.change = AccessMeshApplication.change.__get__(app)
+    app.cleanup = AsyncMock()
+    app.replication = SimpleNamespace(announce_start=AsyncMock())
+    authored_at = NOW + timedelta(microseconds=1)
+    app.clock = Mock(side_effect=(NOW, authored_at))
+
+    await app.issuer_session(access_actor, action="start", session_number=NUMBER)
+
+    app.store.apply_event.assert_called_once()
+    event = app.store.apply_event.call_args.args[0]
+    assert event.active_from == authored_at
+    app.replication.announce_start.assert_awaited_once_with(
+        number=NUMBER,
+        issuer_id=event.issuer_id,
+        slot_id=event.slot_id,
+        event_id=event.event_id,
+        active_from=event.active_from.isoformat(),
+        started_at=event.effective_at.isoformat(),
+        hard_expires_at=event.deadline_at.isoformat(),
+        revision=event.revision,
+    )

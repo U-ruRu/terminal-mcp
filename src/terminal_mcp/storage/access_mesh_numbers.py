@@ -446,7 +446,8 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.store.assert_registry_ready(db)
-            self.store.assert_registry_writer(db, source_peer_id or self.store.local_node_id)
+            writer = source_peer_id or self.store.local_node_id
+            self.store.assert_registry_writer(db, writer)
             existing = db.execute(
                 "SELECT * FROM access_mesh_number_starts WHERE event_id=?",
                 (event_id,),
@@ -454,13 +455,51 @@ class MeshSessionNumbers:
             if existing is not None:
                 changed = {field for field in candidate if existing[field] != candidate[field]}
                 if changed:
-                    raise AccessMeshError("idempotency_conflict")
+                    if changed != {"active_from"} or not self._proves_start_activation(
+                        db, candidate, writer
+                    ):
+                        raise AccessMeshError("idempotency_conflict")
+                    db.execute(
+                        "UPDATE access_mesh_number_starts SET active_from=? WHERE event_id=?",
+                        (candidate["active_from"], event_id),
+                    )
             else:
                 db.execute(
                     "INSERT INTO access_mesh_number_starts VALUES(?,?,?,?,?,?,?,?)",
                     tuple(candidate.values()),
                 )
         return {"ok": True}
+
+    @staticmethod
+    def _proves_start_activation(db, candidate, writer):
+        """Rebuild a derived announcement only from accepted canonical data."""
+        authority = db.execute(
+            "SELECT authority_id FROM access_mesh_registry_scope WHERE singleton=1"
+        ).fetchone()
+        if authority is None or authority[0] != writer:
+            return False
+        key = tuple(candidate[name] for name in ("issuer_id", "slot_id", "event_id", "revision"))
+        canonical = db.execute(
+            "SELECT json_extract(event_json,'$.active_from'),"
+            "json_extract(event_json,'$.effective_at'),"
+            "json_extract(event_json,'$.deadline_at') FROM access_mesh_event_log "
+            "WHERE issuer_id=? AND slot_id=? AND event_id=? AND revision=? "
+            "AND json_extract(event_json,'$.kind')='SessionStarted'",
+            key,
+        ).fetchone()
+        if canonical is None:
+            # Snapshot catch-up can precede the event journal. Only the exact
+            # accepted revision can prove this start, never a later window.
+            canonical = db.execute(
+                "SELECT session.active_from,slot.anchor,slot.deadline_at "
+                "FROM access_mesh_slot_replicas slot JOIN access_mesh_sessions session "
+                "USING(issuer_id,slot_id) WHERE slot.issuer_id=? AND slot.slot_id=? "
+                "AND slot.event_id=? AND slot.revision=?",
+                key,
+            ).fetchone()
+        return canonical is not None and tuple(canonical) == tuple(
+            candidate[name] for name in ("active_from", "started_at", "hard_expires_at")
+        )
 
     def start_snapshot(self):
         with self.store._connect() as db:

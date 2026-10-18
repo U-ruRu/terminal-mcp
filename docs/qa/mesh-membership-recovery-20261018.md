@@ -83,3 +83,70 @@ No current test obligation was retired. No comprehensive, stress, or full releas
 acceptance suite was run. These component results do not claim live phone UI
 acceptance; deployed topology and signed APK publication are separate operator
 verification steps.
+
+## Backend follow-up: canonical session activation
+
+A subsequent attach failure exposed a mismatch between the number-start
+announcement and its committed `SessionStarted` event. The announcement could
+sample `active_from` earlier than the canonical event. Replaying the same start
+with the canonical timestamp then changed the existing announcement's activation
+field, so `MeshSessionNumbers.record_start` raised `idempotency_conflict` and
+blocked replica attach/reconciliation.
+
+The follow-up in `application/access_mesh.py` publishes `active_from` from the
+committed event, using its effective start only when the event has no separate
+activation timestamp. Existing derived announcements can be repaired by
+`storage/access_mesh_numbers.py` within the normal registry transaction and
+readiness/writer guards. Repair is restricted to an `active_from`-only mismatch
+submitted by the current registry authority. The candidate must match accepted
+canonical data for the same issuer, slot, event ID and revision: either its
+`SessionStarted` journal entry or the slot/session snapshot at that exact revision.
+The activation timestamp, start and deadline must all match that proof. A later
+session window cannot serve as proof for an earlier event.
+
+Only the derived announcement's activation field is updated. Other changed fields
+and unproven activation changes still raise `idempotency_conflict`; accepted
+session events, session identity and deadlines are preserved. This repair adds no
+schema migration, compatibility mode or agent method.
+
+### Follow-up verification
+
+The existing `tests/test_access_mesh_session_numbers.py` owner contains two
+parameterized repair cases, for event-journal and exact-snapshot proof, and the
+existing rejection case for an unproven activation change. On unchanged `85242c7`
+source with the new tests, the two repair cases failed with `idempotency_conflict`
+and the rejection case passed: **2 failed, 1 passed in 0.16 seconds**. With the
+backend patch, **all 3 passed in 0.16 seconds**.
+
+The separate atomic application case in `tests/test_access_session_start.py`
+checks the announced activation against the committed event when the clock
+advances. It failed on unchanged `85242c7` application code: **1 failed in 0.50
+seconds**, with the announcement using the earlier sample instead of the event's
+activation one microsecond later. The complete narrow follow-up run passed
+**all 4 cases in 0.53 seconds**. Ruff passed on all four changed Python files, and
+`git diff --check` passed.
+
+```sh
+python -m pytest -q \
+  'tests/test_access_mesh_session_numbers.py::test_canonical_start_repairs_an_early_announcement[event]' \
+  'tests/test_access_mesh_session_numbers.py::test_canonical_start_repairs_an_early_announcement[snapshot]' \
+  tests/test_access_mesh_session_numbers.py::test_start_replay_is_exact_and_cannot_shift_activation_timestamp \
+  tests/test_access_session_start.py::test_start_announcement_uses_authored_event_time_when_clock_advances
+```
+
+### Operator verification
+
+Live timestamp comparison reproduced the mismatch in a session start and a later
+rearm: the canonical journal and accepted snapshot agreed, while a replica's
+number-start announcement retained an earlier activation time. After installing
+the follow-up, perform a normal attach to the same session number and verify
+command acceptance. The component results above do not replace this operator
+check.
+
+### Published UI artifact
+
+APK `0.2.44` (`versionCode=46`) was built from `85242c7`, signed with the production
+key, published and verified. It already contains the Console membership-recovery
+changes described above. The session-activation follow-up changes backend code
+and its atomic tests only; APK 46 remains the UI artifact for this repair and does
+not require a rebuild.

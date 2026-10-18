@@ -1,10 +1,12 @@
 """Collision and reservation invariants for partition-tolerant Mesh numbers."""
 
+import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from terminal_mcp.core.access_mesh_grants import AccessMeshError
+from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
 from terminal_mcp.storage.access_mesh import AccessMeshStore
 
 T0 = datetime(2026, 10, 9, tzinfo=UTC)
@@ -123,3 +125,56 @@ def test_start_replay_is_exact_and_cannot_shift_activation_timestamp(registry):
             **{**start, "active_from": T0 + timedelta(minutes=3)},
         )
     assert registry.start_snapshot() == before
+
+
+@pytest.mark.parametrize("proof", ["event", "snapshot"])
+def test_canonical_start_repairs_an_early_announcement(registry, proof):
+    store = registry.store
+    store.install_registry_scope(mesh_id="mesh-current", authority_id="b")
+    canonical = {
+        "number": "0044",
+        "issuer_id": "b",
+        "slot_id": "slot",
+        "event_id": "ae_epoch_start",
+        "revision": 2,
+        "active_from": T0 + timedelta(microseconds=1),
+        "started_at": T0,
+        "hard_expires_at": T0 + timedelta(minutes=5),
+    }
+    registry.record_start(**{**canonical, "active_from": T0}, source_peer_id="b")
+    with store._connect() as db:
+        if proof == "event":
+            event = AccessSlotEvent(
+                "b", "slot", "agent", 2, "ae_epoch_start", "SessionStarted",
+                active_from=canonical["active_from"],
+                effective_at=canonical["started_at"],
+                deadline_at=canonical["hard_expires_at"],
+            )
+            db.execute(
+                "INSERT INTO access_mesh_event_log VALUES(?,?,?,?,?)",
+                ("b", "slot", 2, "ae_epoch_start", json.dumps(event.to_wire())),
+            )
+        else:
+            db.execute(
+                "INSERT INTO access_mesh_slot_replicas "
+                "(issuer_id,slot_id,kind,state,revision,event_id,policy_json,code_tag,"
+                "anchor,created_at,deadline_at) VALUES(?,?,'temporary','active',?,?,?,?,?,?,?)",
+                (
+                    "b", "slot", 2, "ae_epoch_start", json.dumps(asdict(SlotPolicy(300))),
+                    store.code_tag("b", "0044"), registry.stamp(T0), registry.stamp(T0),
+                    registry.stamp(canonical["hard_expires_at"]),
+                ),
+            )
+            db.execute(
+                "INSERT INTO access_mesh_sessions VALUES('b','slot','agent',1,NULL,?)",
+                (registry.stamp(canonical["active_from"]),),
+            )
+
+    assert registry.record_start(**canonical, source_peer_id="b") == {"ok": True}
+
+    assert registry.start_snapshot() == [
+        {
+            key: registry.stamp(value) if isinstance(value, datetime) else value
+            for key, value in canonical.items()
+        }
+    ]

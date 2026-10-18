@@ -1002,7 +1002,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     issuer_id=event.issuer_id,
                     slot_id=event.slot_id,
                     event_id=event.event_id,
-                    active_from=number_start["active_from"].isoformat(),
+                    active_from=(event.active_from or start).isoformat(),
                     started_at=start.isoformat(),
                     hard_expires_at=deadline.isoformat(),
                     revision=event.revision,
