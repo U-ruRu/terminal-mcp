@@ -15,7 +15,7 @@ const ACTIVE_UNTIL = '2026-10-03T12:10:00Z'
 
 const nativeRows = new Map<string, AccessMeshSlotReadModel[]>()
 function slot(id: string, name: string, state = 'active', hardExpiresAt = ACTIVE_UNTIL): AccessMeshSlotReadModel {
-  return { ...nativeSlot(), slotId: 'as_' + id, logicalAgentId: id, publicName: name, revision: 4, codeGeneration: 1,
+  return { ...nativeSlot(), slotId: 'as_' + id, publicName: name, revision: 4, codeGeneration: 1,
     issuerNodeId: id === 'la-standalone' ? 'server-c' : 'node-a',
     sessionLifecycle: { state, startedAt: '2026-10-03T11:50:00Z', hardExpiresAt, rearmAt: null,
       remainingSeconds: Math.max(0, (Date.parse(hardExpiresAt) - Date.parse(SERVER_NOW)) / 1000) } }

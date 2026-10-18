@@ -124,7 +124,7 @@ def merge_page(store, *, table, rows, namespace_id, source_peer_id):
             if existing:
                 old = dict(existing)
                 if table == "access_mesh_slot_replicas":
-                    if any(old[k] != row[k] for k in ("logical_agent_id", "kind")):
+                    if old["kind"] != row["kind"]:
                         raise AccessMeshError("access_mesh_registry_upgrade_conflict")
                     if old["revision"] > row["revision"]:
                         continue
@@ -137,12 +137,8 @@ def merge_page(store, *, table, rows, namespace_id, source_peer_id):
                             raise AccessMeshError("access_mesh_registry_upgrade_conflict")
                         row["code_generation"] = max(old_generation, row_generation)
                 elif table == "access_mesh_number_claims":
-                    if any(old[k] != row[k] for k in ("number", "logical_agent_id")):
+                    if old["number"] != row["number"] or old["started_at"] != row["started_at"]:
                         raise AccessMeshError("access_mesh_registry_upgrade_conflict")
-                    # Former issuers may have corrected a sub-millisecond
-                    # persistent registration timestamp in their own replica.
-                    if source_peer_id != row["issuer_id"]:
-                        row["started_at"] = old["started_at"]
                     row["hard_expires_at"] = max(old["hard_expires_at"], row["hard_expires_at"])
                 else:
                     if table == "access_mesh_issuer_receipts":
@@ -159,33 +155,30 @@ def merge_page(store, *, table, rows, namespace_id, source_peer_id):
                 f"ON CONFLICT({','.join(keys)}) DO UPDATE SET {updates}",
                 [row[c] for c in columns],
             )
-            if table == "access_mesh_slot_replicas" and native:
-                store._native_slot(db, store._snapshot(row), store.clock().isoformat())
+            if table in {"access_mesh_slot_replicas", "access_mesh_sessions"} and native:
+                projection = db.execute(
+                    "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
+                    (row["issuer_id"], row["slot_id"]),
+                ).fetchone()
+                store._native_slot(
+                    db, store._snapshot(projection, _connection=db), store.clock().isoformat()
+                )
 
 
 def complete_upgrade(store, *, member_ids=()):
     with store._connect() as db:
         db.execute("BEGIN IMMEDIATE")
         store.assert_registry_ready(db)
-        # A surviving persistent registration continues to reserve its number,
-        # even between sessions. Expired non-rearming history can reuse digits.
+        # Every surviving slot reserves its number, including an unused manual slot.
         by_number = {}
-        now = store.clock()
         for row in db.execute(
             "SELECT c.number,s.* FROM access_mesh_number_claims c "
-            "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) WHERE s.state!='deleted'"
+            "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id)"
         ).fetchall():
-            slot = store._snapshot(row)
-            cycle = store.merged_cycle(slot, now)
-            reserves = (
-                slot.policy.rearm_enabled
-                or not slot.anchor
-                or cycle["state"] in {"active", "warning", "draining"}
-            )
-            if reserves:
-                previous = by_number.setdefault(row["number"], slot.logical_agent_id)
-                if previous != slot.logical_agent_id:
-                    raise AccessMeshError("mesh_registry_number_conflict")
+            key = (row["issuer_id"], row["slot_id"])
+            previous = by_number.setdefault(row["number"], key)
+            if previous != key:
+                raise AccessMeshError("mesh_registry_number_conflict")
         defaults = db.execute(
             "SELECT policy_json,parent_json FROM access_mesh_operator_defaults WHERE singleton=1"
         ).fetchone()

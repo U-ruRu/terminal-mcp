@@ -138,10 +138,10 @@ class MeshMessageSubscriberResolver:
             # number was issued. Its connection is an issuer binding, not
             # the separate execution/coordination attach binding.
             slot = await asyncio.to_thread(self.mesh.store.issuer_bound_slot, key)
-            if slot is None or slot.state != "active":
+            if slot is None or slot.session is None or slot.state != "active":
                 return None
             return MessageSubscriber(
-                recipient_agent_id=slot.logical_agent_id,
+                recipient_agent_id=slot.session.logical_agent_id,
                 work_session_id="",
                 session_epoch=0,
                 connection_key=key,
@@ -171,9 +171,10 @@ class MeshMessageSubscriberResolver:
         slot = self.mesh.store.code_slot(winner["issuer_id"], number)
         if (
             slot is None
+            or slot.session is None
             or slot.state != "active"
             or slot.slot_id != winner["slot_id"]
-            or slot.logical_agent_id != winner["logical_agent_id"]
+            or slot.session.logical_agent_id != winner["logical_agent_id"]
         ):
             return None
         if require_live:
@@ -199,7 +200,7 @@ class MeshMessageSubscriberResolver:
         if slot is None:
             return None
         return MessageSubscriber(
-            recipient_agent_id=slot.logical_agent_id,
+            recipient_agent_id=slot.session.logical_agent_id,
             work_session_id="",
             session_epoch=0,
             connection_key="session-number:" + number,
@@ -253,7 +254,8 @@ class MeshMessageSubscriberResolver:
             # Number release/reuse never redirects an existing callback.
             return bool(
                 slot
-                and slot.logical_agent_id == delivery.get("recipient_agent_id")
+                and slot.session is not None
+                and slot.session.logical_agent_id == delivery.get("recipient_agent_id")
                 and slot.issuer_id == delivery.get("recipient_issuer_id")
                 and slot.slot_id == delivery.get("recipient_slot_id")
             )
@@ -261,8 +263,9 @@ class MeshMessageSubscriberResolver:
             slot = await asyncio.to_thread(self.mesh.store.issuer_bound_slot, key)
             return bool(
                 slot
+                and slot.session is not None
                 and slot.state == "active"
-                and slot.logical_agent_id == delivery.get("recipient_agent_id")
+                and slot.session.logical_agent_id == delivery.get("recipient_agent_id")
                 and slot.issuer_id == delivery.get("recipient_issuer_id")
                 and slot.slot_id == delivery.get("recipient_slot_id")
             )

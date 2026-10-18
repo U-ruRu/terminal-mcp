@@ -446,7 +446,8 @@ def expected_unified_runtime_rows(
         ):
             raise RuntimeMigrationError("runtime_migration_mapping_changed")
         slot = after.execute(
-            "SELECT logical_agent_id,kind FROM access_mesh_slot_replicas "
+            "SELECT s.logical_agent_id,r.kind FROM access_mesh_slot_replicas r "
+            "JOIN access_mesh_sessions s USING(issuer_id,slot_id) "
             "WHERE issuer_id=? AND slot_id=?",
             (item["issuer_id"], item["slot_id"]),
         ).fetchone()

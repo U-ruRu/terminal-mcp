@@ -112,7 +112,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         (
             "policy",
             "repair",
-            "policy_incompatible session_contract_conflict",
+            "policy_incompatible session_contract_conflict legacy_admission_disabled",
         ),
         (
             "internal",
@@ -268,6 +268,9 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "invalid_intent": "Provide a non-empty intent of at most 1000 characters.",
         "session_attach_required": "Введи номер сессии",
         "invalid_session_number": "Неверный номер сессии",
+        "legacy_admission_disabled": (
+            "Укажи номер существующего слота. Выдача нового слота через Legacy отключена."
+        ),
         "session_already_started": "Сессия уже запущена",
         "cannot_message_self": "Нельзя отправить сообщение самому себе",
         "access_mesh_issuer_required": (

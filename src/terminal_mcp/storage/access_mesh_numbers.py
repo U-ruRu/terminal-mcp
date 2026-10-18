@@ -1,15 +1,15 @@
 """Durable four-digit Mesh session number reservations and reconciliation."""
 
-import json
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
+from terminal_mcp.core.access_policy_windows import latest_number_event
 
 # Durable Mesh schema revision independent of the core SqliteRepository schema.
 # v2 preserves multiple Access.end events within a single original cycle.
-MESH_NUMBERS_SCHEMA_VERSION = 2
+MESH_NUMBERS_SCHEMA_VERSION = 3
 
 
 class MeshSessionNumbers:
@@ -20,6 +20,7 @@ class MeshSessionNumbers:
         from terminal_mcp.storage.access_mesh_recipient_holds import initialize_holds
 
         with store._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             initialize_holds(db)
             db.execute(
                 "CREATE TABLE IF NOT EXISTS access_mesh_number_reservations(number TEXT "
@@ -27,14 +28,19 @@ class MeshSessionNumbers:
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS access_mesh_number_claims(issuer_id TEXT NOT "
-                "NULL, slot_id TEXT NOT NULL, number TEXT NOT NULL, logical_agent_id TEXT "
-                "NOT NULL, started_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, PRIMARY "
+                "NULL, slot_id TEXT NOT NULL, number TEXT NOT NULL, "
+                "started_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, PRIMARY "
                 "KEY(issuer_id,slot_id))"
             )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS access_mesh_number_current ON "
                 "access_mesh_number_claims(number,started_at,issuer_id,slot_id)"
             )
+            # The v27 session projection already owns the preserved identity.
+            if "logical_agent_id" in {
+                row[1] for row in db.execute("PRAGMA table_info(access_mesh_number_claims)")
+            }:
+                db.execute("ALTER TABLE access_mesh_number_claims DROP COLUMN logical_agent_id")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS access_mesh_number_incidents(number TEXT NOT "
                 "NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, collided_with TEXT "
@@ -46,41 +52,36 @@ class MeshSessionNumbers:
                 "number TEXT NOT NULL, cycle_key TEXT NOT NULL, "
                 "issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
                 "event_id TEXT NOT NULL, ended_at TEXT NOT NULL, "
+                "revision INTEGER NOT NULL CHECK(revision>0), "
                 "PRIMARY KEY(number,cycle_key,event_id))"
             )
-            # A previously deployed table allowed only one end per cycle.
-            # Explicit resume within the original window can be ended again.
-            # Migrate old events atomically and retain historical timestamps.
-            original_pk = next(
-                row[5]
-                for row in db.execute("PRAGMA table_info(access_mesh_number_ends)")
-                if row[1] == "event_id"
-            )
-            if original_pk == 0:
-                db.execute(
-                    "ALTER TABLE access_mesh_number_ends RENAME TO access_mesh_number_ends_old"
-                )
-                db.execute(
-                    "CREATE TABLE access_mesh_number_ends("
-                    "number TEXT NOT NULL, cycle_key TEXT NOT NULL, "
-                    "issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
-                    "event_id TEXT NOT NULL, ended_at TEXT NOT NULL, "
-                    "PRIMARY KEY(number,cycle_key,event_id))"
-                )
-                db.execute(
-                    "INSERT INTO access_mesh_number_ends "
-                    "(number,cycle_key,issuer_id,slot_id,event_id,ended_at) "
-                    "SELECT number,cycle_key,issuer_id,slot_id,event_id,ended_at "
-                    "FROM access_mesh_number_ends_old"
-                )
-                db.execute("DROP TABLE access_mesh_number_ends_old")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS access_mesh_number_starts("
                 "event_id TEXT PRIMARY KEY, number TEXT NOT NULL, "
                 "issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
                 "active_from TEXT NOT NULL, started_at TEXT NOT NULL, "
-                "hard_expires_at TEXT NOT NULL)"
+                "hard_expires_at TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0))"
             )
+            for table in ("access_mesh_number_starts", "access_mesh_number_ends"):
+                if "revision" in {row[1] for row in db.execute(f"PRAGMA table_info({table})")}:
+                    continue
+                # Current v26 rows recover their issuer order from the durable
+                # event journal. An incomplete peer announcement is re-fetched
+                # by ordinary synchronization; no revision is invented for it.
+                db.execute(
+                    f"DELETE FROM {table} WHERE NOT EXISTS (SELECT 1 FROM access_mesh_event_log e "
+                    f"WHERE e.issuer_id={table}.issuer_id AND e.slot_id={table}.slot_id "
+                    f"AND e.event_id={table}.event_id)"
+                )
+                db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN revision "
+                    "INTEGER NOT NULL DEFAULT 1 CHECK(revision>0)"
+                )
+                db.execute(
+                    f"UPDATE {table} SET revision=(SELECT e.revision FROM access_mesh_event_log e "
+                    f"WHERE e.issuer_id={table}.issuer_id AND e.slot_id={table}.slot_id "
+                    f"AND e.event_id={table}.event_id)"
+                )
 
     @staticmethod
     def validate(number):
@@ -95,42 +96,28 @@ class MeshSessionNumbers:
         return value.astimezone(UTC).isoformat(timespec="microseconds")
 
     def _occupied(self, db, number, attempt_id, *, as_of=None):
-        # Historical claims survive for attribution but cannot reserve a
-        # finished work window indefinitely. Active grants remain protected
-        # separately: an active/rearmable slot retains its number.
-        as_of = as_of or self.stamp(self.store.clock())
+        # A live slot owns its number for its whole lifetime, including idle,
+        # expired and suspended windows. Physical deletion releases the claim.
         if db.execute(
             "SELECT 1 FROM access_mesh_recipient_holds WHERE number=? AND state='held' LIMIT 1",
             (number,),
         ).fetchone():
             return True
-        # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
+        if db.execute(
+            "SELECT 1 FROM access_mesh_number_claims c JOIN access_mesh_slot_replicas s "
+            "USING(issuer_id,slot_id) WHERE c.number=? LIMIT 1",
+            (number,),
+        ).fetchone():
+            return True
         for issuer in self.store.registry_issuers():
             tags = self.store.code_tags(issuer, number)
             placeholders = ",".join("?" for _ in tags)
-            rows = db.execute(
-                "SELECT anchor,deadline_at,policy_json FROM access_mesh_slot_replicas "
-                f"WHERE issuer_id=? AND code_tag IN ({placeholders}) AND state!='deleted'",
+            if db.execute(
+                "SELECT 1 FROM access_mesh_slot_replicas "
+                f"WHERE issuer_id=? AND code_tag IN ({placeholders}) LIMIT 1",
                 (issuer, *tags),
-            ).fetchall()
-            for row in rows:
-                policy = json.loads(row["policy_json"])
-                if policy.get("rearm_enabled", True):
-                    return True
-                anchor = row["anchor"]
-                deadline = row["deadline_at"]
-                if not anchor:
-                    return True
-                if not deadline:
-                    duration = timedelta(seconds=policy["duration_seconds"])
-                    deadline = self.stamp(datetime.fromisoformat(anchor) + duration)
-                if deadline > as_of:
-                    return True
-        if db.execute(
-            "SELECT 1 FROM access_mesh_number_claims WHERE number=? AND hard_expires_at>? LIMIT 1",
-            (number, as_of),
-        ).fetchone():
-            return True
+            ).fetchone():
+                return True
         old = db.execute(
             "SELECT attempt_id FROM access_mesh_number_reservations WHERE number=?", (number,)
         ).fetchone()
@@ -193,7 +180,6 @@ class MeshSessionNumbers:
         number,
         issuer_id,
         slot_id,
-        logical_agent_id,
         started_at,
         hard_expires_at,
         attempt_id=None,
@@ -206,12 +192,7 @@ class MeshSessionNumbers:
             raise AccessMeshError("access_mesh_untrusted_peer")
         if source_peer_id is not None and source_peer_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
-        if (
-            not isinstance(slot_id, str)
-            or not slot_id
-            or not isinstance(logical_agent_id, str)
-            or not logical_agent_id
-        ):
+        if not isinstance(slot_id, str) or not slot_id:
             raise AccessMeshError("invalid_session_identity")
         start = self.stamp(
             datetime.fromisoformat(started_at) if isinstance(started_at, str) else started_at
@@ -241,45 +222,13 @@ class MeshSessionNumbers:
                 "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
                 (issuer_id, slot_id),
             ).fetchone()
-            if existing:
-                if (existing["number"], existing["logical_agent_id"]) != (
-                    number,
-                    logical_agent_id,
-                ):
-                    raise AccessMeshError("session_identity_conflict")
-                if existing["started_at"] != start:
-                    slot = db.execute(
-                        "SELECT kind FROM access_mesh_slot_replicas "
-                        "WHERE issuer_id=? AND slot_id=?",
-                        (issuer_id, slot_id),
-                    ).fetchone()
-                    # Older Persistent create sampled the issuer clock twice. Only
-                    # the authenticated issuer may correct that derived timestamp;
-                    # relays never override an issuer's own historical identity.
-                    # Legacy timestamps and number/agent changes remain immutable.
-                    if source_peer_id is None or slot is None or slot["kind"] != "persistent":
-                        raise AccessMeshError("session_identity_conflict")
-                    if issuer_id == self.store.local_node_id or source_peer_id != issuer_id:
-                        start, end = existing["started_at"], existing["hard_expires_at"]
-                    else:
-                        delta = datetime.fromisoformat(start) - datetime.fromisoformat(
-                            existing["started_at"]
-                        )
-                        end = max(
-                            end,
-                            self.stamp(datetime.fromisoformat(existing["hard_expires_at"]) + delta),
-                        )
-                        self._repair_local_cycle(db, existing, start, delta)
-                        db.execute(
-                            "UPDATE access_mesh_number_claims SET started_at=?,hard_expires_at=? "
-                            "WHERE issuer_id=? AND slot_id=?",
-                            (start, end, issuer_id, slot_id),
-                        )
+            if existing and (existing["number"] != number or existing["started_at"] != start):
+                raise AccessMeshError("session_identity_conflict")
             db.execute(
-                "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?) ON "
+                "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?) ON "
                 "CONFLICT(issuer_id,slot_id) DO UPDATE SET "
                 "hard_expires_at=MAX(hard_expires_at,excluded.hard_expires_at)",
-                (issuer_id, slot_id, number, logical_agent_id, start, end),
+                (issuer_id, slot_id, number, start, end),
             )
             if attempt_id:
                 db.execute(
@@ -299,7 +248,9 @@ class MeshSessionNumbers:
             claims = [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM access_mesh_number_claims WHERE number=?", (number,)
+                    "SELECT c.*,s.logical_agent_id FROM access_mesh_number_claims c "
+                    "LEFT JOIN access_mesh_sessions s USING(issuer_id,slot_id) WHERE number=?",
+                    (number,),
                 ).fetchall()
             ]
             for group in self._groups(claims):
@@ -314,53 +265,6 @@ class MeshSessionNumbers:
             "hard_expires_at": chosen["hard_expires_at"],
             "collisions": len(others),
         }
-
-    def _repair_local_cycle(self, db, claim, start, delta):
-        """Rebase cached dates without granting a new cycle or reviving a slot."""
-        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if {"access_mesh_local_sessions", "logical_agent_work_sessions"} <= tables:
-            rows = db.execute(
-                "SELECT s.work_session_id,s.hard_expires_at FROM access_mesh_local_sessions l "
-                "JOIN logical_agent_work_sessions s USING(work_session_id) "
-                "WHERE l.issuer_id=? AND l.slot_id=? AND l.cycle_started_at=? "
-                "AND s.started_at=?",
-                (claim["issuer_id"], claim["slot_id"], claim["started_at"], claim["started_at"]),
-            ).fetchall()
-            for row in rows:
-                db.execute(
-                    "UPDATE logical_agent_work_sessions SET started_at=?,hard_expires_at=? "
-                    "WHERE work_session_id=?",
-                    (
-                        start,
-                        self.stamp(datetime.fromisoformat(row["hard_expires_at"]) + delta),
-                        row["work_session_id"],
-                    ),
-                )
-            db.execute(
-                "UPDATE access_mesh_local_sessions SET cycle_started_at=? "
-                "WHERE issuer_id=? AND slot_id=? AND cycle_started_at=?",
-                (start, claim["issuer_id"], claim["slot_id"], claim["started_at"]),
-            )
-        if "logical_agent_work_windows" in tables:
-            for row in db.execute(
-                "SELECT work_window_id,snapshot_json FROM logical_agent_work_windows "
-                "WHERE logical_agent_id=?",
-                (claim["logical_agent_id"],),
-            ).fetchall():
-                snapshot = json.loads(row["snapshot_json"])
-                opened_at = snapshot.get("opened_at")
-                if opened_at and datetime.fromisoformat(opened_at) == datetime.fromisoformat(
-                    claim["started_at"]
-                ):
-                    snapshot["opened_at"] = start
-                    db.execute(
-                        "UPDATE logical_agent_work_windows SET snapshot_json=? "
-                        "WHERE work_window_id=?",
-                        (
-                            json.dumps(snapshot, separators=(",", ":"), sort_keys=True),
-                            row["work_window_id"],
-                        ),
-                    )
 
     @staticmethod
     def _groups(rows):
@@ -395,7 +299,8 @@ class MeshSessionNumbers:
             rows = [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    "SELECT c.*,s.logical_agent_id FROM access_mesh_number_claims c "
+                    "LEFT JOIN access_mesh_sessions s USING(issuer_id,slot_id) WHERE number=?",
                     (number,),
                 ).fetchall()
             ]
@@ -414,7 +319,8 @@ class MeshSessionNumbers:
             rows = [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    "SELECT c.*,s.logical_agent_id FROM access_mesh_number_claims c "
+                    "LEFT JOIN access_mesh_sessions s USING(issuer_id,slot_id) WHERE number=?",
                     (original["number"],),
                 ).fetchall()
             ]
@@ -435,7 +341,8 @@ class MeshSessionNumbers:
             claims = [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    "SELECT c.*,s.logical_agent_id FROM access_mesh_number_claims c "
+                    "LEFT JOIN access_mesh_sessions s USING(issuer_id,slot_id) WHERE number=?",
                     (original["number"],),
                 ).fetchall()
             ]
@@ -460,19 +367,7 @@ class MeshSessionNumbers:
                 )
                 if (row["issuer_id"], row["slot_id"]) in keys
             ]
-        return (
-            max(
-                events,
-                key=lambda row: (
-                    row["active_from"],
-                    row["issuer_id"],
-                    row["slot_id"],
-                    row["event_id"],
-                ),
-            )
-            if events
-            else None
-        )
+        return latest_number_event(events, "active_from")
 
     def end_for_slot(self, issuer_id, slot_id):
         """Latest explicit end of this identity group, excluding recycled epochs."""
@@ -486,7 +381,8 @@ class MeshSessionNumbers:
             claims = [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    "SELECT c.*,s.logical_agent_id FROM access_mesh_number_claims c "
+                    "LEFT JOIN access_mesh_sessions s USING(issuer_id,slot_id) WHERE number=?",
                     (original["number"],),
                 ).fetchall()
             ]
@@ -511,7 +407,7 @@ class MeshSessionNumbers:
                 )
                 if (row["issuer_id"], row["slot_id"]) in keys
             ]
-        return max(ends, key=lambda row: (row["ended_at"], row["event_id"])) if ends else None
+        return latest_number_event(ends, "ended_at")
 
     def record_start(
         self,
@@ -520,6 +416,7 @@ class MeshSessionNumbers:
         issuer_id,
         slot_id,
         event_id,
+        revision,
         active_from,
         started_at,
         hard_expires_at,
@@ -528,7 +425,7 @@ class MeshSessionNumbers:
         self.validate(number)
         if not self.store.registry_issuer_trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_peer")
-        if not slot_id or not event_id:
+        if not slot_id or not event_id or type(revision) is not int or revision < 1:
             raise AccessMeshError("invalid_session_identity")
         values = [
             self.stamp(datetime.fromisoformat(value) if isinstance(value, str) else value)
@@ -544,6 +441,7 @@ class MeshSessionNumbers:
             "active_from": values[0],
             "started_at": values[1],
             "hard_expires_at": values[2],
+            "revision": revision,
         }
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -555,25 +453,11 @@ class MeshSessionNumbers:
             ).fetchone()
             if existing is not None:
                 changed = {field for field in candidate if existing[field] != candidate[field]}
-                if changed == {"active_from"} and source_peer_id is not None:
-                    # Previous builds synthesized receiver-local activation
-                    # timestamps while replaying SessionStarted. The original
-                    # issuer is authoritative for precisely this one field.
-                    # Relayed stale replicas cannot rewrite issuer history.
-                    if issuer_id == self.store.local_node_id and source_peer_id != issuer_id:
-                        return {"ok": True}
-                    if source_peer_id == issuer_id and issuer_id != self.store.local_node_id:
-                        db.execute(
-                            "UPDATE access_mesh_number_starts SET active_from=? WHERE event_id=?",
-                            (candidate["active_from"], event_id),
-                        )
-                    else:
-                        raise AccessMeshError("idempotency_conflict")
-                elif changed:
+                if changed:
                     raise AccessMeshError("idempotency_conflict")
             else:
                 db.execute(
-                    "INSERT INTO access_mesh_number_starts VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO access_mesh_number_starts VALUES(?,?,?,?,?,?,?,?)",
                     tuple(candidate.values()),
                 )
         return {"ok": True}
@@ -757,14 +641,27 @@ class MeshSessionNumbers:
                     )
 
     def record_end(
-        self, *, number, cycle_key, issuer_id, slot_id, event_id, ended_at, source_peer_id=None
+        self,
+        *,
+        number,
+        cycle_key,
+        issuer_id,
+        slot_id,
+        event_id,
+        revision,
+        ended_at,
+        source_peer_id=None,
     ):
         self.validate(number)
         if not self.store.registry_issuer_trusted(issuer_id):
             raise AccessMeshError("access_mesh_untrusted_peer")
-        if not all(
-            isinstance(value, str) and 1 <= len(value) <= 256
-            for value in (cycle_key, slot_id, event_id)
+        if (
+            type(revision) is not int
+            or revision < 1
+            or not all(
+                isinstance(value, str) and 1 <= len(value) <= 256
+                for value in (cycle_key, slot_id, event_id)
+            )
         ):
             raise AccessMeshError("invalid_session_end")
         stamp = self.stamp(
@@ -774,22 +671,19 @@ class MeshSessionNumbers:
             db.execute("BEGIN IMMEDIATE")
             self.store.assert_registry_ready(db)
             self.store.assert_registry_writer(db, source_peer_id or self.store.local_node_id)
+            candidate = (number, cycle_key, issuer_id, slot_id, event_id, stamp, revision)
+            existing = db.execute(
+                "SELECT * FROM access_mesh_number_ends WHERE number=? AND cycle_key=? AND "
+                "event_id=?",
+                (number, cycle_key, event_id),
+            ).fetchone()
+            if existing is not None and tuple(existing) != candidate:
+                raise AccessMeshError("idempotency_conflict")
             db.execute(
-                "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)",
-                (number, cycle_key, issuer_id, slot_id, event_id, stamp),
+                "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?,?)", candidate
             )
         return {"ok": True}
 
-    def end_for_cycle(self, number, cycle_key):
-        with self.store._connect() as db:
-            row = db.execute(
-                (
-                    "SELECT ended_at FROM access_mesh_number_ends WHERE number=? AND cycle_key=? "
-                    "ORDER BY ended_at DESC,event_id DESC LIMIT 1"
-                ),
-                (number, cycle_key),
-            ).fetchone()
-            return row["ended_at"] if row else None
 
     def end_snapshot(self):
         with self.store._connect() as db:

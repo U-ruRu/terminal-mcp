@@ -79,6 +79,8 @@ class AccessPolicyRequest(StrictRequest):
     warning_after_seconds: int = Field(ge=1)
     alert_after_seconds: int = Field(ge=1)
     rearm_after_seconds: int = Field(ge=1)
+    rearm_enabled: bool = True
+    legacy_admission_enabled: bool = False
     expected_revision: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -259,6 +261,8 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
                 warning_after_seconds=body.warning_after_seconds,
                 alert_after_seconds=body.alert_after_seconds,
                 rearm_after_seconds=body.rearm_after_seconds,
+                rearm_enabled=body.rearm_enabled,
+                legacy_admission_enabled=body.legacy_admission_enabled,
                 expected_revision=body.expected_revision,
             )
         except MeshApplicationError as exc:

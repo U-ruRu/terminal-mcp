@@ -25,6 +25,13 @@ from terminal_mcp.mcp.role_contracts import (
 
 class IssuerSessionInput(StrictRoleInput):
     action: Literal["start", "end"]
+    session_number: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
+
+    @model_validator(mode="after")
+    def start_number_only(self):
+        if self.action == "end" and self.session_number is not None:
+            raise ValueError("session_number belongs to start")
+        return self
 
 
 class GetEventsInput(StrictRoleInput):
@@ -49,7 +56,7 @@ class _Strict(BaseModel):
 
 class MeshCycle(_Strict):
     state: Literal[
-        "active", "warning", "draining", "expired", "cooldown", "idle", "suspended", "deleted"
+        "active", "warning", "draining", "expired", "cooldown", "idle", "suspended"
     ]
     started_at: str | None
     hard_expires_at: str | None
@@ -77,7 +84,7 @@ class MeshLocalSession(_Strict):
     public_name: str
     mode: Literal["temporary", "persistent"]
     slot_kind: Literal["temporary", "persistent"]
-    slot_state: Literal["active", "suspended", "deleted"]
+    slot_state: Literal["active", "suspended"]
     session_lifecycle: MeshCycle
     cleanup_pending: bool
     hard_expires_at: str | None

@@ -75,7 +75,7 @@ async def end_and_cleanup(native, tasks, identity):
         AccessSlotEvent(
             issuer_id=slot.issuer_id,
             slot_id=slot.slot_id,
-            logical_agent_id=slot.logical_agent_id,
+            logical_agent_id=slot.session.logical_agent_id,
             revision=slot.revision + 1,
             event_id="end-before-task-commit",
             kind="SessionEnded",

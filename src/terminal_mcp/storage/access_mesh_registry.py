@@ -21,6 +21,7 @@ _RUNTIME_IMPORT_CONNECTION = ContextVar("mesh_runtime_import_connection", defaul
 
 REGISTRY_TABLES = (
     "access_mesh_slot_replicas",
+    "access_mesh_sessions",
     "access_mesh_event_log",
     "access_mesh_slot_catalog",
     "access_mesh_number_claims",
@@ -215,9 +216,7 @@ class AccessRegistryStore:
         if row is None:
             raise AccessMeshError("mesh_registry_unavailable")
         reason = (
-            "mesh_transition_pending" if row[1]
-            else "mesh_registry_migrating" if row[0]
-            else None
+            "mesh_transition_pending" if row[1] else "mesh_registry_migrating" if row[0] else None
         )
         return {"ready": reason is None, "reason": reason}
 
@@ -482,6 +481,7 @@ class AccessRegistryStore:
             raise AccessMeshError("invalid_session_number")
         issuer, slot_id = slot.issuer_id, slot.slot_id
         with self._connect() as db:
+            db.execute("BEGIN")
             row = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (issuer, slot_id),
@@ -489,7 +489,7 @@ class AccessRegistryStore:
             if row is None:
                 raise AccessMeshError("invalid_session_number")
             result = {
-                "slot": self.snapshot_wire(row),
+                "slot": self.snapshot_wire(row, _connection=db),
                 "claim": dict(
                     db.execute(
                         "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
@@ -610,7 +610,9 @@ class AccessRegistryStore:
                     )
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='logical_agents'").fetchone():
                 for row in db.execute("SELECT * FROM access_mesh_slot_replicas").fetchall():
-                    self._native_slot(db, self._snapshot(row), self.clock().isoformat())
+                    self._native_slot(
+                        db, self._snapshot(row, _connection=db), self.clock().isoformat()
+                    )
             for row in attachments:
                 exists = db.execute(
                     "SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",

@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 import pytest
-from test_access_mesh_native_lifecycle import actor
+from test_access_mesh_native_lifecycle import actor, enable_legacy_admission
 from test_access_mesh_native_lifecycle import fixture as _native_fixture
 
 from terminal_mcp.core.access_mesh_grants import SlotPolicy
@@ -44,6 +44,7 @@ async def arrange(f):
 
     f.app.attach_notifier = attached
     f.app.defaults = SlotPolicy(10, 5, False)
+    enable_legacy_admission(f.app)
     issued = await f.app.issuer_session(actor("access", "worker"), action="start")
     slot = f.store.numbers.winner(issued["session_number"])
     issued["slot_id"] = slot["slot_id"]

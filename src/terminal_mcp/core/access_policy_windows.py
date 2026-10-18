@@ -25,26 +25,75 @@ def effective_slot(slot: SlotSnapshot, now: datetime) -> SlotSnapshot:
     capture = slot.policy_window
     if capture is None:
         return slot
-    if capture.rearm_at is not None and now >= capture.rearm_at:
-        return replace(slot, anchor=capture.rearm_at, deadline_at=None, policy_window=None)
-    if capture.closed_at is not None and now >= capture.closed_at:
-        return replace(
-            slot,
-            policy=capture.policy,
-            anchor=capture.rearm_at,
-            deadline_at=None,
-            policy_window=None,
-        )
-    # A future anchor denotes the existing cooldown after an explicit end.
-    anchor = capture.started_at
-    if anchor is None and capture.rearm_at is not None:
-        anchor = capture.rearm_at
     return replace(
         slot,
         policy=capture.policy,
-        anchor=anchor,
+        anchor=capture.started_at,
         deadline_at=capture.hard_expires_at,
         policy_window=None,
+    )
+
+
+def reopen_window(slot: SlotSnapshot, now: datetime) -> dict | None:
+    """Select the explicit start window; ``None`` means the active start is unchanged.
+
+    Only the prior end and its cooldown choose whether the old deadline survives.
+    Slot kind, admission defaults and automatic Rearm never gate an explicit start.
+    An early resume retains its end marker until the first full new window.
+    """
+    now = now.astimezone(UTC)
+    current = effective_slot(slot, now)
+    session = slot.session
+    start = current.anchor
+    deadline = current.deadline_at or (
+        start + timedelta(seconds=current.policy.duration_seconds) if start is not None else None
+    )
+    fresh = {"start": now, "deadline": now + timedelta(seconds=slot.policy.duration_seconds)}
+    if session is None or start is None or deadline is None:
+        return fresh
+    ended_at = session.ended_at
+    if ended_at is None and now >= deadline:
+        ended_at = deadline
+    if ended_at is not None:
+        if now >= ended_at + timedelta(seconds=current.policy.cooldown_seconds):
+            return fresh
+        if session.active and now < deadline:
+            return None
+        return {"start": start, "deadline": deadline}
+    return None if session.active else {"start": start, "deadline": deadline}
+
+
+def automatic_rearm_due(slot: SlotSnapshot, now: datetime) -> bool:
+    """An existing session may request the same start transition when its Rearm is due."""
+    if slot.state != "active" or slot.session is None:
+        return False
+    current = effective_slot(slot, now)
+    if not slot.policy.rearm_enabled or current.anchor is None:
+        return False
+    end = (
+        slot.session.ended_at
+        or current.deadline_at
+        or (current.anchor + timedelta(seconds=current.policy.duration_seconds))
+    )
+    return now.astimezone(UTC) >= end + timedelta(seconds=current.policy.cooldown_seconds)
+
+
+def latest_number_event(rows, timestamp_field: str):
+    """Issuer revision orders one slot; independent slots retain their time ordering."""
+    latest = {}
+    for row in rows:
+        key = (row["issuer_id"], row["slot_id"])
+        if key not in latest or row["revision"] > latest[key]["revision"]:
+            latest[key] = row
+    return max(
+        latest.values(),
+        key=lambda row: (
+            datetime.fromisoformat(row[timestamp_field]),
+            row["issuer_id"],
+            row["slot_id"],
+            row["revision"],
+        ),
+        default=None,
     )
 
 
@@ -59,41 +108,24 @@ def slot_cycle(slot: SlotSnapshot, now: datetime) -> dict:
         "remaining_seconds": 0,
         "rearm_at": None,
     }
-    if slot.state != "active" or slot.anchor is None:
+    if slot.state != "active" or slot.anchor is None or slot.session is None:
         return {**base, "state": slot.state if slot.state != "active" else "idle"}
     anchor = slot.anchor.astimezone(UTC)
-    if now < anchor:
-        return {**base, "state": "cooldown", "rearm_at": _text(anchor)}
     policy = slot.policy
     start = anchor
     end = slot.deadline_at or anchor + timedelta(seconds=policy.duration_seconds)
-    if now >= end:
-        if not policy.rearm_enabled:
-            return {
-                **base,
-                "state": "expired",
-                "started_at": _text(start),
-                "hard_expires_at": _text(end),
-            }
-        next_start = end + timedelta(seconds=policy.cooldown_seconds)
-        if now < next_start:
-            return {
-                **base,
-                "state": "cooldown",
-                "started_at": _text(start),
-                "hard_expires_at": _text(end),
-                "rearm_at": _text(next_start),
-            }
-        period = policy.duration_seconds + policy.cooldown_seconds
-        index = int((now - next_start).total_seconds() // period)
-        start = next_start + timedelta(seconds=index * period)
-        end = start + timedelta(seconds=policy.duration_seconds)
     base.update(started_at=_text(start), hard_expires_at=_text(end))
+    if not slot.session.active and slot.session.ended_at is not None:
+        due = slot.session.ended_at + timedelta(seconds=policy.cooldown_seconds)
+        return {**base, "state": "cooldown" if now < due else "expired", "rearm_at": _text(due)}
+    if now < anchor and (slot.session.active_from is None or now < slot.session.active_from):
+        return {**base, "state": "cooldown", "rearm_at": _text(anchor)}
     if now >= end:
+        next_start = end + timedelta(seconds=policy.cooldown_seconds)
         return {
             **base,
-            "state": "cooldown",
-            "rearm_at": _text(end + timedelta(seconds=policy.cooldown_seconds)),
+            "state": "cooldown" if now < next_start else "expired",
+            "rearm_at": _text(next_start),
         }
     remaining = (end - now).total_seconds()
     phase = "active"
@@ -104,7 +136,6 @@ def slot_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     return {**base, "state": phase, "remaining_seconds": max(0, int(remaining))}
 
 
-
 def merged_slot_cycle(slot, now, *, winner=None, latest_start=None, latest_end=None) -> dict:
     """Project one explicit Mesh window from an immutable set of registry rows.
 
@@ -112,27 +143,79 @@ def merged_slot_cycle(slot, now, *, winner=None, latest_start=None, latest_end=N
     invoking this pure function. Transactional admission can therefore use the
     same lifecycle calculation without opening another database connection.
     """
-    if winner is None:
+    if winner is None or slot.session is None:
         return slot_cycle(slot, now)
-    start = datetime.fromisoformat(winner["started_at"])
-    expiry = datetime.fromisoformat(winner["hard_expires_at"])
-    active_from = start
-    if latest_start is not None and datetime.fromisoformat(latest_start["active_from"]) >= start:
-        active_from = datetime.fromisoformat(latest_start["active_from"])
-        start = datetime.fromisoformat(latest_start["started_at"])
-        started_deadline = datetime.fromisoformat(latest_start["hard_expires_at"])
-        expiry = max(expiry, started_deadline)
+    current = effective_slot(slot, now)
+    session = slot.session
+    windows, transitions = [], []
+    if current.anchor is not None:
+        expiry = current.deadline_at or (
+            datetime.fromisoformat(winner["hard_expires_at"])
+            if current.anchor == datetime.fromisoformat(winner["started_at"])
+            else current.anchor + timedelta(seconds=current.policy.duration_seconds)
+        )
+        local = {
+            "issuer_id": slot.issuer_id,
+            "slot_id": slot.slot_id,
+            "revision": slot.revision,
+            "active_from": _text(session.active_from or current.anchor),
+            "started_at": _text(current.anchor),
+            "hard_expires_at": _text(expiry),
+        }
+        windows.append(local)
+        transitions.append(
+            {
+                **local,
+                "active": session.active,
+                "at": local["active_from"] if session.active else _text(session.ended_at or expiry),
+            }
+        )
+    if latest_start is not None:
+        windows.append(latest_start)
+        transitions.append({**latest_start, "active": True, "at": latest_start["active_from"]})
+    if latest_end is not None:
+        transitions.append({**latest_end, "active": False, "at": latest_end["ended_at"]})
+    window = latest_number_event(windows, "active_from")
+    if window is None:
+        return slot_cycle(slot, now)
+    transition = latest_number_event(transitions, "at")
+    start = datetime.fromisoformat(window["started_at"])
+    expiry = datetime.fromisoformat(window["hard_expires_at"])
+    active_from = datetime.fromisoformat(window["active_from"])
+    policy = current.policy if current.anchor == start else slot.policy
+    ended_at = session.ended_at if current.anchor == start else None
+    if not transition["active"]:
+        ended_at = datetime.fromisoformat(transition["at"])
+    elif window is latest_start:
+        # A preceding end remains the cooldown anchor only for an early
+        # resumption of that same window. A full start clears the marker.
+        if latest_end is not None:
+            prior = latest_number_event(
+                [
+                    {**latest_end, "at": latest_end["ended_at"]},
+                    {**latest_start, "at": latest_start["active_from"]},
+                ],
+                "at",
+            )
+            end_anchor = datetime.fromisoformat(latest_end["cycle_key"].split(":", 2)[2])
+            if prior["event_id"] == latest_start["event_id"] and end_anchor == start:
+                ended_at = datetime.fromisoformat(latest_end["ended_at"])
+        if ended_at is not None and active_from >= ended_at + timedelta(
+            seconds=policy.cooldown_seconds
+        ):
+            ended_at = None
+    session = replace(
+        session, active=transition["active"], active_from=active_from, ended_at=ended_at
+    )
     effective = replace(
         slot,
         anchor=start,
         deadline_at=expiry,
-        policy=replace(slot.effective(start).policy, rearm_enabled=False),
+        policy=policy,
         policy_window=None,
+        session=session,
     )
-    cycle = slot_cycle(effective, now)
-    if latest_end is not None and datetime.fromisoformat(latest_end["ended_at"]) >= active_from:
-        return {**cycle, "state": "expired", "remaining_seconds": 0}
-    return cycle
+    return slot_cycle(effective, now)
 
 
 def capture_window(slot: SlotSnapshot, now: datetime) -> CapturedAccessWindow:
@@ -147,6 +230,6 @@ def capture_window(slot: SlotSnapshot, now: datetime) -> CapturedAccessWindow:
     start = datetime.fromisoformat(cycle["started_at"]) if cycle["started_at"] else None
     end = datetime.fromisoformat(cycle["hard_expires_at"]) if cycle["hard_expires_at"] else None
     rearm = datetime.fromisoformat(cycle["rearm_at"]) if cycle["rearm_at"] else None
-    if rearm is None and end is not None and policy.rearm_enabled:
+    if rearm is None and end is not None:
         rearm = end + timedelta(seconds=policy.cooldown_seconds)
     return CapturedAccessWindow(policy, start, end, rearm)

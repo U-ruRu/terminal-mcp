@@ -35,7 +35,7 @@ class FleetControlError(RuntimeError):
 class FleetControlStore(TopologyTransitionStore):
     """Critical monotonic Fleet routing metadata; never owns slot/session truth."""
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(
         self,
@@ -277,6 +277,9 @@ class FleetControlStore(TopologyTransitionStore):
                         warning_after_seconds INTEGER NOT NULL CHECK(warning_after_seconds>0),
                         alert_after_seconds INTEGER NOT NULL CHECK(alert_after_seconds>0),
                         rearm_after_seconds INTEGER NOT NULL CHECK(rearm_after_seconds>0),
+                        rearm_enabled INTEGER NOT NULL DEFAULT 1 CHECK(rearm_enabled IN (0,1)),
+                        legacy_admission_enabled INTEGER NOT NULL DEFAULT 0
+                            CHECK(legacy_admission_enabled IN (0,1)),
                         revision INTEGER NOT NULL CHECK(revision>0),
                         updated_at TEXT NOT NULL
                     );
@@ -291,10 +294,13 @@ class FleetControlStore(TopologyTransitionStore):
                         await db.execute("PRAGMA table_info(access_policy)")
                     ).fetchall()
                 }
-                if "legacy_admission_enabled" in policy_columns:
-                    await db.execute(
-                        "ALTER TABLE access_policy DROP COLUMN legacy_admission_enabled"
-                    )
+                # Current policy adds independent initial admission and automatic rearm.
+                for name, default in (("rearm_enabled", 1), ("legacy_admission_enabled", 0)):
+                    if name not in policy_columns:
+                        await db.execute(
+                            f"ALTER TABLE access_policy ADD COLUMN {name} "
+                            f"INTEGER NOT NULL DEFAULT {default} CHECK({name} IN (0,1))"
+                        )
 
                 identity_columns = {
                     row[1]
@@ -495,15 +501,19 @@ class FleetControlStore(TopologyTransitionStore):
                     await db.execute(
                         "INSERT INTO access_policy("
                         "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
-                        "rearm_after_seconds,revision,updated_at"
-                        ") VALUES(1,?,?,?,?,?,?) "
+                        "rearm_after_seconds,rearm_enabled,legacy_admission_enabled,revision,updated_at"
+                        ") VALUES(1,?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(singleton) DO UPDATE SET "
                         "duration_seconds=excluded.duration_seconds,"
                         "warning_after_seconds=excluded.warning_after_seconds,"
                         "alert_after_seconds=excluded.alert_after_seconds,"
                         "rearm_after_seconds=excluded.rearm_after_seconds,"
+                        "rearm_enabled=excluded.rearm_enabled,"
+                        "legacy_admission_enabled=excluded.legacy_admission_enabled,"
                         "revision=excluded.revision,updated_at=excluded.updated_at",
-                        (duration, warning, alert, rearm, revision, stamp),
+                        (duration, warning, alert, rearm,
+                         int(policy.get("rearm_enabled", True)),
+                         int(policy.get("legacy_admission_enabled", False)), revision, stamp),
                     )
                 await db.commit()
             except Exception:
@@ -1005,9 +1015,12 @@ class FleetControlStore(TopologyTransitionStore):
                     await db.execute(
                         "INSERT INTO access_policy("
                         "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
-                        "rearm_after_seconds,revision,updated_at"
-                        ") VALUES(1,?,?,?,?,?,?)",
-                        (duration, warning, alert, rearm, policy_revision, stamp),
+                        "rearm_after_seconds,rearm_enabled,legacy_admission_enabled,revision,updated_at"
+                        ") VALUES(1,?,?,?,?,?,?,?,?)",
+                        (duration, warning, alert, rearm,
+                         int(policy.get("rearm_enabled", True)),
+                         int(policy.get("legacy_admission_enabled", False)),
+                         policy_revision, stamp),
                     )
 
                 for item in normalized:
@@ -1413,7 +1426,8 @@ class FleetControlStore(TopologyTransitionStore):
             row = await (
                 await db.execute(
                     "SELECT duration_seconds,warning_after_seconds,alert_after_seconds,"
-                    "rearm_after_seconds,revision,updated_at "
+                    "rearm_after_seconds,rearm_enabled,legacy_admission_enabled,"
+                    "revision,updated_at "
                     "FROM access_policy WHERE singleton=1"
                 )
             ).fetchone()
@@ -1424,8 +1438,10 @@ class FleetControlStore(TopologyTransitionStore):
             "warning_after_seconds": int(row[1]),
             "alert_after_seconds": int(row[2]),
             "rearm_after_seconds": int(row[3]),
-            "revision": int(row[4]),
-            "updated_at": row[5],
+            "rearm_enabled": bool(row[4]),
+            "legacy_admission_enabled": bool(row[5]),
+            "revision": int(row[6]),
+            "updated_at": row[7],
         }
 
     async def update_access_policy(
@@ -1435,10 +1451,14 @@ class FleetControlStore(TopologyTransitionStore):
         warning_after_seconds: int,
         alert_after_seconds: int,
         rearm_after_seconds: int,
+        rearm_enabled: bool = True,
+        legacy_admission_enabled: bool = False,
         expected_revision: int | None = None,
     ) -> dict:
         if self.node_id != self.control_node_id:
             raise FleetControlError("control_authority_required")
+        if type(rearm_enabled) is not bool or type(legacy_admission_enabled) is not bool:
+            raise ValueError("invalid access policy admission flags")
         duration = int(duration_seconds)
         warning = int(warning_after_seconds)
         alert = int(alert_after_seconds)
@@ -1452,23 +1472,24 @@ class FleetControlStore(TopologyTransitionStore):
                 row = await (
                     await db.execute(
                         "SELECT duration_seconds,warning_after_seconds,alert_after_seconds,"
-                        "rearm_after_seconds,revision "
+                        "rearm_after_seconds,rearm_enabled,legacy_admission_enabled,revision "
                         "FROM access_policy WHERE singleton=1"
                     )
                 ).fetchone()
                 if row is None:
                     raise FleetControlError("managed_access_policy_missing")
-                current_revision = int(row[4])
+                current_revision = int(row[6])
                 if expected_revision is not None and current_revision != int(expected_revision):
                     raise FleetControlError("access_policy_revision_conflict")
-                desired = (duration, warning, alert, rearm)
-                current = tuple(int(value) for value in row[:4])
+                desired = (duration, warning, alert, rearm, int(rearm_enabled),
+                           int(legacy_admission_enabled))
+                current = tuple(int(value) for value in row[:6])
                 if current != desired:
                     revision = await self._bump_revision(db, "policy", stamp)
                     await db.execute(
                         "UPDATE access_policy SET duration_seconds=?,"
                         "warning_after_seconds=?,alert_after_seconds=?,"
-                        "rearm_after_seconds=?,"
+                        "rearm_after_seconds=?,rearm_enabled=?,legacy_admission_enabled=?,"
                         "revision=?,updated_at=? WHERE singleton=1",
                         (*desired, revision, stamp),
                     )
@@ -1788,19 +1809,23 @@ class FleetControlStore(TopologyTransitionStore):
                 await db.execute(
                     "INSERT INTO access_policy("
                     "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
-                    "rearm_after_seconds,revision,updated_at"
-                    ") VALUES(1,?,?,?,?,?,?) "
+                    "rearm_after_seconds,rearm_enabled,legacy_admission_enabled,revision,updated_at"
+                    ") VALUES(1,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(singleton) DO UPDATE SET "
                     "duration_seconds=excluded.duration_seconds,"
                     "warning_after_seconds=excluded.warning_after_seconds,"
                     "alert_after_seconds=excluded.alert_after_seconds,"
                     "rearm_after_seconds=excluded.rearm_after_seconds,"
+                        "rearm_enabled=excluded.rearm_enabled,"
+                        "legacy_admission_enabled=excluded.legacy_admission_enabled,"
                     "revision=excluded.revision,updated_at=excluded.updated_at",
                     (
                         duration,
                         warning,
                         alert,
                         rearm,
+                        int(policy.get("rearm_enabled", True)),
+                        int(policy.get("legacy_admission_enabled", False)),
                         policy_revision,
                         stamp,
                     ),

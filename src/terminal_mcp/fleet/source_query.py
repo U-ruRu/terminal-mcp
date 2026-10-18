@@ -357,8 +357,10 @@ class FleetSourceQueryPlane:
             ) as db:
                 rows = await (
                     await db.execute(
-                        "SELECT logical_agent_id,agent_name,display_suffix,code_generation,state "
-                        "FROM access_mesh_slot_replicas WHERE state!='deleted'"
+                        "SELECT s.logical_agent_id,r.agent_name,r.display_suffix,"
+                        "r.code_generation,r.state FROM access_mesh_slot_replicas r "
+                        "JOIN access_mesh_sessions s ON s.issuer_id=r.issuer_id "
+                        "AND s.slot_id=r.slot_id"
                     )
                 ).fetchall()
         except aiosqlite.Error:

@@ -32,9 +32,10 @@ class LocalSlots:
             (
                 s
                 for s in self.slots.values()
-                if s.logical_agent_id in self.attached and s.logical_agent_id > after
+                if s.session.logical_agent_id in self.attached
+                and s.session.logical_agent_id > after
             ),
-            key=lambda s: s.logical_agent_id,
+            key=lambda s: s.session.logical_agent_id,
         )[:limit]
 
     def canonical_slot(self, slot):
@@ -60,7 +61,7 @@ class LocalSlots:
         }
         result = {
             "ok": True,
-            "logical_agent_id": slot.logical_agent_id,
+            "logical_agent_id": slot.session.logical_agent_id,
             "public_name": _public_name(slot),
             "cleanup_pending": False,
             "hard_expires_at": cycle["hard_expires_at"],
@@ -68,7 +69,8 @@ class LocalSlots:
         }
         if active:
             result.update(
-                work_session_id=f"ws-{self.local_node_id}-{slot.logical_agent_id}", session_epoch=1
+                work_session_id=f"ws-{self.local_node_id}-{slot.session.logical_agent_id}",
+                session_epoch=1,
             )
         return result
 
@@ -139,7 +141,7 @@ async def mesh_pair(tmp_path):
     now = datetime(2026, 10, 8, 10, tzinfo=UTC)
     slots = {
         name: SimpleNamespace(
-            logical_agent_id=name,
+            session=SimpleNamespace(logical_agent_id=name),
             issuer_id=issuer,
             slot_id=name,
             active=True,

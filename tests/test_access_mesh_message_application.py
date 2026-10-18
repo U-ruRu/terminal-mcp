@@ -8,6 +8,7 @@ import pytest
 
 from terminal_mcp.application import access_mesh_messages as application
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.access_mesh_grants import SessionSnapshot
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.storage.access_mesh_messages import AccessMeshMessageStore
 
@@ -16,7 +17,9 @@ NOW = datetime(2026, 10, 8, 10, tzinfo=UTC)
 
 @pytest.fixture
 def messages(monkeypatch):
-    slot = SimpleNamespace(logical_agent_id="receiver", issuer_id="node-a", slot_id="slot")
+    slot = SimpleNamespace(
+        session=SessionSnapshot("receiver"), issuer_id="node-a", slot_id="slot"
+    )
     slots = SimpleNamespace(
         local_node_id="node-a",
         namespace_id="standalone-node-a",

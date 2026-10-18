@@ -7,11 +7,15 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Start a session and obtain its four-digit session_number for binding the agent identity to the session, or end the session.",
+      "description": "Start a session using an optional existing four-digit session_number, or reuse this agent's saved session binding when the number is omitted. Legacy admission permits a new slot only when neither is available. End the current session with action='end'.",
       "inputSchema": {
         "properties": {
           "action": {
             "description": "start | end"
+          },
+          "session_number": {
+            "default": null,
+            "description": "string"
           }
         },
         "type": "object",

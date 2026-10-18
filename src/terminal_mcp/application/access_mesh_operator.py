@@ -34,7 +34,6 @@ class AccessMeshOperator:
         return {
             "issuer_node_id": slot.issuer_id,
             "slot_id": slot.slot_id,
-            "logical_agent_id": slot.logical_agent_id,
             "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "state": slot.state,
@@ -66,6 +65,10 @@ class AccessMeshOperator:
             "current_policy": asdict(capture.policy),
             "policy_applies_to": "next_session",
             "session_lifecycle": self.store.merged_cycle(slot, now),
+            "session": (
+                {"logical_agent_id": slot.session.logical_agent_id}
+                if slot.session is not None else None
+            ),
         }
 
     def _spec(self, actor, key, payload):
@@ -137,6 +140,7 @@ class AccessMeshOperator:
         policy=None,
         deadline_at=None,
         inherit_policy=None,
+        legacy_admission_enabled=None,
         expected_parent_revision=None,
     ):
         self.require_operator(actor, write=True)
@@ -161,6 +165,10 @@ class AccessMeshOperator:
             "deadline_at": deadline_at,
             **({"inherit_policy": inherit_policy} if inherit_policy is not None else {}),
             **(
+                {"legacy_admission_enabled": legacy_admission_enabled}
+                if legacy_admission_enabled is not None else {}
+            ),
+            **(
                 {"expected_parent_revision": expected_parent_revision}
                 if expected_parent_revision is not None
                 else {}
@@ -184,7 +192,7 @@ class AccessMeshOperator:
                     actor,
                     kind=mode,
                     policy=resolved,
-                    start=mode == "temporary",
+                    start=False,
                     receipt_spec=spec,
                     inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                 )
@@ -195,12 +203,18 @@ class AccessMeshOperator:
                 inherited = inherit_policy is True
                 base = current["inherited_policy"] if inherited else current["policy"]
                 resolved = self._policy(None if inherited else policy, SlotPolicy(**base))
+                legacy = (
+                    current["parent"]["legacy_admission_enabled"] if inherited else
+                    current["legacy_admission_enabled"] if legacy_admission_enabled is None else
+                    legacy_admission_enabled
+                )
                 result = {
                     "ok": True,
                     "issuer_node_id": self.store.local_node_id,
                     "slot_id": "defaults",
                     "revision": expected_revision + 1,
                     "policy": asdict(resolved),
+                    "legacy_admission_enabled": legacy,
                 }
                 receipt = self.store.prepare_receipt(event_id="defaults", result=result, **spec)
                 await asyncio.to_thread(
@@ -209,6 +223,7 @@ class AccessMeshOperator:
                     policy=asdict(resolved),
                     receipt=receipt,
                     inherit_policy=inherited,
+                    legacy_admission_enabled=legacy,
                     parent=current["parent"],
                 )
                 self.mesh.defaults = resolved

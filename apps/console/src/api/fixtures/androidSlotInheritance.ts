@@ -1,11 +1,11 @@
-// Generated from isolated candidate HTTP GET routes, 2026-10-12. No credentials or code receipts.
+// Synthetic current slot contracts based on isolated HTTP captures from 2026-10-12.
+// No credentials or code receipts.
 export const nativeInheritanceFixtures = {
   "standalone_initial": {
     "ok": true,
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_9kmtaBUk2TrNNtjm0HDDhId4",
-      "logical_agent_id": "la_firstbyte_m-rdz1x75V_SuzE0tNu-hXAc",
       "public_name": "Whiskey-237",
       "mode": "persistent",
       "state": "active",
@@ -71,6 +71,7 @@ export const nativeInheritanceFixtures = {
   "standalone_defaults": {
     "ok": true,
     "revision": 2,
+    "legacy_admission_enabled": false,
     "policy": {
       "cooldown_seconds": 60,
       "draining_seconds": 30,
@@ -136,7 +137,6 @@ export const nativeInheritanceFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_9kmtaBUk2TrNNtjm0HDDhId4",
-      "logical_agent_id": "la_firstbyte_m-rdz1x75V_SuzE0tNu-hXAc",
       "public_name": "Whiskey-237",
       "mode": "persistent",
       "state": "active",
@@ -204,7 +204,6 @@ export const nativeInheritanceFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_9kmtaBUk2TrNNtjm0HDDhId4",
-      "logical_agent_id": "la_firstbyte_m-rdz1x75V_SuzE0tNu-hXAc",
       "public_name": "Whiskey-237",
       "mode": "persistent",
       "state": "active",
@@ -279,7 +278,6 @@ export const nativeInheritanceFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_9kmtaBUk2TrNNtjm0HDDhId4",
-      "logical_agent_id": "la_firstbyte_m-rdz1x75V_SuzE0tNu-hXAc",
       "public_name": "Whiskey-237",
       "mode": "persistent",
       "state": "active",
@@ -345,6 +343,7 @@ export const nativeInheritanceFixtures = {
   "mesh_defaults": {
     "ok": true,
     "revision": 4,
+    "legacy_admission_enabled": false,
     "policy": {
       "cooldown_seconds": 180,
       "draining_seconds": 60,
@@ -405,7 +404,6 @@ export const nativeInheritanceFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_O9ghd74MnXI9xBtqou_y4rch",
-      "logical_agent_id": "la_firstbyte_czDc1EnaAe_oAgEe6xS3Op2D",
       "public_name": "India-340",
       "mode": "persistent",
       "state": "active",

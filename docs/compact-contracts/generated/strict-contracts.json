@@ -648,6 +648,19 @@
           ],
           "title": "Action",
           "type": "string"
+        },
+        "session_number": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9]{4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Number"
         }
       },
       "required": [

@@ -22,11 +22,15 @@ def seed_slot(store, *, active=False):
     with store._connect() as db:
         db.execute(
             "INSERT INTO access_mesh_slot_replicas "
-            "(issuer_id,slot_id,logical_agent_id,kind,state,revision,event_id,"
-            "policy_json,code_tag) "
-            "VALUES('a','slot-a','agent-a','persistent','suspended',7,'event-7',?,?)",
-            (json.dumps(asdict(SlotPolicy(10, 5))), store.code_tag("a", "1234")),
+            "(issuer_id,slot_id,kind,state,revision,event_id,policy_json,code_tag,created_at) "
+            "VALUES('a','slot-a','persistent','suspended',7,'event-7',?,?,?)",
+            (
+                json.dumps(asdict(SlotPolicy(10, 5))),
+                store.code_tag("a", "1234"),
+                store.clock().isoformat(),
+            ),
         )
+        db.execute("INSERT INTO access_mesh_sessions VALUES('a','slot-a','agent-a',1,NULL,NULL)")
         if active:
             db.execute(
                 "UPDATE access_mesh_slot_replicas SET state='active',anchor=?",
@@ -187,3 +191,22 @@ def test_handoff_cannot_import_another_mesh_namespace(tmp_path):
     target.install_registry_scope(mesh_id="mesh-y", authority_id="b")
     with pytest.raises(AccessMeshError, match="mesh_namespace_mismatch"):
         target.import_registry(source.export_registry())
+
+
+def test_mesh_parent_replaces_a_previous_node_default_override(tmp_path):
+    store = registry(tmp_path / "registry.db")
+    local = asdict(SlotPolicy(60, 10))
+    mesh = asdict(SlotPolicy(120, 20))
+    store.change_defaults(
+        expected_revision=1,
+        policy=local,
+        receipt=None,
+        inherit_policy=False,
+        parent={"source": "server", "policy": local, "revision": 1},
+    )
+    store.install_registry_scope(mesh_id="mesh-x", authority_id="a")
+    store.sync_parent_defaults(
+        {"source": "mesh", "policy": mesh, "revision": 7, "mesh_id": "mesh-x"}
+    )
+    assert store.defaults()["policy"] == mesh
+    assert store.defaults()["inherit_policy"]

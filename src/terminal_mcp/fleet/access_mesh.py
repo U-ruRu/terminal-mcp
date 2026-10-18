@@ -1072,6 +1072,7 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
             "active_from",
             "started_at",
             "hard_expires_at",
+            "revision",
         }:
             raise HTTPException(400, "invalid number start")
         if peer != mesh.store.registry_authority_id:
@@ -1158,7 +1159,9 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
     ):
         peer = authenticated(x_terminal_mcp_peer, authorization)
         bounded(payload)
-        if set(payload) != {"number", "cycle_key", "issuer_id", "slot_id", "event_id", "ended_at"}:
+        if set(payload) != {
+            "number", "cycle_key", "issuer_id", "slot_id", "event_id", "ended_at", "revision"
+        }:
             raise HTTPException(400, "invalid number end")
         if peer != mesh.store.registry_authority_id:
             raise HTTPException(400, "issuer does not match authenticated primary")

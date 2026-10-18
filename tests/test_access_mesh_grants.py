@@ -76,7 +76,7 @@ def test_connector_attachment_resolves_shared_logical_agent(replica):
 
     second = replica.attach(issuer_id="bacloud", code="9876", connection_key="coordinator")
 
-    assert second.logical_agent_id == first.logical_agent_id == "same-agent"
+    assert second.session.logical_agent_id == first.session.logical_agent_id == "same-agent"
 
     # No session.detach call and no repeat AC entry after local rearm.
 
@@ -90,9 +90,17 @@ def test_persistent_end_retains_claims(replica):
     assert result.release_claims is False
 
 
-def test_persistent_delete_releases_even_retained_claims(replica):
+def test_delete_removes_slot_session_and_attachment(replica):
     first = issued(replica, slot="persist", kind="persistent")
-    assert apply(replica, next_event(first, 2, "SlotDeleted")).release_claims
+    replica.attach(issuer_id="bacloud", code="1234", connection_key="attached")
+
+    result = apply(replica, next_event(first, 2, "SlotDeleted"))
+
+    assert result.release_claims
+    assert replica.slot("bacloud", "persist") is None
+    with replica._connect() as db:
+        assert db.execute("SELECT 1 FROM access_mesh_sessions").fetchone() is None
+        assert db.execute("SELECT 1 FROM access_mesh_attachments").fetchone() is None
 
 
 def test_suspension_fences_existing_attachment(replica):
@@ -156,3 +164,35 @@ def test_attachment_survives_store_reopen(tmp_path):
     restarted = LocalAccessMesh(path, **kwargs)
 
     assert restarted.may_write(connection_key="provider-1", now=T0)
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_terminal_delete_applies_without_a_current_replica_snapshot(replica, existing):
+    if existing:
+        issued(replica)
+    deletion = AccessSlotEvent("bacloud", "slot-1", None, 5, "terminal-delete", "SlotDeleted")
+
+    result = apply(replica, deletion)
+
+    assert result.outcome == "applied"
+    assert replica.slot("bacloud", "slot-1") is None
+    with replica._connect() as db:
+        assert (
+            db.execute(
+                "SELECT revision FROM access_mesh_event_log WHERE event_id='terminal-delete'"
+            ).fetchone()[0]
+            == 5
+        )
+
+
+def test_old_delete_cannot_remove_a_newer_slot_projection(replica):
+    issued(replica)
+    with replica._connect() as db:
+        db.execute("UPDATE access_mesh_slot_replicas SET revision=4,event_id='newer'")
+
+    result = apply(
+        replica, AccessSlotEvent("bacloud", "slot-1", None, 3, "old-delete", "SlotDeleted")
+    )
+
+    assert result.outcome == "stale"
+    assert replica.slot("bacloud", "slot-1").revision == 4

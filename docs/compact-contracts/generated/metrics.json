@@ -3,19 +3,19 @@
     "access": {
       "after": {
         "component_byte_shares": {
-          "descriptions": 0.838241,
-          "input_schemas": 0.013002,
-          "output_schemas": 0.013002
+          "descriptions": 0.86217,
+          "input_schemas": 0.011079,
+          "output_schemas": 0.011079
         },
         "component_utf8_bytes": {
-          "descriptions": 2192,
+          "descriptions": 2646,
           "input_schemas": 34,
           "output_schemas": 34
         },
         "serialized_tools_list": {
-          "characters": 2615,
-          "tokens": 614,
-          "utf8_bytes": 2615
+          "characters": 3069,
+          "tokens": 703,
+          "utf8_bytes": 3069
         },
         "tools": {
           "get_events": {
@@ -39,11 +39,11 @@
             "utf8_bytes": 1504
           },
           "session": {
-            "characters": 1098,
+            "characters": 1552,
             "description": {
-              "characters": 895,
-              "tokens": 206,
-              "utf8_bytes": 895
+              "characters": 1349,
+              "tokens": 295,
+              "utf8_bytes": 1349
             },
             "input_schema": {
               "characters": 17,
@@ -55,26 +55,26 @@
               "tokens": 5,
               "utf8_bytes": 17
             },
-            "tokens": 252,
-            "utf8_bytes": 1098
+            "tokens": 341,
+            "utf8_bytes": 1552
           }
         }
       },
       "before": {
         "component_byte_shares": {
-          "descriptions": 0.151341,
-          "input_schemas": 0.29272,
-          "output_schemas": 0.419923
+          "descriptions": 0.187411,
+          "input_schemas": 0.293634,
+          "output_schemas": 0.391989
         },
         "component_utf8_bytes": {
-          "descriptions": 395,
-          "input_schemas": 764,
+          "descriptions": 524,
+          "input_schemas": 821,
           "output_schemas": 1096
         },
         "serialized_tools_list": {
-          "characters": 2610,
-          "tokens": 602,
-          "utf8_bytes": 2610
+          "characters": 2796,
+          "tokens": 637,
+          "utf8_bytes": 2796
         },
         "tools": {
           "get_events": {
@@ -98,45 +98,45 @@
             "utf8_bytes": 1422
           },
           "session": {
-            "characters": 1175,
+            "characters": 1361,
             "description": {
-              "characters": 125,
-              "tokens": 25,
-              "utf8_bytes": 125
+              "characters": 254,
+              "tokens": 49,
+              "utf8_bytes": 254
             },
             "input_schema": {
-              "characters": 364,
-              "tokens": 94,
-              "utf8_bytes": 364
+              "characters": 421,
+              "tokens": 105,
+              "utf8_bytes": 421
             },
             "output_schema": {
               "characters": 517,
               "tokens": 120,
               "utf8_bytes": 517
             },
-            "tokens": 276,
-            "utf8_bytes": 1175
+            "tokens": 311,
+            "utf8_bytes": 1361
           }
         }
       },
       "delta": {
         "characters": {
-          "after": 2615,
-          "before": 2610,
-          "change_pct": 0.192,
-          "delta": 5
+          "after": 3069,
+          "before": 2796,
+          "change_pct": 9.764,
+          "delta": 273
         },
         "tokens": {
-          "after": 614,
-          "before": 602,
-          "change_pct": 1.993,
-          "delta": 12
+          "after": 703,
+          "before": 637,
+          "change_pct": 10.361,
+          "delta": 66
         },
         "utf8_bytes": {
-          "after": 2615,
-          "before": 2610,
-          "change_pct": 0.192,
-          "delta": 5
+          "after": 3069,
+          "before": 2796,
+          "change_pct": 9.764,
+          "delta": 273
         }
       },
       "per_tool_delta": {
@@ -162,22 +162,22 @@
         },
         "session": {
           "characters": {
-            "after": 1098,
-            "before": 1175,
-            "change_pct": -6.553,
-            "delta": -77
+            "after": 1552,
+            "before": 1361,
+            "change_pct": 14.034,
+            "delta": 191
           },
           "tokens": {
-            "after": 252,
-            "before": 276,
-            "change_pct": -8.696,
-            "delta": -24
+            "after": 341,
+            "before": 311,
+            "change_pct": 9.646,
+            "delta": 30
           },
           "utf8_bytes": {
-            "after": 1098,
-            "before": 1175,
-            "change_pct": -6.553,
-            "delta": -77
+            "after": 1552,
+            "before": 1361,
+            "change_pct": 14.034,
+            "delta": 191
           }
         }
       }
@@ -1391,22 +1391,22 @@
   "serialization": "json.dumps(sort_keys=True,separators=(',', ':'),ensure_ascii=False)",
   "three_catalogs_total": {
     "characters": {
-      "after": 48294,
-      "before": 64099,
-      "change_pct": -24.657,
-      "delta": -15805
+      "after": 48748,
+      "before": 64285,
+      "change_pct": -24.169,
+      "delta": -15537
     },
     "tokens": {
-      "after": 11206,
-      "before": 15216,
-      "change_pct": -26.354,
-      "delta": -4010
+      "after": 11295,
+      "before": 15251,
+      "change_pct": -25.939,
+      "delta": -3956
     },
     "utf8_bytes": {
-      "after": 48298,
-      "before": 64099,
-      "change_pct": -24.651,
-      "delta": -15801
+      "after": 48752,
+      "before": 64285,
+      "change_pct": -24.163,
+      "delta": -15533
     }
   },
   "tokenizer": "tiktoken==0.12.0 / cl100k_base"

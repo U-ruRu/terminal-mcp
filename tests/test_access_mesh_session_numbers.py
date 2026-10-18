@@ -35,7 +35,6 @@ def test_collision_selects_latest_identity_with_maximum_deadline(registry):
         number="0001",
         issuer_id="a",
         slot_id="s1",
-        logical_agent_id="la_a",
         started_at=T0,
         hard_expires_at=T0 + timedelta(minutes=10),
     )
@@ -43,13 +42,12 @@ def test_collision_selects_latest_identity_with_maximum_deadline(registry):
         number="0001",
         issuer_id="b",
         slot_id="s2",
-        logical_agent_id="la_b",
         started_at=T0 + timedelta(minutes=1),
         hard_expires_at=T0 + timedelta(minutes=4),
     )
     registry.register(**a)
     assert registry.register(**b)["collisions"] == 1
-    assert registry.winner("0001")["logical_agent_id"] == "la_b"
+    assert registry.winner("0001")["slot_id"] == "s2"
     assert registry.winner("0001")["hard_expires_at"] == registry.stamp(a["hard_expires_at"])
 
 
@@ -59,11 +57,10 @@ def test_timestamp_tie_uses_stable_issuer_and_slot_order(registry):
             number="1234",
             issuer_id=issuer,
             slot_id=slot,
-            logical_agent_id="la_" + issuer,
             started_at=T0,
             hard_expires_at=T0 + timedelta(minutes=5),
         )
-    assert registry.winner("1234")["logical_agent_id"] == "la_b"
+    assert registry.winner("1234")["slot_id"] == "2"
 
 
 def test_claims_survive_store_reopen(tmp_path):
@@ -78,41 +75,14 @@ def test_claims_survive_store_reopen(tmp_path):
         number="0037",
         issuer_id="one",
         slot_id="slot",
-        logical_agent_id="la_one",
         started_at=T0,
         hard_expires_at=T0 + timedelta(minutes=23),
     )
     reopened = AccessMeshStore(path, **kwargs)
-    assert reopened.numbers.winner("0037")["logical_agent_id"] == "la_one"
+    assert reopened.numbers.winner("0037")["slot_id"] == "slot"
     assert reopened.numbers.winner("0037")["hard_expires_at"] == reopened.numbers.stamp(
         T0 + timedelta(minutes=23)
     )
-
-
-def test_recycled_number_forms_new_identity_epoch_and_retains_old_history(registry):
-    old = dict(
-        number="0789",
-        issuer_id="a",
-        slot_id="old",
-        logical_agent_id="historical-agent",
-        started_at=T0,
-        hard_expires_at=T0 + timedelta(minutes=5),
-    )
-    new = dict(
-        number="0789",
-        issuer_id="b",
-        slot_id="new",
-        logical_agent_id="new-agent",
-        started_at=T0 + timedelta(minutes=6),
-        hard_expires_at=T0 + timedelta(minutes=10),
-    )
-    registry.register(**old)
-    fresh = registry.register(**new)
-    assert fresh["collisions"] == 0
-    assert registry.winner("0789")["logical_agent_id"] == "new-agent"
-    assert registry.winner("0789")["hard_expires_at"] == registry.stamp(new["hard_expires_at"])
-    assert registry.group_winner("a", "old")["logical_agent_id"] == "historical-agent"
-    assert registry.group_winner("b", "new")["logical_agent_id"] == "new-agent"
 
 
 def test_transitive_overlap_chooses_latest_started_and_merged_deadline(registry):
@@ -125,12 +95,11 @@ def test_transitive_overlap_chooses_latest_started_and_merged_deadline(registry)
             number="0765",
             issuer_id=issuer,
             slot_id=slot,
-            logical_agent_id=f"la-{slot}",
             started_at=T0 + timedelta(minutes=start),
             hard_expires_at=T0 + timedelta(minutes=deadline),
         )
-    assert registry.winner("0765")["logical_agent_id"] == "la-C"
-    assert registry.group_winner("a", "A")["logical_agent_id"] == "la-C"
+    assert registry.winner("0765")["slot_id"] == "C"
+    assert registry.group_winner("a", "A")["slot_id"] == "C"
     assert registry.group_winner("b", "B")["hard_expires_at"] == registry.stamp(
         T0 + timedelta(minutes=17)
     )
@@ -142,6 +111,7 @@ def test_start_replay_is_exact_and_cannot_shift_activation_timestamp(registry):
         "issuer_id": "a",
         "slot_id": "slot",
         "event_id": "ae_epoch_start",
+        "revision": 2,
         "active_from": T0,
         "started_at": T0,
         "hard_expires_at": T0 + timedelta(minutes=5),

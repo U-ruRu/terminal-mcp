@@ -36,6 +36,8 @@ const control = (nodeId: string, revision = 4): ManagedFleetControlReadModel => 
     warningAfterSeconds: 1200,
     alertAfterSeconds: 1320,
     rearmAfterSeconds: 180,
+    rearmEnabled: true,
+    legacyAdmissionEnabled: false,
     revision,
     updatedAt: '2026-10-02T06:00:00Z',
   },

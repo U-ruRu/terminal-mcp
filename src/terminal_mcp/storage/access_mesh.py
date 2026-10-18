@@ -21,10 +21,10 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from terminal_mcp.core.access_mesh_grants import (
-    ACCESS_MESH_SCHEMA_VERSION,
     AccessMeshError,
     AccessSlotEvent,
     LocalAccessMesh,
+    SessionSnapshot,
     SlotPolicy,
     SlotSnapshot,
     _parse,
@@ -229,7 +229,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             return
         if (
             not snapshot_required
-            and actual_version >= ACCESS_MESH_SCHEMA_VERSION
+            and actual_version >= 26
             and {"inherit_policy", "parent_json"} <= columns
         ):
             return
@@ -310,13 +310,19 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             ) WITHOUT ROWID""")
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_operator_defaults (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL,
-                policy_json TEXT NOT NULL
+                policy_json TEXT NOT NULL,
+                legacy_admission_enabled INTEGER NOT NULL DEFAULT 0
+                CHECK(legacy_admission_enabled IN (0,1))
             )""")
             default_columns = {
                 row[1] for row in db.execute("PRAGMA table_info(access_mesh_operator_defaults)")
             }
-            if "legacy_enabled" in default_columns:
-                db.execute("ALTER TABLE access_mesh_operator_defaults DROP COLUMN legacy_enabled")
+            if "legacy_admission_enabled" not in default_columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_operator_defaults ADD COLUMN "
+                    "legacy_admission_enabled INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK(legacy_admission_enabled IN (0,1))"
+                )
             if "inherit_policy" not in default_columns:
                 db.execute(
                     "ALTER TABLE access_mesh_operator_defaults "
@@ -337,7 +343,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 INSERT OR IGNORE INTO access_mesh_slot_catalog(issuer_id,slot_id)
                 VALUES(NEW.issuer_id,NEW.slot_id); END""")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS access_mesh_live_code_unique
-                ON access_mesh_slot_replicas(issuer_id,code_tag) WHERE state!='deleted'""")
+                ON access_mesh_slot_replicas(issuer_id,code_tag)""")
 
     def human_name(self, slot: SlotSnapshot, *, short=False) -> str:
         name = slot.agent_name
@@ -353,18 +359,20 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         return slot.kind == "temporary" or slot.policy.release_on_end is True
 
     def _native_slot(self, db, slot: SlotSnapshot, stamp: str) -> None:
+        if slot.session is None:
+            return
         existing = db.execute(
             "SELECT authority_node_id FROM logical_agents WHERE logical_agent_id=?",
-            (slot.logical_agent_id,),
+            (slot.session.logical_agent_id,),
         ).fetchone()
         conflicting = db.execute(
-            "SELECT 1 FROM access_mesh_slot_replicas WHERE logical_agent_id=? "
+            "SELECT 1 FROM access_mesh_sessions WHERE logical_agent_id=? "
             "AND (issuer_id!=? OR slot_id!=?)",
-            (slot.logical_agent_id, slot.issuer_id, slot.slot_id),
+            (slot.session.logical_agent_id, slot.issuer_id, slot.slot_id),
         ).fetchone()
         owner = db.execute(
             "SELECT issuer_id,slot_id FROM access_mesh_native_owners WHERE logical_agent_id=?",
-            (slot.logical_agent_id,),
+            (slot.session.logical_agent_id,),
         ).fetchone()
         returning = False
         if (
@@ -379,7 +387,12 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     "SELECT 1 FROM mesh_identity_history WHERE namespace_id=? "
                     "AND logical_agent_id=? "
                     "AND issuer_id=? AND slot_id=?",
-                    (self.namespace_id, slot.logical_agent_id, slot.issuer_id, slot.slot_id),
+                    (
+                        self.namespace_id,
+                        slot.session.logical_agent_id,
+                        slot.issuer_id,
+                        slot.slot_id,
+                    ),
                 ).fetchone()
                 is not None
             )
@@ -393,7 +406,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         db.execute(
             "INSERT INTO access_mesh_native_owners VALUES(?,?,?) "
             "ON CONFLICT(logical_agent_id) DO NOTHING",
-            (slot.logical_agent_id, slot.issuer_id, slot.slot_id),
+            (slot.session.logical_agent_id, slot.issuer_id, slot.slot_id),
         )
         db.execute(
             """INSERT INTO logical_agents (
@@ -401,7 +414,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             slot_revision,selector_generation,auth_generation,created_at,updated_at)
             VALUES(?,?,'armed',?,1,1,1,1,?,?) ON CONFLICT(logical_agent_id) DO NOTHING""",
             (
-                slot.logical_agent_id,
+                slot.session.logical_agent_id,
                 full_agent_name(slot.agent_name, slot.display_suffix)
                 if slot.agent_name
                 else "Agent name unavailable",
@@ -415,23 +428,24 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 "UPDATE logical_agents SET state='armed',deleted_at=NULL,"
                 "tombstone_reason=NULL,updated_at=? "
                 "WHERE logical_agent_id=?",
-                (stamp, slot.logical_agent_id),
+                (stamp, slot.session.logical_agent_id),
             )
-        if slot.state in {"deleted", "suspended"}:
+        if slot.state == "suspended":
             db.execute(
-                "UPDATE logical_agents SET state=?,updated_at=?,deleted_at=? "
+                "UPDATE logical_agents SET state=?,updated_at=?,deleted_at=NULL "
                 "WHERE logical_agent_id=?",
                 (
                     slot.state,
                     stamp,
-                    stamp if slot.state == "deleted" else None,
-                    slot.logical_agent_id,
+                    slot.session.logical_agent_id,
                 ),
             )
 
     def _queue_cleanup(
         self, db, slot: SlotSnapshot, *, job_id: str, reason: str, stamp: str, release_claims: bool
     ) -> None:
+        if slot.session is None:
+            return
         current = db.execute(
             "SELECT l.*,s.hard_expires_at FROM access_mesh_local_sessions l "
             "LEFT JOIN logical_agent_work_sessions s USING(work_session_id) "
@@ -440,17 +454,26 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         ).fetchone()
         session_id = current["work_session_id"] if current else None
         epoch = current["session_epoch"] if current else None
+        ended_at = stamp
+        if reason == "local_cycle_ended" and current is not None and current["hard_expires_at"]:
+            ended_at = min(stamp, current["hard_expires_at"])
         if session_id:
             db.execute(
                 "UPDATE logical_agent_work_sessions SET state='ended',ended_at=?,"
                 "end_reason=? WHERE work_session_id=? AND state IN ('active','stopping')",
                 (
-                    stamp,
+                    ended_at,
                     session_end_reason(
-                        reason, ended_at=stamp, hard_expires_at=current["hard_expires_at"]
+                        reason, ended_at=ended_at, hard_expires_at=current["hard_expires_at"]
                     ),
                     session_id,
                 ),
+            )
+            db.execute(
+                "UPDATE access_mesh_slot_replicas SET last_used_at=MAX(COALESCE(last_used_a"
+                "t,''),?) "
+                "WHERE issuer_id=? AND slot_id=?",
+                (ended_at, slot.issuer_id, slot.slot_id),
             )
         db.execute(
             """INSERT INTO access_mesh_cleanup_jobs
@@ -461,7 +484,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 job_id,
                 slot.issuer_id,
                 slot.slot_id,
-                slot.logical_agent_id,
+                slot.session.logical_agent_id,
                 session_id,
                 epoch,
                 int(release_claims),
@@ -475,8 +498,12 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
             (event.issuer_id, event.slot_id),
         ).fetchone()
-        slot = self._snapshot(row)
-        stamp = _text(self.clock())
+        slot = self._snapshot(row, _connection=db)
+        stamp = _text(
+            event.effective_at
+            if event.kind in {"SessionEnded", "SlotSuspended"} and event.effective_at is not None
+            else self.clock()
+        )
         self._native_slot(db, slot, stamp)
         number = _mutation_number.get()
         if event.kind == "SlotIssued" and number is not None:
@@ -490,13 +517,12 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 raise AccessMeshError("access_mesh_subscription_hold")
             db.execute(
                 "INSERT INTO access_mesh_number_claims "
-                "(issuer_id,slot_id,number,logical_agent_id,started_at,hard_expires_at) "
-                "VALUES(?,?,?,?,?,?)",
+                "(issuer_id,slot_id,number,started_at,hard_expires_at) "
+                "VALUES(?,?,?,?,?)",
                 (
                     event.issuer_id,
                     event.slot_id,
                     number["number"],
-                    event.logical_agent_id,
                     _text(started),
                     _text(expires),
                 ),
@@ -508,7 +534,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         ending = _mutation_end.get()
         if event.kind == "SessionEnded" and ending is not None:
             db.execute(
-                "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?,?)",
                 (
                     ending["number"],
                     ending["cycle_key"],
@@ -516,6 +542,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     event.slot_id,
                     event.event_id,
                     _text(event.effective_at),
+                    event.revision,
                 ),
             )
         if event.kind == "SessionStarted":
@@ -524,16 +551,12 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 (event.issuer_id, event.slot_id),
             ).fetchone()
             start_data = _mutation_start.get()
-            # A relayed SessionStarted event carries the original window anchor
-            # but not the manual activation time. Never invent active_from using
-            # the receiver's clock: /numbers/starts carries issuer-authored time.
-            # A local native start without the extra metadata still records its
-            # immutable event timestamp to preserve its existing contract.
-            if previous and (start_data is not None or event.issuer_id == self.local_node_id):
-                # For the local native lifecycle retain the original behavior:
-                # a new activation uses the actual write clock, even when the
-                # SessionStarted event resumes an older window anchor.
-                active_from = (start_data or {}).get("active_from") or self.clock()
+            # Replicas use the activation time and revision authored by the
+            # issuer, including an early resume of the existing window.
+            if previous:
+                active_from = (
+                    event.active_from or (start_data or {}).get("active_from") or event.effective_at
+                )
                 started_at = event.effective_at or active_from
                 expires = event.deadline_at or (
                     started_at + timedelta(seconds=slot.policy.duration_seconds)
@@ -541,7 +564,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 db.execute(
                     "INSERT OR IGNORE INTO access_mesh_number_starts "
                     "(event_id,number,issuer_id,slot_id,active_from,"
-                    "started_at,hard_expires_at) VALUES(?,?,?,?,?,?,?)",
+                    "started_at,hard_expires_at,revision) VALUES(?,?,?,?,?,?,?,?)",
                     (
                         event.event_id,
                         previous["number"],
@@ -550,6 +573,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                         _text(active_from),
                         _text(started_at),
                         _text(expires),
+                        event.revision,
                     ),
                 )
         receipt = _mutation_receipt.get()
@@ -606,66 +630,122 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 job_id=job_id,
                 reason="replicated_cycle_fence",
                 stamp=stamp,
-                release_claims=slot.state == "deleted" or self._release_at_end(slot),
+                release_claims=self._release_at_end(slot),
             )
 
     def _prepare_new_slot(self, db, event: AccessSlotEvent) -> None:
-        """Release a fully expired, non-rearmable grant in the issuance tx.
-
-        Historic slot and agent attribution remain in durable storage while
-        active code uniqueness is reclaimed for the new lifecycle.
-        """
+        """A slot keeps its number until an explicit physical deletion."""
         if not event.code_tag:
             return
-        rows = db.execute(
-            "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? "
-            "AND code_tag=? AND state!='deleted' AND slot_id!=?",
-            (event.issuer_id, event.code_tag, event.slot_id),
-        ).fetchall()
-        now = self.clock()
-        for row in rows:
-            previous = self._snapshot(row)
-            start = previous.anchor
-            end = previous.deadline_at or (
-                start + timedelta(seconds=previous.policy.duration_seconds)
-                if start is not None
-                else None
-            )
-            from terminal_mcp.storage.access_mesh_recipient_holds import slot_held
-
-            if slot_held(db, previous.issuer_id, previous.slot_id):
-                raise AccessMeshError("access_mesh_subscription_hold")
-            if previous.policy.rearm_enabled or end is None or now < end:
-                raise AccessMeshError("access_mesh_code_in_use")
+        if (
             db.execute(
-                "UPDATE access_mesh_slot_replicas SET state='deleted' "
-                "WHERE issuer_id=? AND slot_id=?",
-                (previous.issuer_id, previous.slot_id),
-            )
-            old = self._snapshot(
-                db.execute(
-                    "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
-                    (previous.issuer_id, previous.slot_id),
-                ).fetchone()
-            )
-            stamp = _text(now)
-            self._native_slot(db, old, stamp)
-            self._queue_cleanup(
-                db,
-                old,
-                job_id=f"recycle:{event.issuer_id}:{event.event_id}",
-                reason="expired_session_number_recycled",
-                stamp=stamp,
-                release_claims=True,
-            )
+                "SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? "
+                "AND code_tag=? AND slot_id!=?",
+                (event.issuer_id, event.code_tag, event.slot_id),
+            ).fetchone()
+            is not None
+        ):
+            raise AccessMeshError("access_mesh_code_in_use")
 
     def _before_slot_update(self, db, old, *, state, code_tag):
         from terminal_mcp.storage.access_mesh_recipient_holds import slot_held
 
-        if (state == "deleted" or code_tag != old["code_tag"]) and slot_held(
-            db, old["issuer_id"], old["slot_id"]
-        ):
+        if code_tag != old["code_tag"] and slot_held(db, old["issuer_id"], old["slot_id"]):
             raise AccessMeshError("access_mesh_subscription_hold")
+
+    def _purge_slot(self, db, slot: SlotSnapshot) -> None:
+        """Delete the slot's current storage while retaining command and event history."""
+        key = (slot.issuer_id, slot.slot_id)
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "access_mesh_activity" in tables:
+            db.execute(
+                "DELETE FROM access_mesh_activity WHERE connection_key IN "
+                "(SELECT connection_key FROM access_mesh_attachments WHERE issuer_id=? AND "
+                "slot_id=?)",
+                key,
+            )
+        if slot.session is not None:
+            agent = (slot.session.logical_agent_id,)
+            for table in (
+                "logical_agent_rearms",
+                "logical_agent_node_attachments",
+                "persistent_command_permits",
+                "logical_agent_work_windows",
+                "logical_agent_work_sessions",
+            ):
+                if table in tables:
+                    db.execute(f"DELETE FROM {table} WHERE logical_agent_id=?", agent)
+            if "logical_agents" in tables:
+                db.execute(
+                    "UPDATE logical_agents SET state='suspended',updated_at=? WHERE "
+                    "logical_agent_id=?",
+                    (_text(self.clock()), *agent),
+                )
+        for table in (
+            "access_mesh_local_sessions",
+            "access_mesh_issuer_bindings",
+            "access_mesh_native_owners",
+            "access_mesh_number_claims",
+            "access_mesh_number_starts",
+            "access_mesh_number_ends",
+            "access_mesh_recipient_holds",
+            "access_mesh_slot_catalog",
+        ):
+            if table in tables:
+                db.execute(f"DELETE FROM {table} WHERE issuer_id=? AND slot_id=?", key)
+        super()._purge_slot(db, slot)
+
+    def _slot_unused(self, db, slot: SlotSnapshot, *, before: datetime, now: datetime) -> bool:
+        if not super()._slot_unused(db, slot, before=before, now=now):
+            return False
+        return (
+            db.execute(
+                "SELECT 1 FROM access_mesh_local_sessions l JOIN logical_agent_work_sessions s "
+                "USING(work_session_id) WHERE l.issuer_id=? AND l.slot_id=? "
+                "AND s.state IN ('active','stopping') AND s.hard_expires_at>? LIMIT 1",
+                (slot.issuer_id, slot.slot_id, _text(now)),
+            ).fetchone()
+            is None
+        )
+
+    def expired_unused_slots(
+        self, *, now: datetime, after: str = "", limit: int = 50
+    ) -> list[SlotSnapshot]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise AccessMeshError("access_mesh_invalid_limit")
+        before = _utc(now) - timedelta(hours=72)
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT r.* FROM access_mesh_slot_replicas r "
+                "LEFT JOIN access_mesh_sessions identity USING(issuer_id,slot_id) WHERE "
+                "r.slot_id>? "
+                "AND MAX(julianday(COALESCE(r.last_used_at,r.created_at)),COALESCE(julianday("
+                "CASE WHEN identity.active=0 THEN identity.ended_at "
+                "WHEN identity.active=1 AND r.state='active' THEN "
+                "COALESCE(json_extract(r.policy_window_json,'$.hard_expires_at'),r.deadline_at,"
+                "datetime(r.anchor,'+'||json_extract(r.policy_json,'$.duration_seconds')||'"
+                " seconds')) END),0))<=julianday(?) "
+                "AND NOT EXISTS(SELECT 1 FROM access_mesh_sessions ss WHERE "
+                "ss.issuer_id=r.issuer_id "
+                "AND ss.slot_id=r.slot_id AND ss.active=1 AND r.state='active' "
+                "AND julianday(COALESCE(json_extract(r.policy_window_json,'$.hard_expires_a"
+                "t'),r.deadline_at,"
+                "datetime(r.anchor,'+'||json_extract(r.policy_json,'$.duration_seconds')||'"
+                " seconds')))>julianday(?)) "
+                "AND NOT EXISTS(SELECT 1 FROM access_mesh_local_sessions l "
+                "JOIN logical_agent_work_sessions s USING(work_session_id) "
+                "WHERE l.issuer_id=r.issuer_id AND l.slot_id=r.slot_id "
+                "AND s.state IN ('active','stopping') AND s.hard_expires_at>?) "
+                "ORDER BY r.slot_id LIMIT ?",
+                (after, _text(before), _text(now), _text(now), limit),
+            ).fetchall()
+            return [
+                slot
+                for row in rows
+                if self._slot_unused(
+                    db, slot := self._snapshot(row, _connection=db), before=before, now=now
+                )
+            ]
 
     def apply_event(
         self,
@@ -699,7 +779,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     with self._connect() as db:
                         duplicate = db.execute(
                             "SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? "
-                            "AND code_tag=? AND state!='deleted'",
+                            "AND code_tag=?",
                             (event.issuer_id, event.code_tag),
                         ).fetchone()
                     if duplicate is not None:
@@ -789,7 +869,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             placeholders = ",".join("?" for _ in tags)
             rows = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas "
-                f"WHERE issuer_id=? AND code_tag IN ({placeholders}) AND state!='deleted'",
+                f"WHERE issuer_id=? AND code_tag IN ({placeholders})",
                 (issuer_id, *tags),
             ).fetchall()
         if len(rows) > 1:
@@ -799,7 +879,8 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
     def slot_for_agent(self, logical_agent_id: str) -> SlotSnapshot | None:
         with self._connect() as db:
             row = db.execute(
-                "SELECT * FROM access_mesh_slot_replicas WHERE logical_agent_id=?",
+                "SELECT r.* FROM access_mesh_sessions s JOIN access_mesh_slot_replicas r "
+                "USING(issuer_id,slot_id) WHERE s.logical_agent_id=?",
                 (logical_agent_id,),
             ).fetchone()
         return self._snapshot(row) if row else None
@@ -831,14 +912,32 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         return slot
 
     def touch(self, connection_key: str, *, now: datetime | None = None) -> None:
-        stamp = _text(now or datetime.now(UTC))
+        stamp = _text(now or self.clock())
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 """INSERT INTO access_mesh_activity
                 (connection_key,attached_at,last_active_at)
                 SELECT connection_key,?,? FROM access_mesh_attachments WHERE connection_key=?
                 ON CONFLICT(connection_key) DO UPDATE SET last_active_at=excluded.last_active_at""",
                 (stamp, stamp, connection_key),
+            )
+            db.execute(
+                "UPDATE access_mesh_slot_replicas SET last_used_at=MAX(COALESCE(last_used_a"
+                "t,''),?) "
+                "WHERE (issuer_id,slot_id) IN (SELECT issuer_id,slot_id FROM "
+                "access_mesh_attachments "
+                "WHERE connection_key=?)",
+                (stamp, connection_key),
+            )
+
+    def touch_slot(self, issuer_id: str, slot_id: str, *, now: datetime | None = None) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE access_mesh_slot_replicas SET last_used_at=MAX(COALESCE(last_used_a"
+                "t,''),?) "
+                "WHERE issuer_id=? AND slot_id=?",
+                (_text(now or self.clock()), issuer_id, slot_id),
             )
 
     def intent_status(
@@ -963,17 +1062,19 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 "MAX(y.last_active_at) AS last_activity FROM attachment_map a "
                 "LEFT JOIN access_mesh_activity y USING(connection_key) "
                 "GROUP BY a.issuer_id,a.slot_id) "
-                "SELECT r.*,l.work_session_id,l.session_epoch,l.current_intent,"
+                "SELECT r.*,i.logical_agent_id AS session_agent_id,l.work_session_id,l.sess"
+                "ion_epoch,l.current_intent,"
                 "l.intent_updated_at,s.state AS work_state,s.started_at AS work_started,"
                 "s.hard_expires_at AS work_expiry,g.display_name,p.last_activity "
                 "FROM access_mesh_slot_replicas r "
+                "JOIN access_mesh_sessions i USING(issuer_id,slot_id) "
                 "JOIN local_presence p USING(issuer_id,slot_id) "
                 "LEFT JOIN access_mesh_local_sessions l USING(issuer_id,slot_id) "
                 "LEFT JOIN logical_agent_work_sessions s USING(work_session_id) "
-                "LEFT JOIN logical_agents g ON g.logical_agent_id=r.logical_agent_id "
-                "WHERE r.logical_agent_id>? AND (? IS NULL OR r.logical_agent_id=?) "
+                "LEFT JOIN logical_agents g ON g.logical_agent_id=i.logical_agent_id "
+                "WHERE i.logical_agent_id>? AND (? IS NULL OR i.logical_agent_id=?) "
                 "AND (? OR (r.state='active' AND s.state='active' AND s.hard_expires_at>?)) "
-                "ORDER BY r.logical_agent_id LIMIT ? OFFSET ?",
+                "ORDER BY i.logical_agent_id LIMIT ? OFFSET ?",
                 (
                     after,
                     logical_agent_id,
@@ -988,7 +1089,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             result = []
             row_offsets = []
             for index, row in enumerate(scanned, start=offset + 1):
-                slot = self._snapshot(row)
+                slot = self._snapshot(row, _connection=db)
                 cycle = self.merged_cycle(slot, now)
                 live = cycle["state"] in {"active", "warning", "draining"}
                 if not include_inactive and not live:
@@ -999,7 +1100,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 expiry = row["work_expiry"] or cycle["hard_expires_at"]
                 result.append(
                     {
-                        "logical_agent_id": slot.logical_agent_id,
+                        "logical_agent_id": slot.session.logical_agent_id,
                         "public_name": self.human_name(slot),
                         "display_name": self.human_name(slot),
                         "last_server": self.local_node_id,
@@ -1068,6 +1169,8 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             "FROM access_mesh_attachments ORDER BY issuer_id,slot_id,logical_agent_id",
             "SELECT s.* FROM access_mesh_slot_replicas s "
             "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY issuer_id,slot_id",
+            "SELECT s.* FROM access_mesh_sessions s "
+            "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY issuer_id,slot_id",
             "SELECT * FROM access_mesh_number_claims "
             "WHERE number IN (SELECT number FROM watched_numbers) ORDER BY issuer_id,slot_id",
             "SELECT * FROM access_mesh_number_starts "
@@ -1101,7 +1204,8 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             rows = db.execute(
                 """SELECT DISTINCT s.* FROM access_mesh_slot_replicas s
                 JOIN access_mesh_attachments a USING(issuer_id,slot_id)
-                WHERE s.logical_agent_id>? ORDER BY s.logical_agent_id LIMIT ?""",
+                JOIN access_mesh_sessions i USING(issuer_id,slot_id)
+                WHERE i.logical_agent_id>? ORDER BY i.logical_agent_id LIMIT ?""",
                 (after, limit),
             ).fetchall()
         return [self._snapshot(row) for row in rows]
@@ -1127,12 +1231,12 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         if start is None or end is None:
             return capture_window(readable, now)
         policy = current.effective(start).policy
-        rearm = end + timedelta(seconds=policy.cooldown_seconds) if policy.rearm_enabled else None
+        rearm = end + timedelta(seconds=policy.cooldown_seconds)
         ended = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
         closed = _parse(ended["ended_at"]) if ended else None
         if closed is not None and closed < start:
             closed = None
-        if closed is not None and policy.rearm_enabled:
+        if closed is not None:
             rearm = closed + timedelta(seconds=policy.cooldown_seconds)
         return CapturedAccessWindow(policy, start, end, rearm, closed)
 
@@ -1161,10 +1265,10 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     "SELECT s.* FROM access_mesh_slot_replicas s "
                     "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
                     f"WHERE s.issuer_id=? AND s.code_tag IN ({marks}) AND s.state='active' "
-                    "AND c.number!=? AND c.logical_agent_id=s.logical_agent_id",
+                    "AND c.number!=?",
                     (issuer, *tags, code),
                 ).fetchall()
-                found.extend(self._snapshot(row) for row in rows)
+                found.extend(self._snapshot(row, _connection=db) for row in rows)
         if len(found) > 1:
             raise AccessMeshError("access_mesh_ambiguous_code")
         if found:
@@ -1229,7 +1333,8 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             ).fetchone()
             if row is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
-            slot = self._snapshot(row)
+            slot = self._snapshot(row, _connection=db)
+            agent_id = slot.session.logical_agent_id if slot.session is not None else None
             cycle = self.merged_cycle(slot, now)
             current = db.execute(
                 "SELECT l.*,s.state FROM access_mesh_local_sessions l "
@@ -1240,13 +1345,13 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             pending = db.execute(
                 "SELECT 1 FROM access_mesh_cleanup_jobs WHERE logical_agent_id=? "
                 "AND completed_at IS NULL LIMIT 1",
-                (slot.logical_agent_id,),
+                (agent_id,),
             ).fetchone()
         identity = {
             "ok": True,
             "issuer_node_id": slot.issuer_id,
             "slot_id": slot.slot_id,
-            "logical_agent_id": slot.logical_agent_id,
+            "logical_agent_id": agent_id,
             "authority_node_id": self.local_node_id,
             "public_name": self.human_name(slot),
             "mode": slot.kind,
@@ -1281,7 +1386,8 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             ).fetchone()
             if row is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
-            slot = self._snapshot(row)
+            slot = self._snapshot(row, _connection=db)
+            agent_id = slot.session.logical_agent_id if slot.session is not None else None
             cycle = self.merged_cycle(slot, now)
             current = db.execute(
                 """SELECT l.*,s.state FROM access_mesh_local_sessions l
@@ -1308,13 +1414,13 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             pending = db.execute(
                 "SELECT 1 FROM access_mesh_cleanup_jobs WHERE logical_agent_id=? "
                 "AND completed_at IS NULL LIMIT 1",
-                (slot.logical_agent_id,),
+                (agent_id,),
             ).fetchone()
             identity = {
                 "ok": True,
                 "issuer_node_id": slot.issuer_id,
                 "slot_id": slot.slot_id,
-                "logical_agent_id": slot.logical_agent_id,
+                "logical_agent_id": agent_id,
                 "authority_node_id": self.local_node_id,
                 "public_name": self.human_name(slot),
                 "mode": slot.kind,
@@ -1339,7 +1445,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 epoch = db.execute(
                     "SELECT COALESCE(MAX(session_epoch),0)+1 "
                     "FROM logical_agent_work_sessions WHERE logical_agent_id=?",
-                    (slot.logical_agent_id,),
+                    (slot.session.logical_agent_id,),
                 ).fetchone()[0]
                 session_id = "wm_" + secrets.token_urlsafe(24)
                 db.execute(
@@ -1350,7 +1456,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     VALUES(?,?,?,?,1,?,?,NULL,1,'active',?)""",
                     (
                         session_id,
-                        slot.logical_agent_id,
+                        slot.session.logical_agent_id,
                         epoch,
                         self.local_node_id,
                         cycle["started_at"],
@@ -1374,7 +1480,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 # events on every read of an already-active cycle.
                 "UPDATE logical_agents SET state='active',updated_at=? "
                 "WHERE logical_agent_id=? AND state IS NOT 'active'",
-                (stamp, slot.logical_agent_id),
+                (stamp, slot.session.logical_agent_id),
             )
             return {**identity, "work_session_id": session_id, "session_epoch": epoch}
 
@@ -1397,6 +1503,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             {
                 "revision": row["revision"],
                 "policy": json.loads(row["policy_json"]),
+                "legacy_admission_enabled": bool(row["legacy_admission_enabled"]),
                 "inherit_policy": bool(row["inherit_policy"]),
                 "parent": json.loads(row["parent_json"]) if row["parent_json"] else None,
             }
@@ -1412,6 +1519,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         receipt,
         inherit_policy=False,
         parent=None,
+        legacy_admission_enabled=False,
     ):
         from terminal_mcp.storage.access_policy_inheritance import change_defaults
 
@@ -1422,6 +1530,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             receipt=receipt,
             inherit_policy=inherit_policy,
             parent=parent,
+            legacy_admission_enabled=legacy_admission_enabled,
         )
 
     def sync_parent_defaults(self, parent):
@@ -1508,7 +1617,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 FROM access_mesh_command_journal j JOIN commands c ON c.hash=j.command_hash
                 LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash
                 LEFT JOIN logical_agents l ON l.logical_agent_id=a.logical_agent_id
-                LEFT JOIN access_mesh_slot_replicas m ON m.logical_agent_id=a.logical_agent_id
+                LEFT JOIN access_mesh_sessions m ON m.logical_agent_id=a.logical_agent_id
                 WHERE j.sequence>? ORDER BY j.sequence LIMIT ?""",
                 (after, limit),
             ).fetchall()
@@ -1544,6 +1653,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         if issuer_id != self.local_node_id or type(limit) is not int or not 1 <= limit <= 50:
             raise AccessMeshError("access_mesh_invalid_snapshot_request")
         with self._connect() as db:
+            db.execute("BEGIN")
             rows = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE (? OR issuer_id=?) "
                 "AND slot_id>? ORDER BY slot_id LIMIT ?",
@@ -1556,12 +1666,13 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     limit,
                 ),
             ).fetchall()
-        return [self.snapshot_wire(row) for row in rows]
+            return [self.snapshot_wire(row, _connection=db) for row in rows]
 
-    @staticmethod
-    def snapshot_wire(row) -> dict:
+    def snapshot_wire(self, row, *, _connection=None) -> dict:
         """Project a stored slot through the shared replication wire contract."""
         item = dict(row)
+        session = self._snapshot(row, _connection=_connection).session
+        item["session"] = session.to_wire() if session is not None else None
         # Generation is issuer-local public vault metadata, not a bearer proof.
         item.pop("code_generation", None)
         if not item.get("inherit_policy"):
@@ -1574,7 +1685,9 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
         fields = {
             "issuer_id",
             "slot_id",
-            "logical_agent_id",
+            "session",
+            "created_at",
+            "last_used_at",
             "kind",
             "state",
             "revision",
@@ -1612,6 +1725,14 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
             policy = SlotPolicy(**json.loads(raw["policy_json"]))
+            session = (
+                SessionSnapshot.from_wire(raw["session"]) if raw["session"] is not None else None
+            )
+            _utc(_parse(raw["created_at"]))
+            if raw["last_used_at"] is not None:
+                _utc(_parse(raw["last_used_at"]))
+            if raw["anchor"] is not None and session is None:
+                raise ValueError("a started window requires a session")
             if type(raw["inherit_policy"]) is not int or raw["inherit_policy"] not in {0, 1}:
                 raise ValueError("invalid inheritance flag")
             if raw["policy_window_json"] is not None:
@@ -1631,7 +1752,7 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
             event = AccessSlotEvent(
                 issuer_id=raw["issuer_id"],
                 slot_id=raw["slot_id"],
-                logical_agent_id=raw["logical_agent_id"],
+                logical_agent_id=session.logical_agent_id if session is not None else None,
                 revision=raw["revision"],
                 event_id=raw["event_id"],
                 kind="SlotIssued",
@@ -1640,8 +1761,9 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 effective_at=_parse(raw["anchor"]),
                 agent_name=raw["agent_name"],
                 display_suffix=raw["display_suffix"],
+                created_at=_parse(raw["created_at"]),
             )
-            if raw["state"] not in {"active", "suspended", "deleted"} or raw["kind"] not in {
+            if raw["state"] not in {"active", "suspended"} or raw["kind"] not in {
                 "temporary",
                 "persistent",
             }:
@@ -1656,20 +1778,49 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),
             ).fetchone()
+            if old is None:
+                deleted = db.execute(
+                    "SELECT revision FROM access_mesh_event_log WHERE issuer_id=? AND slot_id=? "
+                    "AND json_extract(event_json,'$.kind')='SlotDeleted' ORDER BY revision "
+                    "DESC LIMIT 1",
+                    (event.issuer_id, event.slot_id),
+                ).fetchone()
+                if deleted is not None:
+                    if event.revision <= deleted[0]:
+                        return "stale"
+                    raise AccessMeshError("access_mesh_unknown_slot")
             if old:
-                if old["logical_agent_id"] != event.logical_agent_id or old["kind"] != raw["kind"]:
+                previous = self._snapshot(old, _connection=db)
+                if old["kind"] != raw["kind"] or (
+                    previous.session is not None
+                    and (
+                        session is None
+                        or previous.session.logical_agent_id != session.logical_agent_id
+                    )
+                ):
                     raise AccessMeshError("access_mesh_identity_conflict")
                 if old["revision"] > event.revision:
                     return "stale"
                 if old["revision"] == event.revision:
-                    if {key: old[key] for key in fields} != raw:
+                    comparable = fields - {"session", "last_used_at"}
+                    if (
+                        any(old[key] != raw[key] for key in comparable)
+                        or previous.session != session
+                    ):
                         raise AccessMeshError("access_mesh_event_conflict")
+                    if raw["last_used_at"] is not None:
+                        db.execute(
+                            "UPDATE access_mesh_slot_replicas SET "
+                            "last_used_at=MAX(COALESCE(last_used_at,''),?) "
+                            "WHERE issuer_id=? AND slot_id=?",
+                            (raw["last_used_at"], event.issuer_id, event.slot_id),
+                        )
                     return "duplicate"
-                if old["state"] == "deleted" and raw["state"] != "deleted":
-                    raise AccessMeshError("access_mesh_deleted_slot")
+                if old["last_used_at"] is not None:
+                    raw["last_used_at"] = max(old["last_used_at"], raw["last_used_at"] or "")
             if old:
                 self._before_slot_update(db, old, state=raw["state"], code_tag=raw["code_tag"])
-            columns = tuple(sorted(fields))
+            columns = tuple(sorted(fields - {"session"}))
             db.execute(
                 f"INSERT INTO access_mesh_slot_replicas ({','.join(columns)}) "
                 f"VALUES({','.join('?' for _ in columns)}) ON CONFLICT(issuer_id,slot_id) "
@@ -1681,7 +1832,21 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 ),
                 tuple(raw[key] for key in columns),
             )
-            slot = self._snapshot(raw)
+            if session is not None:
+                db.execute(
+                    "INSERT INTO access_mesh_sessions VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(issuer_id,slot_id) DO UPDATE SET "
+                    "active=excluded.active,ended_at=excluded.ended_at,active_from=excluded.active_from",
+                    (
+                        event.issuer_id,
+                        event.slot_id,
+                        session.logical_agent_id,
+                        int(session.active),
+                        _text(session.ended_at) if session.ended_at else None,
+                        _text(session.active_from) if session.active_from else None,
+                    ),
+                )
+            slot = self._snapshot(raw, _connection=db)
             stamp = _text(self.clock())
             self._native_slot(db, slot, stamp)
             if old:
@@ -1699,11 +1864,6 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                     job_id=f"snapshot:{slot.issuer_id}:{slot.slot_id}:{slot.revision}",
                     reason="snapshot_catchup",
                     stamp=stamp,
-                    release_claims=slot.state == "deleted" or self._release_at_end(slot),
-                )
-            if slot.state == "deleted":
-                db.execute(
-                    "DELETE FROM access_mesh_attachments WHERE issuer_id=? AND slot_id=?",
-                    (slot.issuer_id, slot.slot_id),
+                    release_claims=self._release_at_end(slot),
                 )
         return "applied"

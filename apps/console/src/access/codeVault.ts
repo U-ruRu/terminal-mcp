@@ -9,12 +9,12 @@ export type StoredAccessCode = {
 
 const PREFIX = 'terminal-mcp.console.access-code.v1.'
 
-function key(logicalAgentId: string, scope = ''): string {
-  if (!/^[A-Za-z0-9._:-]{1,200}$/.test(logicalAgentId)) {
-    throw new Error('invalid_logical_agent_id')
+function key(slotId: string, scope = ''): string {
+  if (!/^[A-Za-z0-9._:-]{1,200}$/.test(slotId)) {
+    throw new Error('invalid_slot_id')
   }
   if (scope.length > 1000 || /[\r\n\0]/.test(scope)) throw new Error('invalid_access_scope')
-  return PREFIX + (scope ? 'scoped.' + encodeURIComponent(scope) + '.' : '') + logicalAgentId
+  return PREFIX + (scope ? 'scoped.' + encodeURIComponent(scope) + '.' : '') + slotId
 }
 
 function valid(value: unknown): value is StoredAccessCode {
@@ -32,24 +32,24 @@ function valid(value: unknown): value is StoredAccessCode {
 }
 
 export function saveAccessCode(
-  logicalAgentId: string,
+  slotId: string,
   value: StoredAccessCode,
   storage: Storage = window.localStorage,
   scope = '',
 ): void {
   if (!valid(value)) throw new Error('invalid_access_code')
-  try { storage.setItem(key(logicalAgentId, scope), JSON.stringify(value)) }
+  try { storage.setItem(key(slotId, scope), JSON.stringify(value)) }
   catch { throw new Error('access_code_storage_unavailable') }
 }
 
 export function loadAccessCode(
-  logicalAgentId: string,
+  slotId: string,
   observedGeneration = 0,
   storage: Storage = window.localStorage,
   scope = '',
   observedRevision = 0,
 ): StoredAccessCode | null {
-  const storageKey = key(logicalAgentId, scope)
+  const storageKey = key(slotId, scope)
   try {
     const raw = storage.getItem(storageKey)
     if (!raw) return null
@@ -74,11 +74,11 @@ export function loadAccessCode(
 }
 
 export function clearAccessCode(
-  logicalAgentId: string,
+  slotId: string,
   storage: Storage = window.localStorage,
   scope = '',
 ): void {
-  try { storage.removeItem(key(logicalAgentId, scope)) } catch { throw new Error('access_code_storage_unavailable') }
+  try { storage.removeItem(key(slotId, scope)) } catch { throw new Error('access_code_storage_unavailable') }
 }
 
 export { PREFIX as ACCESS_CODE_STORAGE_PREFIX }

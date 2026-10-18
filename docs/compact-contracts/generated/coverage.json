@@ -33,7 +33,8 @@
     "conditions": [],
     "exact_input_fallbacks": [],
     "input_fields": [
-      "action"
+      "action",
+      "session_number"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.IssuerSessionInput",
@@ -48,10 +49,10 @@
       {
         "anchor": "issuer_session(",
         "source": "src/terminal_mcp/mcp/access.py",
-        "text": "start issues a four-digit session_number; end ends the shared session cycle"
+        "text": "start accepts optional session_number to choose an existing slot; without a number it uses the saved session binding; only Legacy admission permits initial slot allocation; an explicit start reuses the old deadline before cooldown and grants a full duration at or after cooldown; end ends the current session and forbids session_number"
       }
     ],
-    "strict_input_sha256": "ad65cbe81e04672c5b25d30bc67d46d42967016c971c82a158bf9be6b3f5da18",
+    "strict_input_sha256": "3223e2f6fe54abf2d1f34086c254b0923c17835f5d013523eded3630accefeea",
     "strict_output_sha256": "ca3e0e7237dda8759d8e6c8e632bae8f7bb50ecf086c65da3eb6b43a141624d8"
   },
   "coordinator.agent_observe": {

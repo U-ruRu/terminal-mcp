@@ -13,7 +13,9 @@ from terminal_mcp.core.access_mesh_grants import AccessMeshError
 async def test_member_acs_issues_only_in_the_primary_registry(tmp_path):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
-        primary, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        primary, _ = await node(
+            tmp_path, "firstbyte", "bacloud", routes, client, legacy_admission_enabled=True
+        )
         member, replica = await node(tmp_path, "bacloud", "firstbyte", routes, client)
         for mesh in (primary, member):
             mesh.store.install_registry_scope(mesh_id="fixture-mesh", authority_id="firstbyte")
@@ -78,7 +80,9 @@ async def test_member_cannot_fall_back_to_local_issuance_when_primary_is_down(tm
 async def test_member_acs_end_closes_the_shared_cycle(tmp_path):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
-        primary, primary_replica = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        primary, primary_replica = await node(
+            tmp_path, "firstbyte", "bacloud", routes, client, legacy_admission_enabled=True
+        )
         member, member_replica = await node(tmp_path, "bacloud", "firstbyte", routes, client)
         primary.replication = primary_replica
         member.replication = member_replica
@@ -87,7 +91,7 @@ async def test_member_acs_end_closes_the_shared_cycle(tmp_path):
         await member.attach(actor(), session_number=issued["session_number"])
         assert await member.issuer_session(access, action="end") == {"ok": True}
         slot = member.store.attached_slot(member.connection_key(actor()))
-        assert member.store.merged_cycle(slot, member.clock())["state"] == "expired"
+        assert member.store.merged_cycle(slot, member.clock())["state"] == "cooldown"
 
 
 def test_previous_primary_cannot_commit_cycle_after_handoff(tmp_path):
@@ -108,6 +112,7 @@ def test_previous_primary_cannot_commit_cycle_after_handoff(tmp_path):
             issuer_id="a",
             slot_id="old",
             event_id="late-end",
+            revision=2,
             ended_at=T0,
             source_peer_id="a",
         )

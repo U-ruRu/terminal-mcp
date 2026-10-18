@@ -265,6 +265,8 @@ export type ManagedAccessPolicyReadModel = {
   warningAfterSeconds: number
   alertAfterSeconds: number
   rearmAfterSeconds: number
+  rearmEnabled: boolean
+  legacyAdmissionEnabled: boolean
   revision: number
   updatedAt: string
 }
@@ -383,7 +385,6 @@ export type AccessMeshSlotReadModel = {
   policyEffectiveAt?: string | null
   issuerNodeId: string
   slotId: string
-  logicalAgentId: string
   publicName: string
   mode: 'temporary' | 'persistent'
   state: string
@@ -407,6 +408,7 @@ export type AccessMeshDefaultsReadModel = {
   writeTarget?: 'fleet_control' | 'access_defaults'
   revision: number
   policy: AccessMeshPolicyReadModel
+  legacyAdmissionEnabled: boolean
 }
 
 export type AccessMeshPolicyPatch = {
@@ -420,7 +422,7 @@ export type AccessMeshPolicyPatch = {
 
 export type AccessMeshMutationRequest = { idempotency_key: string } & (
   | { action: 'create'; mode: 'temporary' | 'persistent'; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean }
-  | { action: 'defaults'; expected_revision: number; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean }
+  | { action: 'defaults'; expected_revision: number; policy?: AccessMeshPolicyPatch; legacy_admission_enabled?: boolean; inherit_policy?: boolean }
   | { action: 'policy'; slot_id: string; expected_revision: number; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean; expected_parent_revision?: number }
   | { action: 'deadline'; slot_id: string; expected_revision: number; deadline_at: string }
   | { action: 'suspend' | 'resume' | 'delete' | 'rotate' | 'end'; slot_id: string; expected_revision: number }

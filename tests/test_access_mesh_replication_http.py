@@ -49,7 +49,9 @@ def actor():
     )
 
 
-async def node(tmp_path, name, other, routes, client, *, proof_key=KEY):
+async def node(
+    tmp_path, name, other, routes, client, *, proof_key=KEY, legacy_admission_enabled=False
+):
     path = tmp_path / f"{name}.db"
     await SqliteRepository(path, tmp_path / f"{name}-out.db").initialize()
     store = AccessMeshStore(
@@ -61,7 +63,11 @@ async def node(tmp_path, name, other, routes, client, *, proof_key=KEY):
     complete_upgrade(store)
     store.install_registry_scope(mesh_id="fixture-mesh", authority_id="firstbyte")
     mesh = AccessMeshApplication(
-        store, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0
+        store,
+        task_store=TaskStore(path),
+        execution_fence=Fence(),
+        clock=lambda: T0,
+        legacy_admission_enabled=legacy_admission_enabled,
     )
     peer = FleetPeer(other, f"https://{other}", "fixture-key", "fixture-token")
     config = FleetConfig(name, "fixture-key", (peer,), 1.0, 1.0)
@@ -105,7 +111,7 @@ async def test_http_delivery_applies_committed_event_and_acknowledges_outbox(tmp
         issued = await source.issue(actor(), code="1234", kind="persistent")
         assert await replication._deliver(replication.peers[0])
         assert (
-            target.store.slot("firstbyte", issued["slot_id"]).logical_agent_id
+            target.store.slot("firstbyte", issued["slot_id"]).session.logical_agent_id
             == issued["logical_agent_id"]
         )
         assert source.store.pending_outbox(peer_node_id="bacloud") == ()

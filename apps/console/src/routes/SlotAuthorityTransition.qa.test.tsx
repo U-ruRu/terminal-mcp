@@ -88,7 +88,7 @@ test('Recover submits the persisted native request and displays its receipt code
   const loadSlots = vi.fn(async () => [slot])
   const mutate = vi.fn<NonNullable<ServerSlotsProps['mutateAccessMesh']>>(async () => ({
     ok: true, payload: { issuer_node_id: slot.issuerNodeId, slot_id: slot.slotId,
-      logical_agent_id: slot.logicalAgentId, public_name: slot.publicName, revision: slot.revision,
+      public_name: slot.publicName, revision: slot.revision,
       code_generation: 1, code_expires_at: null, access_code: '0099' },
   }))
   render(<Screen instances={[instance]} loadSlots={loadSlots} mutate={mutate} />)

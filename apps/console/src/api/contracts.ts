@@ -575,6 +575,8 @@ export function decodeManagedFleetControl(value: unknown): import('./models').Ma
       warningAfterSeconds: integer(policyRaw.warning_after_seconds, '$.control.policy.warning_after_seconds'),
       alertAfterSeconds: integer(policyRaw.alert_after_seconds, '$.control.policy.alert_after_seconds'),
       rearmAfterSeconds: integer(policyRaw.rearm_after_seconds, '$.control.policy.rearm_after_seconds'),
+      rearmEnabled: boolean(policyRaw.rearm_enabled, '$.control.policy.rearm_enabled'),
+      legacyAdmissionEnabled: boolean(policyRaw.legacy_admission_enabled, '$.control.policy.legacy_admission_enabled'),
       revision: integer(policyRaw.revision, '$.control.policy.revision'),
       updatedAt: string(policyRaw.updated_at, '$.control.policy.updated_at'),
     } : undefined,

@@ -402,7 +402,6 @@ async def pinned(events):
         number="1234",
         issuer_id=NODE,
         slot_id="slot",
-        logical_agent_id="recipient",
         started_at=start,
         hard_expires_at=start + timedelta(minutes=1),
     )
@@ -518,7 +517,6 @@ async def test_issuer_subscription_hold_exposes_a_message_recipient_without_an_a
         number="5678",
         issuer_id="source",
         slot_id="remote-slot",
-        logical_agent_id="remote",
         started_at=start,
         hard_expires_at=start + timedelta(minutes=1),
     )

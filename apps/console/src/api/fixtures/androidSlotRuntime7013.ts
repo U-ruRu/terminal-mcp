@@ -1,4 +1,4 @@
-// Captured from isolated, peer-free TestClient at source e515d2b (backend 7013d3a).
+// Synthetic slot contract fixtures based on isolated TestClient source e515d2b.
 // Contains read projections only; no codes, selectors, keys or production state.
 export const runtimeSlotFixtures = {
   "managed_denial": {
@@ -9,6 +9,7 @@ export const runtimeSlotFixtures = {
   "access_defaults": {
     "ok": true,
     "revision": 1,
+    "legacy_admission_enabled": false,
     "policy": {
       "duration_seconds": 1200,
       "cooldown_seconds": 60,
@@ -23,7 +24,6 @@ export const runtimeSlotFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_ErCTdZoFVVcdDx02wh8U9q2j",
-      "logical_agent_id": "la_firstbyte_-WObobWbiZa3-Ms8L3iNSD07",
       "public_name": "Charlie-136",
       "mode": "persistent",
       "state": "active",
@@ -50,7 +50,6 @@ export const runtimeSlotFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_ErCTdZoFVVcdDx02wh8U9q2j",
-      "logical_agent_id": "la_firstbyte_-WObobWbiZa3-Ms8L3iNSD07",
       "public_name": "Charlie-136",
       "mode": "persistent",
       "state": "active",
@@ -77,7 +76,6 @@ export const runtimeSlotFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_ErCTdZoFVVcdDx02wh8U9q2j",
-      "logical_agent_id": "la_firstbyte_-WObobWbiZa3-Ms8L3iNSD07",
       "public_name": "Charlie-136",
       "mode": "persistent",
       "state": "active",
@@ -104,7 +102,6 @@ export const runtimeSlotFixtures = {
     "slot": {
       "issuer_node_id": "firstbyte",
       "slot_id": "as_hrFa0-dIwy_6f343HH1OiXQi",
-      "logical_agent_id": "la_firstbyte_ZPhiEXwU9FcUyNSWWjk_ew_B",
       "public_name": "Papa-220",
       "mode": "temporary",
       "state": "active",
@@ -132,7 +129,6 @@ export const runtimeSlotFixtures = {
       {
         "issuer_node_id": "firstbyte",
         "slot_id": "as_ErCTdZoFVVcdDx02wh8U9q2j",
-        "logical_agent_id": "la_firstbyte_-WObobWbiZa3-Ms8L3iNSD07",
         "public_name": "Charlie-136",
         "mode": "persistent",
         "state": "active",
@@ -156,7 +152,6 @@ export const runtimeSlotFixtures = {
       {
         "issuer_node_id": "firstbyte",
         "slot_id": "as_hrFa0-dIwy_6f343HH1OiXQi",
-        "logical_agent_id": "la_firstbyte_ZPhiEXwU9FcUyNSWWjk_ew_B",
         "public_name": "Papa-220",
         "mode": "temporary",
         "state": "active",

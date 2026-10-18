@@ -42,6 +42,7 @@ class OperatorMutation(BaseModel):
     policy: PolicyPatch | None = None
     deadline_at: str | None = Field(default=None, min_length=1, max_length=64)
     inherit_policy: bool | None = None
+    legacy_admission_enabled: bool | None = None
 
     @model_validator(mode="after")
     def selected_fields(self):
@@ -49,7 +50,7 @@ class OperatorMutation(BaseModel):
         allowed = (
             {"mode", "policy"}
             if self.action == "create"
-            else {"expected_revision", "policy"}
+            else {"expected_revision", "policy", "legacy_admission_enabled"}
             if self.action == "defaults"
             else {"slot_id", "expected_revision"}
             | (

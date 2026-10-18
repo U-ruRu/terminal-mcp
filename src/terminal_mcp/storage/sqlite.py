@@ -39,7 +39,7 @@ from terminal_mcp.storage.sqlite_observability import (
 # Revision 26 retires old agent admission and introduces the one-time unified
 # runtime migration receipt. Keep aligned with core.access_mesh_grants and retain
 # its static form for scripts/release_version.py's schema fingerprint.
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 HEALTH_INTEGRITY_CACHE_SECONDS = 30.0
 HEALTH_INTEGRITY_TIMEOUT_SECONDS = 3.0
 
@@ -310,6 +310,12 @@ class SqliteRepository:
                 ).fetchone()
                 if origin is not None:
                     current_version = min(current_version, int(origin[0]))
+            access_session_split_pending = current_version == 26 and any(
+                row[1] == "logical_agent_id"
+                for row in await (
+                    await db.execute("PRAGMA table_info(access_mesh_slot_replicas)")
+                ).fetchall()
+            )
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS commands(
@@ -675,8 +681,18 @@ class SqliteRepository:
                 from terminal_mcp.storage.claim_leases import migrate_existing_claim_leases
 
                 await migrate_existing_claim_leases(db, now=utc_text())
+            if access_session_split_pending:
+                # Preserve the current v26 transition when the repository opens
+                # before Access. Only Access can split its identity/session data.
+                await db.execute("""CREATE TABLE IF NOT EXISTS schema_migration_state (
+                    name TEXT PRIMARY KEY, value INTEGER NOT NULL
+                ) WITHOUT ROWID""")
+                await db.execute(
+                    "INSERT OR IGNORE INTO schema_migration_state(name,value) "
+                    "VALUES('repository_schema_from',26)"
+                )
             await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            if migration_state_exists:
+            if migration_state_exists and not access_session_split_pending:
                 # Clear only our origin marker, in the same successful commit.
                 # Failed/cancelled startup must preserve migration eligibility.
                 await db.execute(

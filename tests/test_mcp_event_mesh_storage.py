@@ -280,13 +280,19 @@ def replica(store, *, count=1):
                         {
                             **original,
                             "slot_id": f"slot-{i}",
-                            "logical_agent_id": f"recipient-{i}",
                             "code_tag": f"tag-{i}",
                         }[key]
                         for key in columns
                     )
                     for i in range(1, count)
                 ],
+            )
+            db.executemany(
+                "INSERT INTO access_mesh_sessions(issuer_id,slot_id,logical_agent_id,active"
+                ",active_from) "
+                "SELECT issuer_id,?,?,active,active_from FROM access_mesh_sessions WHERE "
+                "slot_id='slot'",
+                [(f"slot-{i}", f"recipient-{i}") for i in range(1, count)],
             )
     return mesh
 

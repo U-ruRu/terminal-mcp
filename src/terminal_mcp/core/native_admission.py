@@ -8,8 +8,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 
-from terminal_mcp.core.access_mesh_grants import AccessMeshError, LocalAccessMesh
-from terminal_mcp.core.access_policy_windows import merged_slot_cycle
+from terminal_mcp.core.access_mesh_grants import (
+    AccessMeshError,
+    LocalAccessMesh,
+    SessionSnapshot,
+    _parse,
+)
+from terminal_mcp.core.access_policy_windows import latest_number_event, merged_slot_cycle
 from terminal_mcp.core.managed_sessions import FINALIZATION_OPERATIONS, ManagedOperation
 from terminal_mcp.core.orchestration import parse_utc, utc_now
 
@@ -51,7 +56,10 @@ _SCOPE = (
     "FROM access_mesh_registry_scope WHERE singleton=1"
 )
 _SESSION = """
-    SELECT r.*,l.work_session_id AS current_work_session_id,
+    SELECT r.*,identity.logical_agent_id,identity.active AS mesh_session_active,
+           identity.ended_at AS mesh_session_ended_at,
+           identity.active_from AS mesh_session_active_from,
+           l.work_session_id AS current_work_session_id,
            l.session_epoch AS current_session_epoch,l.cycle_started_at,
            s.logical_agent_id AS session_agent_id,s.session_epoch AS work_session_epoch,
            s.state AS session_state,s.hard_expires_at,a.state AS agent_state,
@@ -65,11 +73,32 @@ _SESSION = """
                   AND f.session_epoch=s.session_epoch) AS session_fenced
     FROM access_mesh_native_owners n
     JOIN access_mesh_slot_replicas r USING(issuer_id,slot_id)
+    JOIN access_mesh_sessions identity USING(issuer_id,slot_id)
     JOIN access_mesh_local_sessions l USING(issuer_id,slot_id)
     JOIN logical_agent_work_sessions s ON s.work_session_id=l.work_session_id
     JOIN logical_agents a ON a.logical_agent_id=n.logical_agent_id
     WHERE n.logical_agent_id=?
 """
+
+_SLOT = """
+    SELECT r.*,identity.logical_agent_id,identity.active AS mesh_session_active,
+           identity.ended_at AS mesh_session_ended_at,
+           identity.active_from AS mesh_session_active_from
+    FROM access_mesh_slot_replicas r JOIN access_mesh_sessions identity USING(issuer_id,slot_id)
+    WHERE r.issuer_id=? AND r.slot_id=?
+"""
+
+
+def _slot(data):
+    return LocalAccessMesh._snapshot_from_row(
+        data,
+        SessionSnapshot(
+            data["logical_agent_id"],
+            bool(data["mesh_session_active"]),
+            _parse(data["mesh_session_ended_at"]),
+            _parse(data["mesh_session_active_from"]),
+        ),
+    )
 
 
 def _check_scope(row, admission: NativeWriteAdmission) -> None:
@@ -108,16 +137,14 @@ def _check_session(row, description, admission: NativeWriteAdmission) -> dict:
 
 
 def _check_cycle(data, cycle, admission: NativeWriteAdmission, now: datetime) -> None:
-    if (
-        cycle["state"] not in {"active", "warning", "draining"}
-        or now >= parse_utc(data["hard_expires_at"])
+    if cycle["state"] not in {"active", "warning", "draining"} or now >= parse_utc(
+        data["hard_expires_at"]
     ):
         raise NativeWriteAdmissionError("session_expired")
     if parse_utc(cycle["started_at"]) != parse_utc(data["cycle_started_at"]):
         raise NativeWriteAdmissionError("stale_session_epoch")
     if cycle["state"] == "draining" and admission.operation not in FINALIZATION_OPERATIONS:
         raise NativeWriteAdmissionError("session_draining")
-
 
 
 _NUMBER_CLAIMS = (
@@ -143,14 +170,10 @@ def _number_group(data, claims):
 def _cycle(slot, now, winner, keys, starts, ends):
     starts = [row for row in starts if (row["issuer_id"], row["slot_id"]) in keys]
     ends = [row for row in ends if (row["issuer_id"], row["slot_id"]) in keys]
-    latest_start = max(
-        starts,
-        key=lambda row: (row["active_from"], row["issuer_id"], row["slot_id"], row["event_id"]),
-        default=None,
-    )
-    latest_end = max(ends, key=lambda row: (row["ended_at"], row["event_id"]), default=None)
+    latest_start = latest_number_event(starts, "active_from")
+    latest_end = latest_number_event(ends, "ended_at")
     return merged_slot_cycle(
-        LocalAccessMesh._snapshot(slot),
+        _slot(slot),
         now,
         winner=winner,
         latest_start=latest_start,
@@ -175,11 +198,11 @@ def assert_native_write_admission(db, *, admission: NativeWriteAdmission | None 
 
     group = _number_group(data, read(_NUMBER_CLAIMS, (data["issuer_id"], data["slot_id"])))
     if group is None:
-        cycle = merged_slot_cycle(LocalAccessMesh._snapshot(data), now)
+        cycle = merged_slot_cycle(_slot(data), now)
     else:
         winner, keys = group
         slots = read(
-            "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
+            _SLOT,
             (winner["issuer_id"], winner["slot_id"]),
         )
         if not slots:
@@ -210,11 +233,11 @@ async def assert_native_write_admission_async(
 
     group = _number_group(data, await read(_NUMBER_CLAIMS, (data["issuer_id"], data["slot_id"])))
     if group is None:
-        cycle = merged_slot_cycle(LocalAccessMesh._snapshot(data), now)
+        cycle = merged_slot_cycle(_slot(data), now)
     else:
         winner, keys = group
         slots = await read(
-            "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
+            _SLOT,
             (winner["issuer_id"], winner["slot_id"]),
         )
         if not slots:

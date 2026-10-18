@@ -94,6 +94,23 @@ export function useAccessMeshState(instances: FleetInstanceView[], loadSlots?: A
     return result
   }, [loadDefaults, loadSlots, targets])
 
+  const removeSlot = useCallback((issuerNodeId: string, slotId: string) => {
+    // Reads started before the confirmed deletion must not restore its old row.
+    for (const instanceId of Object.keys(inFlight.current)) {
+      sequence.current[instanceId] = (sequence.current[instanceId] ?? 0) + 1
+      delete inFlight.current[instanceId]
+    }
+    setCache((current) => current.targets !== targets ? current : {
+      ...current,
+      states: Object.fromEntries(Object.entries(current.states).map(([id, state]) => [id, state && {
+        ...state,
+        slots: state.slots?.filter((slot) => slot.issuerNodeId !== issuerNodeId || slot.slotId !== slotId),
+        slotsPending: false,
+        defaultsPending: false,
+      }])),
+    })
+  }, [targets])
+
   useEffect(() => {
     const entries: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
     for (const entry of entries) if (entry.connected) void refresh(entry.id)
@@ -111,5 +128,5 @@ export function useAccessMeshState(instances: FleetInstanceView[], loadSlots?: A
     }
   }, [refresh, targets])
 
-  return { states: cache.targets === targets ? cache.states : {}, refresh }
+  return { states: cache.targets === targets ? cache.states : {}, refresh, removeSlot }
 }

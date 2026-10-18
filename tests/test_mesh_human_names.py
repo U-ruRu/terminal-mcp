@@ -94,5 +94,5 @@ async def test_replica_snapshot_retains_human_metadata_and_stable_id(human_fixtu
     snapshot = f.store.snapshot_page(issuer_id="firstbyte")[0]
     assert replica.apply_snapshot(snapshot, authenticated_peer_id="firstbyte") == "applied"
     slot = replica.slot("firstbyte", issued["slot_id"])
-    assert slot.logical_agent_id == issued["logical_agent_id"]
+    assert slot.session.logical_agent_id == issued["logical_agent_id"]
     assert replica.human_name(slot) == "Tango-5 - Worker"

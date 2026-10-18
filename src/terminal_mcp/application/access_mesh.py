@@ -19,6 +19,7 @@ from terminal_mcp.application.access_mesh_registry import (
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
 from terminal_mcp.core.access_mesh_scope import registry_operation
+from terminal_mcp.core.access_policy_windows import automatic_rearm_due, reopen_window
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import (
     FINALIZATION_OPERATIONS,
@@ -51,6 +52,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         task_store,
         execution_fence,
         defaults: SlotPolicy | None = None,
+        legacy_admission_enabled: bool = False,
         clock=None,
     ):
         self.store = store
@@ -58,6 +60,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         self.execution_fence = execution_fence
         self.defaults = defaults or SlotPolicy(1380, 60, True, 120, 30)
         self.configured_defaults = self.defaults
+        self.configured_legacy_admission = legacy_admission_enabled
         self.clock = clock or (lambda: datetime.now(UTC))
         self.store.clock = self.clock
         stored_defaults = self.store.defaults()
@@ -84,12 +87,15 @@ class AccessMeshApplication(AccessRegistryApplication):
         self._maintenance_observed_at: datetime | None = None
         self._maintenance_deadline: datetime | None = None
         self._scan_deadline: datetime | None = None
+        self._retention_after = ""
+        self._retention_check_at: datetime | None = None
 
     def local_parent_policy(self):
         return {
             "source": "server",
             "revision": 1,
             "policy": asdict(self.configured_defaults),
+            "legacy_admission_enabled": self.configured_legacy_admission,
         }
 
     def defaults_state(self):
@@ -98,6 +104,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             "revision": 1,
             "policy": asdict(self.defaults),
             "inherit_policy": True,
+            "legacy_admission_enabled": self.configured_legacy_admission,
         }
         parent = current.get("parent") or self.local_parent_policy()
         source = parent["source"] if current["inherit_policy"] else "server"
@@ -159,7 +166,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                 resolved = SlotPolicy(
                     duration_seconds=policy["duration_seconds"],
                     cooldown_seconds=policy["rearm_after_seconds"],
-                    rearm_enabled=True,
+                    rearm_enabled=policy["rearm_enabled"],
                     warning_seconds=policy["duration_seconds"] - policy["warning_after_seconds"],
                     draining_seconds=policy["duration_seconds"] - policy["alert_after_seconds"],
                 )
@@ -167,6 +174,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     "source": "mesh",
                     "revision": policy["revision"],
                     "policy": asdict(resolved),
+                    "legacy_admission_enabled": policy["legacy_admission_enabled"],
                     "mesh_id": local["mesh_id"],
                     "control_node_id": state.get("control_node_id"),
                 }
@@ -331,7 +339,10 @@ class AccessMeshApplication(AccessRegistryApplication):
             )
         # Attach creates the local WorkSession immediately, so another
         # agent can discover this recipient before its first command.
-        await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+        slot = await self._ensure_rearmed(actor, slot)
+        if slot.session is None:
+            raise AccessMeshError("session_expired")
+        await self.cleanup(logical_agent_id=slot.session.logical_agent_id, budget_seconds=0.5)
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         await self._notify_local_presence(identity)
         return {"ok": True}
@@ -344,10 +355,13 @@ class AccessMeshApplication(AccessRegistryApplication):
         slot = await asyncio.to_thread(self.store.attached_slot, self.connection_key(actor))
         if slot is None:
             raise AccessMeshError("session_attach_required")
-        await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+        slot = await self._ensure_rearmed(actor, slot)
+        if slot.session is None:
+            raise AccessMeshError("session_expired")
+        await self.cleanup(logical_agent_id=slot.session.logical_agent_id, budget_seconds=0.5)
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         if identity["cleanup_pending"]:
-            await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+            await self.cleanup(logical_agent_id=slot.session.logical_agent_id, budget_seconds=0.5)
             identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         if identity["cleanup_pending"]:
             raise AccessMeshError("access_mesh_cleanup_pending")
@@ -449,6 +463,7 @@ class AccessMeshApplication(AccessRegistryApplication):
             if self.messages is not None:
                 await self.messages.ensure_session_alert(slot, observed)
             return observed
+        slot = await self._ensure_rearmed(actor, slot)
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         alert_pending = False
         if self.messages is not None:
@@ -456,7 +471,7 @@ class AccessMeshApplication(AccessRegistryApplication):
         # Cleanup can be pending after an expiry first observed by this request.
         # It is local and bounded; remote issuer availability is never involved.
         if identity["cleanup_pending"]:
-            await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+            await self.cleanup(logical_agent_id=slot.session.logical_agent_id, budget_seconds=0.5)
             identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         if operation in READ_OPERATIONS:
             return identity
@@ -576,7 +591,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     _LOG.warning("Access Mesh cycle reconciliation failed: %s", self.last_error)
             # Cleanup errors must not starve slots on later pages. Advance
             # the visited page while retaining its error until a clean sweep.
-            self._scan_after = slots[-1].logical_agent_id if len(slots) == 50 else ""
+            self._scan_after = slots[-1].session.logical_agent_id if len(slots) == 50 else ""
             await self.cleanup()
         except Exception as exc:
             self._scan_error = self.last_error = getattr(exc, "code", type(exc).__name__)
@@ -585,8 +600,45 @@ class AccessMeshApplication(AccessRegistryApplication):
             self.last_error = self._scan_error
             self._maintenance_deadline = self._scan_deadline
 
+    @registry_operation
+    async def _expire_unused_slots(self) -> None:
+        """Apply the common deletion event to an authoritative bounded retention page."""
+        if not self.registry_authoritative:
+            return
+        now = self.clock()
+        if self._retention_check_at is not None and now < self._retention_check_at:
+            return
+        async with self._issuer_session_lock, self._issuer_lock:
+            slots = await asyncio.to_thread(
+                self.store.expired_unused_slots, now=now, after=self._retention_after, limit=50
+            )
+            for slot in slots:
+                event = AccessSlotEvent(
+                    issuer_id=slot.issuer_id,
+                    slot_id=slot.slot_id,
+                    logical_agent_id=(
+                        slot.session.logical_agent_id if slot.session is not None else None
+                    ),
+                    revision=slot.revision + 1,
+                    event_id="ae_" + secrets.token_urlsafe(18),
+                    kind="SlotDeleted",
+                )
+                await asyncio.to_thread(
+                    self.store.apply_event,
+                    event,
+                    authenticated_peer_id=self.store.local_node_id,
+                    broadcast_to=tuple(
+                        sorted(self.store.trusted_issuers - {self.store.local_node_id})
+                    ),
+                    retention_before=now - timedelta(hours=72),
+                )
+            self._retention_after = slots[-1].slot_id if len(slots) == 50 else ""
+            self._retention_check_at = None if self._retention_after else now + timedelta(minutes=1)
+        await self.cleanup()
+
     async def _maintenance_tick(self) -> None:
         """Keep the one-second change/deadline bound without redoing idle cycles."""
+        await self._expire_unused_slots()
         now = self.clock()
         previous = self._maintenance_observed_at
         self._maintenance_observed_at = now
@@ -685,7 +737,6 @@ class AccessMeshApplication(AccessRegistryApplication):
             "action": action,
             "issuer_node_id": slot.issuer_id,
             "slot_id": slot.slot_id,
-            "logical_agent_id": slot.logical_agent_id,
             "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "revision": revision or slot.revision,
@@ -738,7 +789,10 @@ class AccessMeshApplication(AccessRegistryApplication):
             for _ in range(100):
                 allocated = reserved_number or code or f"{secrets.randbelow(10000):04d}"
                 slot_id = "as_" + secrets.token_urlsafe(18)
-                agent_id = f"la_{self.store.local_node_id}_" + secrets.token_urlsafe(18)
+                agent_id = (
+                    f"la_{self.store.local_node_id}_" + secrets.token_urlsafe(18)
+                    if start else None
+                )
                 issued_at = self.clock()
                 event = AccessSlotEvent(
                     issuer_id=self.store.local_node_id,
@@ -751,6 +805,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                     code_tag=self.store.code_tag(self.store.local_node_id, allocated),
                     effective_at=issued_at if start else None,
+                    created_at=issued_at,
                     agent_name=number_agent_name(allocated),
                     display_suffix=(display_name or "").strip() or None,
                 )
@@ -759,7 +814,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     "action": "start" if start else "create",
                     "issuer_node_id": event.issuer_id,
                     "slot_id": slot_id,
-                    "logical_agent_id": agent_id,
+                    **({"logical_agent_id": agent_id} if agent_id is not None else {}),
                     "mode": kind,
                     "revision": 1,
                     "public_name": full_agent_name(event.agent_name, event.display_suffix),
@@ -840,15 +895,22 @@ class AccessMeshApplication(AccessRegistryApplication):
             event = AccessSlotEvent(
                 issuer_id=slot.issuer_id,
                 slot_id=slot.slot_id,
-                logical_agent_id=slot.logical_agent_id,
+                logical_agent_id=(
+                    slot.session.logical_agent_id if slot.session is not None else
+                    f"la_{self.store.local_node_id}_" + secrets.token_urlsafe(18)
+                    if kind == "SessionStarted" else None
+                ),
                 revision=slot.revision + 1,
                 event_id="ae_" + secrets.token_urlsafe(18),
                 kind=kind,
                 policy=policy,
                 inherit_policy=(bool(inherit_policy) if kind == "SlotPolicyChanged" else None),
                 code_tag=self.store.code_tag(slot.issuer_id, code) if code else None,
-                effective_at=effective_at or (self.clock() if kind.startswith("Session") else None),
+                effective_at=effective_at or (
+                    self.clock() if kind.startswith("Session") or kind == "SlotSuspended" else None
+                ),
                 deadline_at=deadline_at,
+                active_from=self.clock() if kind == "SessionStarted" else None,
                 # Future policy edits must not renew the currently granted window.
                 # Capture it on the issuer so every replica applies the same boundary.
                 policy_window=await asyncio.to_thread(
@@ -914,6 +976,7 @@ class AccessMeshApplication(AccessRegistryApplication):
                     slot_id=event.slot_id,
                     event_id=event.event_id,
                     ended_at=event.effective_at.isoformat(),
+                    revision=event.revision,
                 )
             except Exception:
                 _LOG.warning("Mesh operator-end propagation pending")
@@ -942,74 +1005,95 @@ class AccessMeshApplication(AccessRegistryApplication):
                     active_from=number_start["active_from"].isoformat(),
                     started_at=start.isoformat(),
                     hard_expires_at=deadline.isoformat(),
+                    revision=event.revision,
                 )
             except Exception:
                 _LOG.exception("Mesh session start propagation pending")
         return result
 
     @registry_operation
-    async def issuer_session(self, actor: ActorContext, *, action: str) -> dict:
-        if action not in {"start", "end"}:
+    async def issuer_session(
+        self, actor: ActorContext, *, action: str, session_number: str | None = None,
+        automatic: bool = False, slot_id: str | None = None,
+    ) -> dict:
+        if action not in {"start", "end"} or (action == "end" and session_number is not None):
             raise AccessMeshError("invalid_request")
+        if (slot_id is not None and not automatic) or (
+            automatic and (action != "start" or slot_id is None or session_number is not None)
+        ):
+            raise AccessMeshError("invalid_request")
+        if session_number is not None and (
+            not isinstance(session_number, str) or len(session_number) != 4
+            or not session_number.isascii() or not session_number.isdecimal()
+        ):
+            raise AccessMeshError("invalid_session_number")
         self.require_write(actor)
-        forwarded = await self.proxy_registry(actor, "session", {"action": action})
+        arguments = {"action": action}
+        if session_number is not None:
+            arguments["session_number"] = session_number
+        if automatic:
+            arguments["automatic"] = True
+            arguments["slot_id"] = slot_id
+        forwarded = await self.proxy_registry(actor, "session", arguments)
         if forwarded is not None:
             return forwarded
         binding = self.connection_key(actor)
         async with self._issuer_session_lock:
-            spec = self._receipt_spec(actor, {"action": action})
-            slot = await asyncio.to_thread(self.store.issuer_bound_slot, binding)
+            spec = self._receipt_spec(actor, arguments)
+            if automatic:
+                # A work connector keeps its existing attachment. It does not acquire
+                # the Access connector's independent issuer binding.
+                spec["connection_key"] = None
+            if automatic:
+                slot = await asyncio.to_thread(self.store.registry_slot, slot_id)
+            elif session_number is not None:
+                slot = await asyncio.to_thread(self.store.registry_code_slot, session_number)
+            else:
+                slot = await asyncio.to_thread(self.store.issuer_bound_slot, binding)
             if action == "start":
                 if slot is None:
+                    if session_number is not None or automatic:
+                        raise AccessMeshError("invalid_session_number")
+                    defaults = await asyncio.to_thread(self.defaults_state)
+                    if not defaults["legacy_admission_enabled"]:
+                        raise AccessMeshError("legacy_admission_disabled")
                     result = await self.issue(actor, kind="temporary", receipt_spec=spec)
                     return {"ok": True, "session_number": result["access_code"]}
                 if slot.state != "active":
                     raise AccessMeshError("slot_not_armed")
                 now = self.clock()
-                cycle = await asyncio.to_thread(self.store.merged_cycle, slot, now)
-                if cycle["state"] in {"active", "warning", "draining"}:
-                    raise AccessMeshError("session_already_started")
-                if not cycle["started_at"] or not cycle["hard_expires_at"]:
-                    raise AccessMeshError("session_expired")
-                original_start = datetime.fromisoformat(cycle["started_at"])
-                original_end = datetime.fromisoformat(cycle["hard_expires_at"])
-                previous_end = await asyncio.to_thread(
-                    self.store.numbers.end_for_slot, slot.issuer_id, slot.slot_id
-                )
-                # Resume an explicitly ended window with its original deadline.
-                # A new full window requires the slot's rearm policy and cooldown.
-                if previous_end is not None and now < original_end:
-                    anchor, hard_deadline = original_start, original_end
-                else:
-                    if not slot.policy.rearm_enabled:
-                        raise AccessMeshError("session_expired")
-                    cooldown_end = original_end + timedelta(seconds=slot.policy.cooldown_seconds)
-                    if previous_end is not None:
-                        cooldown_end = max(
-                            cooldown_end,
-                            datetime.fromisoformat(previous_end["ended_at"])
-                            + timedelta(seconds=slot.policy.cooldown_seconds),
-                        )
-                    if now < cooldown_end:
-                        raise AccessMeshError("window_cooldown")
-                    anchor, hard_deadline = now, None
-                await self.change(
-                    actor,
-                    slot_id=slot.slot_id,
-                    kind="SessionStarted",
-                    expected_revision=slot.revision,
-                    receipt_spec=spec,
-                    effective_at=anchor,
-                    deadline_at=hard_deadline,
-                    number_start={"active_from": now},
-                )
                 number = await asyncio.to_thread(
                     self.store.numbers.number_for_slot, slot.issuer_id, slot.slot_id
                 )
                 if number is None:
                     raise AccessMeshError("invalid_session_number")
+                if automatic and not automatic_rearm_due(slot, now):
+                    return {"ok": True, "session_number": number}
+                window = reopen_window(slot, now)
+                if window is None:
+                    receipt = self.store.prepare_receipt(
+                        event_id="none", result=self._slot_receipt(slot, "start"), **spec
+                    )
+                    await asyncio.to_thread(self.store.save_receipt, receipt)
+                else:
+                    if window["deadline"] <= now:
+                        raise AccessMeshError("window_cooldown")
+                    await self.change(
+                        actor,
+                        slot_id=slot.slot_id,
+                        kind="SessionStarted",
+                        expected_revision=slot.revision,
+                        receipt_spec=spec,
+                        effective_at=window["start"],
+                        deadline_at=window["deadline"],
+                        number_start={"active_from": now},
+                    )
+                if not automatic:
+                    await asyncio.to_thread(
+                        self.store.touch_slot, slot.issuer_id, slot.slot_id, now=now
+                    )
                 return {"ok": True, "session_number": number}
-            if slot is None or slot.state == "deleted":
+            if slot is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
             number_end = await asyncio.to_thread(self.store.number_cycle, slot, self.clock())
             if number_end is not None:
@@ -1029,8 +1113,10 @@ class AccessMeshApplication(AccessRegistryApplication):
                                 for row in await asyncio.to_thread(self.store.numbers.end_snapshot)
                                 if row["number"] == number_end["number"]
                                 and row["cycle_key"] == number_end["cycle_key"]
+                                and row["issuer_id"] == slot.issuer_id
+                                and row["slot_id"] == slot.slot_id
                             ),
-                            key=lambda row: (row["ended_at"], row["event_id"]),
+                            key=lambda row: row["revision"],
                             default=None,
                         )
                         if end_event is not None:
@@ -1042,4 +1128,21 @@ class AccessMeshApplication(AccessRegistryApplication):
                     event_id="none", result=self._slot_receipt(slot, "end"), **spec
                 )
                 await asyncio.to_thread(self.store.save_receipt, receipt)
+            await asyncio.to_thread(
+                self.store.touch_slot, slot.issuer_id, slot.slot_id, now=self.clock()
+            )
             return {"ok": True}
+
+    async def _ensure_rearmed(self, actor, slot):
+        """Reopen an established session through the same authoritative transition."""
+        if not automatic_rearm_due(slot, self.clock()):
+            return slot
+        result = await self.issuer_session(
+            actor, action="start", slot_id=slot.slot_id, automatic=True
+        )
+        if not self.registry_authoritative:
+            await self.replication.refresh_registry_slot(result["session_number"])
+        current = await asyncio.to_thread(self.store.registry_slot, slot.slot_id)
+        if current is None:
+            raise AccessMeshError("access_mesh_slot_not_found")
+        return current

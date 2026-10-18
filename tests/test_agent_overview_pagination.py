@@ -23,7 +23,8 @@ def overview_fixture(tmp_path, monkeypatch):
     with sqlite3.connect(path) as db:
         db.executescript("""
             CREATE TABLE access_mesh_slot_replicas(
-                issuer_id TEXT,slot_id TEXT,logical_agent_id TEXT,state TEXT);
+                issuer_id TEXT,slot_id TEXT,state TEXT);
+            CREATE TABLE access_mesh_sessions(issuer_id TEXT,slot_id TEXT,logical_agent_id TEXT);
             CREATE TABLE access_mesh_attachments(
                 connection_key TEXT,issuer_id TEXT,slot_id TEXT);
             CREATE TABLE access_mesh_local_sessions(
@@ -34,7 +35,7 @@ def overview_fixture(tmp_path, monkeypatch):
             CREATE TABLE logical_agents(logical_agent_id TEXT,display_name TEXT);
             CREATE TABLE access_mesh_activity(connection_key TEXT,last_active_at TEXT);
             CREATE TABLE access_mesh_number_claims(
-                issuer_id TEXT,slot_id TEXT,number TEXT,logical_agent_id TEXT,
+                issuer_id TEXT,slot_id TEXT,number TEXT,
                 started_at TEXT,hard_expires_at TEXT);
         """)
     skipped = set()
@@ -52,11 +53,11 @@ def overview_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(
         store,
         "_snapshot",
-        lambda row: SimpleNamespace(
-            logical_agent_id=row["logical_agent_id"],
+        lambda row, **kwargs: SimpleNamespace(
+            session=SimpleNamespace(logical_agent_id=row["session_agent_id"]),
             issuer_id=row["issuer_id"],
             slot_id=row["slot_id"],
-            agent_name=number_agent_name(f"{int(row['logical_agent_id'].rsplit('_', 1)[1]):04d}"),
+            agent_name=number_agent_name(f"{int(row['session_agent_id'].rsplit('_', 1)[1]):04d}"),
             display_suffix=row["display_name"],
         ),
     )
@@ -64,7 +65,7 @@ def overview_fixture(tmp_path, monkeypatch):
         store,
         "merged_cycle",
         lambda slot, now: {
-            "state": "expired" if slot.logical_agent_id in skipped else "active",
+            "state": "expired" if slot.session.logical_agent_id in skipped else "active",
             "started_at": T0.isoformat(),
             "hard_expires_at": (T0 + timedelta(hours=1)).isoformat(),
         },
@@ -79,8 +80,11 @@ def overview_fixture(tmp_path, monkeypatch):
                 agent = f"la_fixture_{index:03d}"
                 slot, session, connection = f"slot-{index}", f"session-{index}", f"conn-{index}"
                 db.execute(
-                    "INSERT INTO access_mesh_slot_replicas VALUES(?,?,?,'active')",
-                    ("server-a", slot, agent),
+                    "INSERT INTO access_mesh_slot_replicas VALUES(?,?,'active')",
+                    ("server-a", slot),
+                )
+                db.execute(
+                    "INSERT INTO access_mesh_sessions VALUES(?,?,?)", ("server-a", slot, agent),
                 )
                 db.execute(
                     "INSERT INTO access_mesh_attachments VALUES(?,?,?)",
@@ -158,12 +162,11 @@ async def test_cursor_remains_bound_to_filters(overview_fixture):
 def claim(fixture, index, start_minutes, end_minutes, *, number="1000"):
     with fixture.store._connect() as db:
         db.execute(
-            "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?)",
+            "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?)",
             (
                 "server-a",
                 f"slot-{index}",
                 number,
-                f"la_fixture_{index:03d}",
                 (T0 + timedelta(minutes=start_minutes)).isoformat(),
                 (T0 + timedelta(minutes=end_minutes)).isoformat(),
             ),

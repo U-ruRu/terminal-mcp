@@ -12,6 +12,7 @@ import { ServerSlots } from './ServerSlots'
 function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthority = false) {
   const state = {
     policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1290, rearmAfterSeconds: 180,
+      rearmEnabled: true, legacyAdmissionEnabled: false,
       revision: 2, updatedAt: '2026-10-12T05:00:00Z' } as ManagedAccessPolicyReadModel,
     slots: [nativeSlot()], defaults: { ...nativeDefaults(), meshPolicySupported: capability, inheritanceSupported: capability,
       inheritance: nativeInheritance('inherit', 'mesh') },
@@ -32,6 +33,7 @@ function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthori
     }
     state.policy = { durationSeconds: request.duration_seconds, warningAfterSeconds: request.warning_after_seconds,
       alertAfterSeconds: request.alert_after_seconds, rearmAfterSeconds: request.rearm_after_seconds,
+      rearmEnabled: request.rearm_enabled, legacyAdmissionEnabled: request.legacy_admission_enabled,
       revision: state.policy.revision + 1, updatedAt: state.policy.updatedAt }
     if (state.loseReceipt) throw new ConsoleHttpError(0, 'request_timeout')
     return { ok: true, control: control('alpha') }
@@ -54,15 +56,17 @@ async function editThreeHours() {
 }
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.useRealTimers(); vi.restoreAllMocks() })
 
-test('saving Mesh policy sends the current revision to its control node', async () => {
+test('saving Mesh policy sends its admission and Rearm settings with the control revision', async () => {
   const env = setup()
   await editThreeHours()
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Legacy admission' }))
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Rearm' }))
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
   await waitFor(() => expect(env.mutateMesh).toHaveBeenCalledWith('alpha', '/actions/fleet/control/policy', {
     duration_seconds: 10800, warning_after_seconds: 1200, alert_after_seconds: 1290,
-    rearm_after_seconds: 180, expected_revision: 2,
+    rearm_after_seconds: 180, rearm_enabled: false, legacy_admission_enabled: true, expected_revision: 2,
   }))
 })
 

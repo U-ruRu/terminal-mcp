@@ -2698,7 +2698,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .slot-session-armed { color: var(--color-accent); }
 .slot-session-stopping { color: var(--color-warning); }
 .slot-session-suspended, .slot-session-ended { color: var(--color-muted); }
-.slot-session-expired, .slot-session-deleting, .slot-session-deleted { color: var(--color-danger); }
+.slot-session-expired, .slot-session-deleting { color: var(--color-danger); }
 .slot-card-actions .slot-timer {
   width: auto;
   min-width: 7ch;

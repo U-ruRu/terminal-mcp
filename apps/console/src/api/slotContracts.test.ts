@@ -1,12 +1,12 @@
 import { describe,expect,it,vi } from 'vitest'
 import { ConsoleClient } from './client'
 import { ConsoleContractError } from './contracts'
-import { decodeAccessMeshSlot,decodePolicyInheritance } from './slotContracts'
+import { decodeAccessMeshDefaults,decodeAccessMeshSlot,decodePolicyInheritance } from './slotContracts'
 
 export function accessFixture() {
   return {
     ok: true, slot: {
-      issuer_node_id: 'test-node', slot_id: 'as_test', logical_agent_id: 'la_test', public_name: 'Test-1', mode: 'persistent', state: 'active', revision: 3,
+      issuer_node_id: 'test-node', slot_id: 'as_test', public_name: 'Test-1', mode: 'persistent', state: 'active', revision: 3,
       policy: { duration_seconds: 10800, cooldown_seconds: 0, rearm_enabled: true, warning_seconds: 180, draining_seconds: 90, release_on_end: null },
       session_lifecycle: { state: 'idle', started_at: null, hard_expires_at: null, remaining_seconds: 0, rearm_at: null },
     },
@@ -15,11 +15,11 @@ export function accessFixture() {
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
 describe('current Access Mesh contracts', () => {
-  it('decodes issuer/slot/logical identity separately and omits any accidental code from list models', () => {
+  it('decodes a slot without agent identity and omits any accidental code from list models', () => {
     const fixture = accessFixture()
     const slot = decodeAccessMeshSlot({ ...fixture, slot: { ...fixture.slot, access_code: 'TEST_ONLY' } })
     expect(slot.slotId).toBe('as_test')
-    expect(slot.logicalAgentId).toBe('la_test')
+    expect(slot).not.toHaveProperty('logicalAgentId')
     expect(slot.issuerNodeId).toBe('test-node')
     expect(JSON.stringify(slot)).not.toContain('TEST_ONLY')
   })
@@ -34,6 +34,10 @@ describe('current Access Mesh contracts', () => {
     const fixture = accessFixture()
     delete (fixture.slot.policy as Record<string, unknown>).rearm_enabled
     expect(() => decodeAccessMeshSlot(fixture)).toThrow(ConsoleContractError)
+  })
+
+  it.each([true, false])('decodes Legacy admission %s from the shared defaults policy', (enabled) => {
+    expect(decodeAccessMeshDefaults({ ok: true, revision: 2, policy: accessFixture().slot.policy, legacy_admission_enabled: enabled }).legacyAdmissionEnabled).toBe(enabled)
   })
 })
 

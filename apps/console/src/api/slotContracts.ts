@@ -122,7 +122,6 @@ function accessSlot(value: unknown, path: string): AccessMeshSlotReadModel {
     policyEffectiveAt: item.policy_effective_at === undefined ? undefined : nullableText(item.policy_effective_at, path + '.policy_effective_at'),
     issuerNodeId: text(item.issuer_node_id, path + '.issuer_node_id', true),
     slotId: text(item.slot_id, path + '.slot_id', true),
-    logicalAgentId: text(item.logical_agent_id, path + '.logical_agent_id', true),
     publicName: text(item.public_name, path + '.public_name', true),
     mode: item.mode,
     state: text(item.state, path + '.state', true),
@@ -161,6 +160,7 @@ export function decodeAccessMeshDefaults(value: unknown): AccessMeshDefaultsRead
     writeTarget: root.write_target === undefined ? undefined : choice(root.write_target, ['fleet_control', 'access_defaults'] as const, '$.write_target'),
     revision: integer(root.revision, '$.revision', 1),
     policy: accessPolicy(root.policy, '$.policy'),
+    legacyAdmissionEnabled: flag(root.legacy_admission_enabled, '$.legacy_admission_enabled'),
   }
 }
 

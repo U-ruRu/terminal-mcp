@@ -46,7 +46,7 @@ def slot_held(db, issuer_id, slot_id):
 
 
 async def acquire_hold(db, node_id, sub_id):
-    # Non-Mesh legacy recipients have no public-number claim to pin.
+    # A recipient must belong to the slot's current session.
     exists = await (
         await db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='access_mesh_number_claims'"
@@ -60,7 +60,9 @@ async def acquire_hold(db, node_id, sub_id):
             "FROM mcp_event_message_bindings b "
             "JOIN mcp_event_subscriptions s ON s.id=b.subscription_id "
             "JOIN access_mesh_number_claims c ON c.issuer_id=b.recipient_issuer_id "
-            "AND c.slot_id=b.recipient_slot_id AND c.logical_agent_id=b.recipient_agent_id "
+            "AND c.slot_id=b.recipient_slot_id "
+            "JOIN access_mesh_sessions identity ON identity.issuer_id=c.issuer_id "
+            "AND identity.slot_id=c.slot_id AND identity.logical_agent_id=b.recipient_agent_id "
             "WHERE b.subscription_id=? AND s.name='message.received'",
             (sub_id,),
         )
@@ -129,13 +131,13 @@ class MeshRecipientHolds:
                 "FROM access_mesh_recipient_holds h "
                 "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) "
                 "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
+                "JOIN access_mesh_sessions identity USING(issuer_id,slot_id) "
                 "WHERE (h.source_node_id=? OR h.source_node_id=h.issuer_id OR EXISTS("
                 "SELECT 1 FROM access_mesh_attachments a "
                 "WHERE a.issuer_id=h.issuer_id AND a.slot_id=h.slot_id "
                 "AND a.logical_agent_id=h.recipient_agent_id)) "
                 "AND h.state='held' AND s.state='active' "
-                "AND s.logical_agent_id=h.recipient_agent_id "
-                "AND c.logical_agent_id=h.recipient_agent_id AND c.number=h.number",
+                "AND identity.logical_agent_id=h.recipient_agent_id AND c.number=h.number",
                 (self.store.local_node_id,),
             ).fetchall()
         recipients = []
@@ -199,6 +201,14 @@ class MeshRecipientHolds:
                 ):
                     raise AccessMeshError("invalid_recipient_hold_snapshot")
                 self.store.numbers.validate(row["number"])
+                if db.execute(
+                    "SELECT 1 FROM access_mesh_event_log WHERE issuer_id=? AND slot_id=? "
+                    "AND json_extract(event_json,'$.kind')='SlotDeleted' LIMIT 1",
+                    (row["issuer_id"], row["slot_id"]),
+                ).fetchone():
+                    # A late subscription snapshot cannot reserve the number
+                    # of a physically removed slot again.
+                    continue
                 old = db.execute(
                     "SELECT * FROM access_mesh_recipient_holds "
                     "WHERE source_node_id=? AND hold_id=?",

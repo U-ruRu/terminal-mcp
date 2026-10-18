@@ -128,6 +128,8 @@ test('rejected managed membership mutation rolls the optimistic projection back 
         warning_after_seconds: 1200,
         alert_after_seconds: 1320,
         rearm_after_seconds: 180,
+        rearm_enabled: true,
+        legacy_admission_enabled: false,
         revision: 4,
         updated_at: '2026-10-02T06:00:00Z',
       },
@@ -222,6 +224,8 @@ test('creates a second mesh on an independently selected standalone control node
     warning_after_seconds: 1200,
     alert_after_seconds: 1320,
     rearm_after_seconds: 180,
+    rearm_enabled: true,
+    legacy_admission_enabled: false,
     revision: 1,
     updated_at: '2026-10-02T06:00:00Z',
   }

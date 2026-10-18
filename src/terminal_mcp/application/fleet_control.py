@@ -234,6 +234,8 @@ class FleetControlApplication:
         alert_after_seconds: int,
         rearm_after_seconds: int,
         expected_revision: int | None,
+        rearm_enabled: bool = True,
+        legacy_admission_enabled: bool = False,
     ):
         OperatorApplication._require_operator(actor)
         with actor.bind():
@@ -243,6 +245,8 @@ class FleetControlApplication:
                     warning_after_seconds=warning_after_seconds,
                     alert_after_seconds=alert_after_seconds,
                     rearm_after_seconds=rearm_after_seconds,
+                    rearm_enabled=rearm_enabled,
+                    legacy_admission_enabled=legacy_admission_enabled,
                     expected_revision=expected_revision,
                 )
             )

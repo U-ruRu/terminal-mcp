@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
+from test_access_mesh_native_lifecycle import enable_legacy_admission
 
 from terminal_mcp.app import create_app
 from terminal_mcp.application.actor import ActorContext
@@ -92,6 +93,7 @@ def test_console_agents_use_current_native_sessions_and_explicit_archive(tmp_pat
         async def attach_native():
             mesh = app.state.access_mesh
             access_actor = replace(actor, endpoint_role="access")
+            await asyncio.to_thread(enable_legacy_admission, mesh)
             issued = await mesh.issuer_session(access_actor, action="start")
             attached = await mesh.attach(actor, session_number=issued["session_number"])
             assert attached["ok"]
@@ -108,7 +110,7 @@ def test_console_agents_use_current_native_sessions_and_explicit_archive(tmp_pat
                     )
 
             await asyncio.to_thread(archive)
-            return {"logical_agent_id": slot.logical_agent_id}
+            return {"logical_agent_id": slot.session.logical_agent_id}
 
         native = client.portal.call(attach_native)
         overview = client.post("/actions/agents", headers=headers, json={"show_details": True})

@@ -15,6 +15,8 @@ POLICY = {
     "warning_after_seconds": 900,
     "alert_after_seconds": 1100,
     "rearm_after_seconds": 120,
+    "rearm_enabled": True,
+    "legacy_admission_enabled": False,
 }
 
 
@@ -106,6 +108,20 @@ async def test_policy_update_keeps_topology_and_trust_revisions(managed):
 
     after = (await managed.control_state())["revisions"]
     assert after == before | {"access_policy": before["access_policy"] + 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flag", "enabled"), [("rearm_enabled", False), ("legacy_admission_enabled", True)]
+)
+async def test_policy_switch_update_is_durable_and_advances_policy_revision(managed, flag, enabled):
+    before = (await managed.control_state())["revisions"]["access_policy"]
+
+    await managed.update_access_policy(**(POLICY | {flag: enabled}))
+
+    state = await managed.control_state()
+    assert state["policy"][flag] is enabled
+    assert state["revisions"]["access_policy"] == before + 1
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,6 @@ from terminal_mcp.core.access_mesh_scope import REGISTRY_NAMESPACE
 from terminal_mcp.storage.access_mesh_messages import AccessMeshMessageStore
 from terminal_mcp.storage.access_mesh_registry_upgrade import (
     complete_upgrade,
-    migrate_receipt_kinds,
 )
 
 
@@ -100,6 +99,7 @@ async def test_pending_union_preserves_slot_revisions_until_policy_completion(tm
             "source": "mesh",
             "revision": 2,
             "policy": asdict(policy),
+            "legacy_admission_enabled": False,
             "mesh_id": "mesh-x",
             "control_node_id": "a",
         }
@@ -131,6 +131,7 @@ async def test_member_runtime_import_is_once_and_does_not_enable_local_issuance(
         revision=1,
         event_id="runtime-upgrade-" + slot_id,
         kind="SlotIssued",
+        effective_at=store.clock(),
         policy=SlotPolicy(10, 5),
         code_tag=store.code_tag("b", "1234"),
     )
@@ -166,7 +167,7 @@ async def test_member_runtime_import_is_once_and_does_not_enable_local_issuance(
             store.import_runtime_event(
                 event, _connection=db, issued_kind="persistent", mutation_number=pending_number
             )
-    assert store.registry_slot(slot_id).logical_agent_id == agent_id
+    assert store.registry_slot(slot_id).session.logical_agent_id == agent_id
     assert store.registry_authority_id == "a"
 
 
@@ -302,26 +303,6 @@ def test_move_archives_content_and_removes_current_message_authority(tmp_path):
     assert archived["text"] == wire["text"] and "sender_id" not in archived
 
 
-def test_receipt_kind_conversion_is_once_and_preserves_replay_identity(tmp_path):
-    store = registry(tmp_path / "state.db")
-    receipt = store.prepare_receipt(
-        event_id="event",
-        request_key="request",
-        fingerprint="fingerprint",
-        connection_key=None,
-        result={"issuer_node_id": "a", "slot_id": "slot", "mode": "legacy"},
-    )
-    store.save_receipt(receipt)
-    with store._connect() as db:
-        db.execute("UPDATE access_mesh_registry_scope SET receipts_migrated=0")
-    migrate_receipt_kinds(store)
-    with store._connect() as db:
-        first = tuple(db.execute("SELECT * FROM access_mesh_issuer_receipts").fetchone())
-    migrate_receipt_kinds(store)
-    with store._connect() as db:
-        second = tuple(db.execute("SELECT * FROM access_mesh_issuer_receipts").fetchone())
-    assert first == second
-    assert store.receipt("request", "fingerprint")["mode"] == "temporary"
 
 
 def test_membership_removal_does_not_release_an_archived_issuers_number(tmp_path):
@@ -426,6 +407,6 @@ async def test_move_retires_native_authority_and_can_return_to_its_own_mesh(tmp_
         )
         mesh.store.import_registry(snapshot)
         assert (
-            mesh.store.registry_slot(issued["slot_id"]).logical_agent_id
+            mesh.store.registry_slot(issued["slot_id"]).session.logical_agent_id
             == issued["logical_agent_id"]
         )

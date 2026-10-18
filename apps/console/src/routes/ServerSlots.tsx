@@ -33,17 +33,17 @@ export type ServerSlotsProps = {
 }
 
 type Entry = { slot: AccessMeshSlotReadModel; instanceId: string; contextKey: string; observedAt: number }
-type SlotReference = { instanceId: string; issuerNodeId: string; slotId: string; logicalAgentId: string }
+type SlotReference = { instanceId: string; issuerNodeId: string; slotId: string }
 type Confirmation = SlotReference & { kind: 'rotate' | 'delete'; revision: number; publicName: string }
 const stateKeys: Record<string, MessageKey> = {
   active: 'slots.state.active', idle: 'slots.state.idle', warning: 'slots.state.warning', draining: 'slots.state.draining',
-  suspended: 'slots.state.suspended', cooldown: 'slots.state.cooldown', expired: 'slots.state.expired', deleted: 'slots.state.deleted', ended: 'slots.state.ended',
+  suspended: 'slots.state.suspended', cooldown: 'slots.state.cooldown', expired: 'slots.state.expired', ended: 'slots.state.ended',
 }
 function codeFor(entry: Entry) {
   if (entry.slot.managementContractVersion !== 2) return null
-  return loadAccessCode(entry.slot.logicalAgentId, entry.slot.codeGeneration ?? 0, window.localStorage, nativeCodeScope(entry.slot.issuerNodeId, entry.slot.slotId), entry.slot.revision)
+  return loadAccessCode(entry.slot.slotId, entry.slot.codeGeneration ?? 0, window.localStorage, nativeCodeScope(entry.slot.issuerNodeId, entry.slot.slotId), entry.slot.revision)
 }
-function reference(entry: Entry): SlotReference { return { instanceId: entry.instanceId, issuerNodeId: entry.slot.issuerNodeId, slotId: entry.slot.slotId, logicalAgentId: entry.slot.logicalAgentId } }
+function reference(entry: Entry): SlotReference { return { instanceId: entry.instanceId, issuerNodeId: entry.slot.issuerNodeId, slotId: entry.slot.slotId } }
 function safeCode(value: unknown): string { return typeof value === 'string' && /^[a-z][a-z0-9_:-]{0,127}$/.test(value) ? value : 'request_failed' }
 function sameSlot(entry: Entry, value: SlotReference): boolean { return entry.instanceId === value.instanceId && entry.slot.slotId === value.slotId && entry.slot.issuerNodeId === value.issuerNodeId }
 async function writeClipboard(value: string): Promise<boolean> {
@@ -72,7 +72,7 @@ function timer(entry: Entry, now: number, locale: ReturnType<typeof useI18n>['lo
 export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetControl, mutateFleetControl, loadAccessMeshSlots, loadAccessMeshDefaults, mutateAccessMesh }: ServerSlotsProps) {
   const { t, locale } = useI18n()
   const location = useLocation()
-  const { instanceId: routeInstanceId = '', meshId: routeMeshId = '', logicalAgentId } = useParams()
+  const { instanceId: routeInstanceId = '', meshId: routeMeshId = '', slotId: routeSlotId } = useParams()
   const globalMode = !routeInstanceId && !routeMeshId
   const query = new URLSearchParams(location.search)
   const [filterKey, setFilterKey] = useState(query.get('filter') ?? sessionStorage.getItem('slots-list-filter') ?? 'all')
@@ -93,7 +93,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const controlSerial = useRef<Record<string, number>>({})
   const controlInFlight = useRef<Record<string, number | undefined>>({})
   const mounted = useRef(true)
-  const { states: reads, refresh: refreshNative } = useAccessMeshState(instances, loadAccessMeshSlots, loadAccessMeshDefaults)
+  const { states: reads, refresh: refreshNative, removeSlot } = useAccessMeshState(instances, loadAccessMeshSlots, loadAccessMeshDefaults)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const refreshControl = useCallback(async (instanceId: string) => {
     const currentTargets: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
@@ -151,7 +151,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   }
   const entries = [...distinct.values()]
   const owner = resolveContextKey(query.get('owner') ?? '', contexts)
-  const selectedCandidates = logicalAgentId ? entries.filter((entry) => entry.slot.logicalAgentId === logicalAgentId && (!owner || entry.contextKey === owner) && (!query.get('issuer') || entry.slot.issuerNodeId === query.get('issuer')) && (!query.get('slot') || entry.slot.slotId === query.get('slot'))) : []
+  const selectedCandidates = routeSlotId ? entries.filter((entry) => entry.slot.slotId === routeSlotId && (!owner || entry.contextKey === owner) && (!query.get('issuer') || entry.slot.issuerNodeId === query.get('issuer')) && (!query.get('slot') || entry.slot.slotId === query.get('slot'))) : []
   const selected = selectedCandidates.length === 1 ? selectedCandidates[0] : undefined
   const selectedInstance = selected ? instances.find((item) => item.profile.instanceId === selected.instanceId) : undefined
   const policyInstanceId = routeInstanceId || activeContext?.instanceId || ''
@@ -195,10 +195,10 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     sessionStorage.setItem(`slots-scroll:${filter}`, String(window.scrollY))
   }
   useEffect(() => {
-    if (!globalMode || logicalAgentId) return
+    if (!globalMode || routeSlotId) return
     const top = Number(sessionStorage.getItem(`slots-scroll:${filter}`) ?? '0')
     if (Number.isFinite(top) && top > 0) requestAnimationFrame(() => window.scrollTo({ top }))
-  }, [filter, globalMode, logicalAgentId])
+  }, [filter, globalMode, routeSlotId])
 
   const operationScope = (instanceId: string) => {
     const profile = instances.find((item) => item.profile.instanceId === instanceId)?.profile
@@ -244,8 +244,8 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
         receipt = readNativeCodeReceipt(result.payload)
         if ('slot_id' in request && receipt.slotId !== request.slot_id) throw new Error('invalid_code_receipt')
         const codeScope = nativeCodeScope(receipt.issuerNodeId, receipt.slotId)
-        const prior = loadAccessCode(receipt.logicalAgentId, 0, window.localStorage, codeScope)
-        if (!prior || prior.generation <= receipt.value.generation) saveAccessCode(receipt.logicalAgentId, receipt.value, window.localStorage, codeScope)
+        const prior = loadAccessCode(receipt.slotId, 0, window.localStorage, codeScope)
+        if (!prior || prior.generation <= receipt.value.generation) saveAccessCode(receipt.slotId, receipt.value, window.localStorage, codeScope)
         updateCodes((value) => value + 1)
       }
       const fresh = await refreshNative(instanceId)
@@ -253,19 +253,22 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       const freshSlot = fresh?.slots?.find((item) => item.slotId === (receipt?.slotId ?? ('slot_id' in request ? request.slot_id : '')))
       const confirmed = request.action === 'defaults'
         ? Boolean(fresh?.defaults && !fresh.defaultsError && fresh.defaults.revision >= revision && revision > 0)
-        : Boolean(fresh?.slots && !fresh.slotsError && revision > 0 && (freshSlot && freshSlot.revision >= revision || request.action === 'delete' && !freshSlot))
+        : Boolean(fresh?.slots && !fresh.slotsError && revision > 0 && (request.action === 'delete' ? !freshSlot : freshSlot && freshSlot.revision >= revision))
       if (confirmed) {
         finish(instanceId)
         if (receipt && freshSlot) {
-          const current = loadAccessCode(receipt.logicalAgentId, freshSlot.codeGeneration ?? 0, window.localStorage, nativeCodeScope(receipt.issuerNodeId, receipt.slotId), freshSlot.revision)
+          const current = loadAccessCode(receipt.slotId, freshSlot.codeGeneration ?? 0, window.localStorage, nativeCodeScope(receipt.issuerNodeId, receipt.slotId), freshSlot.revision)
           if (current) {
-            setCreated({ instanceId, logicalAgentId: receipt.logicalAgentId, issuerNodeId: receipt.issuerNodeId, slotId: receipt.slotId })
+            setCreated({ instanceId, issuerNodeId: receipt.issuerNodeId, slotId: receipt.slotId })
             if (request.action === 'create' && !recover) await writeClipboard(current.code)
           } else setCreated(null)
         }
         if (request.action === 'delete') {
           const old = allEntries.find((entry) => entry.instanceId === instanceId && entry.slot.slotId === request.slot_id)
-          if (old) clearAccessCode(old.slot.logicalAgentId, window.localStorage, nativeCodeScope(old.slot.issuerNodeId, old.slot.slotId))
+          if (old) {
+            removeSlot(old.slot.issuerNodeId, old.slot.slotId)
+            clearAccessCode(old.slot.slotId, window.localStorage, nativeCodeScope(old.slot.issuerNodeId, old.slot.slotId))
+          }
           updateCodes((value) => value + 1)
         }
         setMessage(t('slots.managed.confirmed'))
@@ -290,15 +293,15 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     const params = new URLSearchParams({ issuer: entry.slot.issuerNodeId, slot: entry.slot.slotId })
     if (activeSessionsOnly) {
       const context = contexts.find((item) => item.key === entry.contextKey)
-      return `${context?.meshId ? meshSlotRoute(context.meshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)}?${params}`
+      return `${context?.meshId ? meshSlotRoute(context.meshId, entry.slot.slotId) : slotRoute(entry.instanceId, entry.slot.slotId)}?${params}`
     }
     if (globalMode) {
       if (filter !== 'all') params.set('filter', filter)
       if (activeContext) params.set('settings', activeContext.key)
       params.set('owner', entry.contextKey)
-      return `/slots/${encodeURIComponent(entry.slot.logicalAgentId)}?${params}`
+      return `/slots/${encodeURIComponent(entry.slot.slotId)}?${params}`
     }
-    const path = routeMeshId ? meshSlotRoute(routeMeshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)
+    const path = routeMeshId ? meshSlotRoute(routeMeshId, entry.slot.slotId) : slotRoute(entry.instanceId, entry.slot.slotId)
     return `${path}?${params}`
   }
   const positionMenu = (details: HTMLDetailsElement) => {
@@ -412,30 +415,30 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   if (routeInstanceId && !instances.some((item) => item.profile.instanceId === routeInstanceId)) return <Navigate to="/" replace />
   if (!instances.length) return <FeedbackState variant="empty" title={t('slots.empty')} />
   return <section className="stack compact-operational-surface slots-surface" aria-label={t('nav.slots')}>
-    {globalMode && !logicalAgentId ? <div className="slots-global-filter surface-section"><label className="ui-field"><span>{t('slots.filter')}</span><select value={filter} onChange={(event) => setFilterKey(event.target.value)}><option value="all">{t('slots.all')}</option>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label><IconButton icon="retry" variant="quiet" label={t('slots.native.refreshList')} disabled={Boolean(busy)} onClick={refreshVisible} /></div> : null}
+    {globalMode && !routeSlotId ? <div className="slots-global-filter surface-section"><label className="ui-field"><span>{t('slots.filter')}</span><select value={filter} onChange={(event) => setFilterKey(event.target.value)}><option value="all">{t('slots.all')}</option>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label><IconButton icon="retry" variant="quiet" label={t('slots.native.refreshList')} disabled={Boolean(busy)} onClick={refreshVisible} /></div> : null}
     {operationFeedback}
-    {!logicalAgentId && activeContext ? <article className="surface-section policy-controls">
+    {!routeSlotId && activeContext ? <article className="surface-section policy-controls">
       {globalMode ? <label className="ui-field slots-context-select"><span>{t('slots.settingsContext')}</span><select value={activeContext.key} onChange={(event) => setSettingsKey(event.target.value)}>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label> : null}
       {meshSettings ? meshPolicy && meshSupported ? <MeshAccessPolicyControls key={authorityId + ':' + targets} policy={meshPolicy} authorityName={meshAuthority?.profile.displayName ?? meshControl?.controlNodeId ?? ''} canMutate={meshWritable} externalBusy={Boolean(busy)} save={saveMesh} refresh={() => { if (authorityId) { void refreshControl(authorityId); void refreshNative(authorityId) } }} /> : <FeedbackState variant="partial" title={t('slots.native.meshPolicyUnsupported')} /> : defaults ? <AccessMeshDefaultsControls key={policyInstanceId + ':' + targets} defaults={defaults} canMutate={defaultsWritable} externalBusy={Boolean(busy)} execute={(request) => execute(policyInstanceId, request)} refresh={() => void refreshNative(policyInstanceId)} /> : null}
       {activeContext.kind === 'unknown' ? <p className="attention-strip" role="status">{t('slots.policyScopeUnknown')}{controlErrors[policyInstanceId] ? ` · ${controlErrors[policyInstanceId]}` : ''}</p> : null}
       {policyInstance && policyInstance.runtime.status !== 'live' ? <p className="muted">{t('slots.cachedReadOnly')}</p> : null}
     </article> : null}
-    {!logicalAgentId && activeContext && createRead?.defaults && !createRead.defaultsError ? <form className="slot-create surface-section" onSubmit={(event) => { event.preventDefault(); if (createReady) void execute(createInstanceId, { action: 'create', mode: 'persistent', idempotency_key: newSlotOperationKey() }).catch(() => undefined) }}><h3>{t('slots.createSection')}</h3><div className="slot-create-row">
+    {!routeSlotId && activeContext && createRead?.defaults && !createRead.defaultsError ? <form className="slot-create surface-section" onSubmit={(event) => { event.preventDefault(); if (createReady) void execute(createInstanceId, { action: 'create', mode: 'persistent', idempotency_key: newSlotOperationKey() }).catch(() => undefined) }}><h3>{t('slots.createSection')}</h3><div className="slot-create-row">
       {memberIds.length > 1 ? <label className="ui-field"><span>{t('slots.native.createServer')}</span><select value={createInstanceId} onChange={(event) => setCreateChoice(event.target.value)} disabled={Boolean(busy)}>{memberIds.map((id) => <option key={id} value={id}>{instances.find((item) => item.profile.instanceId === id)?.profile.displayName ?? id}</option>)}</select></label> : <p className="muted">{createInstance?.profile.displayName}</p>}
       <p className="muted">{t('slots.native.assignedName')}</p><IconButton type="submit" icon="create" variant="primary" label={t('slots.create')} busy={busy === 'create'} disabled={!createReady || Boolean(busy)} />
     </div>{createdEntry && createdCode && createdEntry.instanceId === createInstanceId ? <div className="slot-access-code created-access-row" role="status"><span>{createdEntry.slot.publicName}</span><span className="access-code-copy"><code>{createdCode.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + createdEntry.slot.publicName} onClick={() => void copy(createdEntry)} /></span><p className="muted">{createdCode.expiresAt ? t('slots.native.codeExpiry') + ' ' + createdCode.expiresAt : t('slots.native.codeExpiryUnknown')}</p></div> : null}</form> : null}
-    {logicalAgentId && !selected ? <FeedbackState variant="partial" title={t('slots.detailsUnavailable')} detail={t('slots.detailsUnavailableHint')} /> : null}
+    {routeSlotId && !selected ? <FeedbackState variant="partial" title={t('slots.detailsUnavailable')} detail={t('slots.detailsUnavailableHint')} /> : null}
     {selected ? <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{selected.slot.publicName}</h3></div><span className={'status server-status slot-session-badge slot-session-' + selected.slot.sessionLifecycle.state}>{t(stateKeys[selected.slot.managementContractVersion === 2 ? selected.slot.sessionLifecycle.state : 'unknown'] ?? 'slots.state.unknown')}</span></div>
       <div className="slot-access-code"><span>{t('slots.accessCodeTitle')}</span>{selectedCode ? <><code>{selectedCode.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + selected.slot.publicName} onClick={() => void copy(selected)} /></> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</div>
       {selectedCode ? <p className="muted">{selectedCode.expiresAt ? t('slots.native.codeExpiry') + ' ' + selectedCode.expiresAt : t('slots.native.codeExpiryUnknown')}{selected.slot.codeGeneration === undefined ? ` ${t('slots.native.codeValidationLimited')}` : ''}</p> : null}
-      <details className="technical-details"><summary>{t('slots.technicalDetails')}</summary><dl className="slot-details-grid"><div><dt>{t('slots.native.slotId')}</dt><dd><code>{selected.slot.slotId}</code></dd></div><div><dt>{t('slots.logicalAgentId')}</dt><dd><code>{selected.slot.logicalAgentId}</code></dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.slot.issuerNodeId}</dd></div><div><dt>{t('slots.rawState')}</dt><dd><code>{selected.slot.state}</code></dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slot.revision}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.slot.codeGeneration ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.slot.createdAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.slot.updatedAt ?? t('common.unavailable')}</dd></div></dl></details>
-      <IconButtonRow className="server-actions"><IconButton icon="rotate" variant="secondary" label={t('slots.rotateAccessCode')} disabled={!canMutate(selected.instanceId, selected.slot) || Boolean(busy) || selected.slot.state === 'deleted'} onClick={() => showConfirmation(selected, 'rotate')} /></IconButtonRow>
+      <details className="technical-details"><summary>{t('slots.technicalDetails')}</summary><dl className="slot-details-grid"><div><dt>{t('slots.native.slotId')}</dt><dd><code>{selected.slot.slotId}</code></dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.slot.issuerNodeId}</dd></div><div><dt>{t('slots.rawState')}</dt><dd><code>{selected.slot.state}</code></dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slot.revision}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.slot.codeGeneration ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.slot.createdAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.slot.updatedAt ?? t('common.unavailable')}</dd></div></dl></details>
+      <IconButtonRow className="server-actions"><IconButton icon="rotate" variant="secondary" label={t('slots.rotateAccessCode')} disabled={!canMutate(selected.instanceId, selected.slot) || Boolean(busy)} onClick={() => showConfirmation(selected, 'rotate')} /></IconButtonRow>
       {selectedInstance?.runtime.authStatus !== 'connected' ? <p className="attention-strip">{t('slots.liveRequired')}</p> : null}
-      <AccessMeshSlotControls key={selected.instanceId + ':' + selected.slot.slotId + ':' + targets} slot={selected.slot} canMutate={canMutate(selected.instanceId, selected.slot) && selected.slot.state !== 'deleted'} externalBusy={Boolean(busy)} execute={(request) => execute(selected.instanceId, request)} refresh={() => void refreshNative(selected.instanceId)} />
+      <AccessMeshSlotControls key={selected.instanceId + ':' + selected.slot.slotId + ':' + targets} slot={selected.slot} canMutate={canMutate(selected.instanceId, selected.slot)} externalBusy={Boolean(busy)} execute={(request) => execute(selected.instanceId, request)} refresh={() => void refreshNative(selected.instanceId)} />
     </article> : null}
-    {!logicalAgentId ? <div className="slot-grid">{entries.map((entry) => {
+    {!routeSlotId ? <div className="slot-grid">{entries.map((entry) => {
       const value = codeFor(entry), timing = timer(entry, clock, locale)
-      const state = entry.slot.managementContractVersion === 2 ? entry.slot.sessionLifecycle.state : 'unknown', writable = canMutate(entry.instanceId, entry.slot) && entry.slot.state !== 'deleted' && !busy
+      const state = entry.slot.managementContractVersion === 2 ? entry.slot.sessionLifecycle.state : 'unknown', writable = canMutate(entry.instanceId, entry.slot) && !busy
       return <article className={'panel slot-card slot-cue-' + timing.cue} key={entry.slot.issuerNodeId + ':' + entry.slot.slotId}><div className="slot-card-row"><div className="slot-identity"><Link className="slot-name-link" to={href(entry)} onClick={rememberScroll}><strong>{entry.slot.publicName}</strong></Link><span className={'status server-status slot-session-badge slot-session-' + state}>{t(stateKeys[state] ?? 'slots.state.unknown')}</span></div>
         <span className="slot-code-cell">{value ? <span className="access-code-copy"><code>{value.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + entry.slot.publicName} onClick={() => void copy(entry)} /></span> : <span className="slot-code-unavailable" aria-hidden="true">—</span>}</span>
         <div className="slot-card-actions"><span className={'slot-timer slot-timer-' + timing.cue} role={timing.cue === 'normal' ? undefined : 'status'}>{timing.cue === 'warning' ? <Icon name="warning" /> : timing.cue === 'alert' ? <Icon name="error" /> : null}{timing.text || '\u00a0'}</span>

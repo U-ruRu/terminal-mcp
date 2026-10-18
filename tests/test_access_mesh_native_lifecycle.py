@@ -72,6 +72,27 @@ async def issued(f, kind="temporary", **policy):
     )
 
 
+def enable_legacy_admission(app):
+    """Opt synthetic first-number allocation fixtures into the current policy."""
+    current = app.defaults_state()
+    app.store.change_defaults(
+        expected_revision=current["revision"],
+        policy=current["policy"],
+        receipt=None,
+        legacy_admission_enabled=True,
+    )
+
+
+@pytest_asyncio.fixture
+async def expired_rearm_session(fixture):
+    grant = await issued(fixture, "persistent", rearm_enabled=True)
+    await fixture.app.attach(actor(), session_number="1234")
+    slot = fixture.store.attached_slot(fixture.app.connection_key(actor()))
+    previous = fixture.store.observed_identity(slot, now=fixture.clock[0])
+    fixture.clock[0] = T0 + timedelta(seconds=16)
+    return fixture, grant["logical_agent_id"], previous["work_session_id"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind,release", [("persistent", False), ("persistent", True)])
 async def test_expiry_claim_policy_preserves_task_state(fixture, kind, release):
@@ -121,6 +142,22 @@ async def test_expired_status_read_preserves_native_session(fixture):
     status = f.store.observed_identity(slot, now=f.clock[0])
     assert status["session_lifecycle"]["state"] == "expired"
     assert (await f.native.get_work_session(attached["work_session_id"])).state == "active"
+
+
+@pytest.mark.asyncio
+async def test_attach_automatically_rearms_the_existing_native_identity(expired_rearm_session):
+    f, agent_id, previous_session_id = expired_rearm_session
+
+    await f.app.attach(actor(), session_number="1234")
+
+    slot = f.store.attached_slot(f.app.connection_key(actor()))
+    current = f.store.observed_identity(slot, now=f.clock[0])
+    native = await f.native.get_work_session(current["work_session_id"])
+    assert native.logical_agent_id == slot.session.logical_agent_id == agent_id
+    assert native.work_session_id != previous_session_id
+    assert datetime.fromisoformat(native.hard_expires_at) == f.clock[0] + timedelta(
+        seconds=slot.policy.duration_seconds
+    )
 
 
 @pytest.mark.asyncio

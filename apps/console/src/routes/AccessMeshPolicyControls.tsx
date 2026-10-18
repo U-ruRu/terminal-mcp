@@ -20,12 +20,14 @@ type PolicyDraft = {
   draining: DurationValue
   rearm: DurationValue
   rearmEnabled: boolean
+  legacyAdmissionEnabled: boolean
   releaseOnEnd: 'mode' | 'yes' | 'no'
 }
 type NativeSlot = AccessMeshSlotReadModel & { inheritance?: PolicyInheritanceDisplay; windowPolicy?: AccessMeshPolicyReadModel | null }
 
 type FormProps = {
   policy: AccessMeshPolicyReadModel
+  legacyAdmissionEnabled?: boolean
   revision: number
   inheritance?: PolicyInheritanceDisplay
   slotId?: string
@@ -36,16 +38,17 @@ type FormProps = {
   refresh: () => void
 }
 
-function policyKey(policy: AccessMeshPolicyReadModel, revision: number, inheritance?: PolicyInheritanceDisplay): string {
-  return JSON.stringify([revision, policy, inheritance?.parent?.version ?? '', inheritance?.mode ?? ''])
+function policyKey(props: FormProps): string {
+  return JSON.stringify([props.revision, props.policy, props.legacyAdmissionEnabled, props.inheritance?.parent?.version ?? '', props.inheritance?.mode ?? ''])
 }
 
 function makeDraft(props: FormProps): PolicyDraft {
   return {
-    revision: props.revision, base: policyKey(props.policy, props.revision, props.inheritance),
+    revision: props.revision, base: policyKey(props),
     duration: durationValue(props.policy.durationSeconds), warning: durationValue(props.policy.warningSeconds),
     draining: durationValue(props.policy.drainingSeconds), rearm: durationValue(props.policy.cooldownSeconds),
     rearmEnabled: props.policy.rearmEnabled,
+    legacyAdmissionEnabled: props.legacyAdmissionEnabled === true,
     releaseOnEnd: props.policy.releaseOnEnd === null ? 'mode' : props.policy.releaseOnEnd ? 'yes' : 'no',
   }
 }
@@ -58,7 +61,7 @@ function NativePolicyForm(props: FormProps) {
   const busyRef = useRef(false)
   const [resetConfirmation, setResetConfirmation] = useState<{ revision: number; parentRevision?: number | null } | null>(null)
   const draft = edited ?? makeDraft(props)
-  const conflict = Boolean(edited && edited.base !== policyKey(props.policy, props.revision, props.inheritance))
+  const conflict = Boolean(edited && edited.base !== policyKey(props))
   const disabled = !props.policySupported || !props.canMutate || Boolean(props.externalBusy) || busy
 
   const perform = async (request: AccessMeshMutationRequest) => {
@@ -84,7 +87,7 @@ function NativePolicyForm(props: FormProps) {
     const policy = { duration_seconds: duration, warning_seconds: warning, draining_seconds: draining, cooldown_seconds: rearm, rearm_enabled: draft.rearmEnabled, release_on_end: draft.releaseOnEnd === 'mode' ? null : draft.releaseOnEnd === 'yes' }
     void perform(props.slotId
       ? { action: 'policy', slot_id: props.slotId, expected_revision: draft.revision, policy, idempotency_key: newSlotOperationKey() }
-      : { action: 'defaults', expected_revision: draft.revision, policy, idempotency_key: newSlotOperationKey() })
+      : { action: 'defaults', expected_revision: draft.revision, policy, legacy_admission_enabled: draft.legacyAdmissionEnabled, idempotency_key: newSlotOperationKey() })
   }
 
   const reset = () => {
@@ -111,6 +114,7 @@ function NativePolicyForm(props: FormProps) {
       <DurationField label={t('slots.managed.rearm')} value={draft.rearm} disabled={disabled} onChange={(rearm) => setEdited({ ...draft, rearm })} />
     </div>
     <label className="policy-toggle"><input type="checkbox" checked={draft.rearmEnabled} disabled={disabled} onChange={(event) => setEdited({ ...draft, rearmEnabled: event.target.checked })} /><span>{t('slots.native.rearmEnabled')}</span></label>
+    {!props.slotId ? <><label className="policy-toggle"><input type="checkbox" checked={draft.legacyAdmissionEnabled} disabled={disabled} onChange={(event) => setEdited({ ...draft, legacyAdmissionEnabled: event.target.checked })} /><span>{t('slots.legacyAdmission')}</span></label><p className="muted">{t('slots.legacyAdmissionHint')}</p></> : null}
     <label className="ui-field"><span>{t('slots.native.releaseOnEnd')}</span><select aria-label={t('slots.native.releaseOnEnd')} value={draft.releaseOnEnd} disabled={disabled} onChange={(event) => setEdited({ ...draft, releaseOnEnd: event.target.value as PolicyDraft['releaseOnEnd'] })}><option value="mode">{t('slots.native.modeDefault')}</option><option value="yes">{t('slots.yes')}</option><option value="no">{t('slots.no')}</option></select></label>
 
     {conflict ? <p role="alert" className="attention-strip">{t('slots.managed.conflict')}</p> : null}
@@ -131,7 +135,7 @@ export function AccessMeshDefaultsControls({ defaults, ...props }: {
   execute: AccessMeshActionExecutor
   refresh: () => void
 }) {
-  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} policySupported={Boolean(defaults.managementContractVersion === 2 && defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
+  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} legacyAdmissionEnabled={defaults.legacyAdmissionEnabled} revision={defaults.revision} inheritance={defaults.inheritance} policySupported={Boolean(defaults.managementContractVersion === 2 && defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
 }
 
 export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute, refresh }: {

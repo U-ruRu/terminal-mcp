@@ -129,7 +129,8 @@ def _failure(code, *, outcome="not_committed"):
 
 def _public_name(slot):
     # Same stable, issuer-qualified contract as storage.access_mesh.public_name.
-    digest = hashlib.sha256(f"{slot.issuer_id}:{slot.logical_agent_id}".encode()).hexdigest()[:12]
+    identity = f"{slot.issuer_id}:{slot.session.logical_agent_id}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:12]
     return f"{slot.issuer_id[:40]}-{digest}"
 
 
@@ -288,7 +289,7 @@ class AccessMeshMessaging:
                     records[identity["logical_agent_id"]]["last_active_at"] = earlier
                 if len(records) > MAX_RECIPIENTS:
                     raise MeshMessagingError("output_item_too_large")
-            after = slots[-1].logical_agent_id
+            after = slots[-1].session.logical_agent_id
             if len(slots) < 100:
                 break
         # An eligible subscription hold is message-only presence. Never create a
@@ -496,10 +497,13 @@ class AccessMeshMessaging:
                         if canonicalize is not None
                         else slot
                     )
-                    return effective.logical_agent_id == logical_agent_id
+                    return (
+                        effective.session is not None
+                        and effective.session.logical_agent_id == logical_agent_id
+                    )
             if len(slots) < 100:
                 return False
-            cursor = slots[-1].logical_agent_id
+            cursor = slots[-1].session.logical_agent_id
 
     async def _send(
         self,

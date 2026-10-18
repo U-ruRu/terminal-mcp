@@ -299,3 +299,37 @@ links and the former exchange request key are intentionally unsupported.
 Existing Console pairing fixtures are updated to version 2; the only new
 version-1 check is an atomic negative parser case. The pairing store's
 one-time and expiry rules remain unchanged.
+
+## Slot/session separation and current schema transition (2026-10-18)
+
+Slots now retain a number and policy; the separate session owns the agent identity
+and explicit end marker. Reopen uses the original end plus cooldown, including an
+early resume followed by a later full window. The projection reports only an
+actually opened window. The existing grant, future-policy, number and registry
+tests were updated at their owners to match this contract.
+
+| Retired assertion | Current obligation and owner |
+| --- | --- |
+| `test_access_mesh_unified_migration::test_temporary_kind_migration_preserves_slot_and_attachment` converts an obsolete `legacy` slot schema | The supported data-model transition is the deployed v26 to v27 split. `test_access_mesh_session_schema` preserves live identity, attachment, original deadline and task data while physically removing deleted slots. |
+| `test_access_mesh_session_numbers::test_recycled_number_forms_new_identity_epoch_and_retains_old_history` reuses digits after a deadline while retaining the old slot and its sessions | A slot reserves its number until physical deletion. `test_access_mesh_slot_storage` checks the reservation after expiry and the physical native-session/binding/number cascade on deletion. |
+| `test_access_mesh_future_policy::test_policy_capture_uses_current_automatic_cycle` silently advances a projected cycle without a start event | Its updated case `test_policy_capture_keeps_last_actual_window_until_start` retains the actual window. Explicit and automatic start eligibility use the shared reopen/cooldown helpers. |
+
+The current `test_mesh_parent_replaces_a_previous_node_default_override` was moved
+from the removed mixed migration module to `test_access_mesh_registry_storage`.
+Its Mesh inheritance obligation remains intact.
+
+New storage cases cover gaps absent from the previous suite: empty manual-slot
+identity, deletion of linked native work sessions, the exact 72-hour boundary for
+both slot kinds, a long session's deadline as its latest possible use, and the
+transactional retention recheck after a concurrent touch. Natural expiry verifies
+the original deadline as the native end timestamp. Policy-boundary cases reuse the
+existing core module and parameterize slot kind, Rearm and a captured policy edit.
+These are isolated owning-component checks; broader runtime wiring remains in the
+existing explicit integration layer.
+
+Additional atomic cases cover issuer-revision ordering when clocks tie or reverse,
+a stale number snapshot after an applied end, zero-cooldown reopening, terminal
+deletion at missing or gapped replicas, stale-delete protection, late recipient
+holds after deletion, consistent slot/session snapshots, and suspended-slot
+retention. The obsolete legacy-receipt-kind conversion test is removed; it
+asserted a retired mode rather than the current admission switch.

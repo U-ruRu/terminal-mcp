@@ -35,17 +35,21 @@ def seed_inactive_slot(store, issuer_id, slot_id):
     with store._connect() as db:
         db.execute(
             "INSERT INTO access_mesh_slot_replicas "
-            "(issuer_id,slot_id,logical_agent_id,kind,state,revision,event_id,"
+            "(issuer_id,slot_id,kind,state,revision,event_id,"
             "policy_json,code_tag) "
-            "VALUES(?,?,?,'persistent','suspended',7,?,?,?)",
+            "VALUES(?,?,'persistent','suspended',7,?,?,?)",
             (
                 issuer_id,
                 slot_id,
-                "agent-" + slot_id,
                 "event-" + slot_id,
                 json.dumps(asdict(SlotPolicy(1200, 120))),
                 store.code_tag(issuer_id, "1234"),
             ),
+        )
+        db.execute(
+            "INSERT INTO access_mesh_sessions(issuer_id,slot_id,logical_agent_id,active) "
+            "VALUES(?,?,?,0)",
+            (issuer_id, slot_id, "agent-" + slot_id),
         )
 
 

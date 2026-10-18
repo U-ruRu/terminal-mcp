@@ -1,7 +1,7 @@
 {
   "access.session": [
     {
-      "text": "start issues a four-digit session_number; end ends the shared session cycle",
+      "text": "start accepts optional session_number to choose an existing slot; without a number it uses the saved session binding; only Legacy admission permits initial slot allocation; an explicit start reuses the old deadline before cooldown and grants a full duration at or after cooldown; end ends the current session and forbids session_number",
       "source": "src/terminal_mcp/mcp/access.py",
       "anchor": "issuer_session("
     }

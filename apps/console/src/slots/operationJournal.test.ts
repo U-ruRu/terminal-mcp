@@ -22,3 +22,9 @@ test('inheritance reset persists only the real native request and excludes copie
   const restored = loadSlotOperation(scope)
   expect(restored).toMatchObject({ request: { action: 'policy', inherit_policy: true, expected_revision: 4 } })
 })
+
+test('a pending Legacy admission edit keeps the explicit defaults setting', () => {
+  const operation: PendingSlotOperation = { ...pending, request: { action: 'defaults', expected_revision: 2, legacy_admission_enabled: true, idempotency_key: 'defaults-admission' } }
+  beginSlotOperation('server-a', operation)
+  expect(loadSlotOperation('server-a')?.request).toEqual(operation.request)
+})

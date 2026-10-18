@@ -48,8 +48,10 @@ def build_access_mcp(
             readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
         ),
         description=(
-            "Start a session and obtain its four-digit session_number for "
-            "binding the agent identity to the session, or end the session."
+            "Start a session using an optional existing four-digit session_number, "
+            "or reuse this agent's saved session binding when the number is omitted. "
+            "Legacy admission permits a new slot only when neither is available. "
+            "End the current session with action='end'."
         ),
     )
     async def session(*, boundary: RuntimeBoundary) -> dict:
@@ -68,7 +70,7 @@ def build_access_mcp(
         )
         with actor.bind():
             return await application.service.access_mesh.issuer_session(
-                actor, action=request.action
+                actor, action=request.action, session_number=request.session_number
             )
 
     @mcp.tool(
@@ -107,10 +109,10 @@ def build_access_mcp(
                 raise AccessMeshError("access_mesh_unavailable")
             key = mesh.connection_key(actor)
             slot = await asyncio.to_thread(mesh.store.issuer_bound_slot, key)
-            if slot is None or slot.state != "active":
+            if slot is None or slot.session is None or slot.state != "active":
                 raise AccessMeshError("subscriber_identity_missing")
             return await event_store.get_events(
-                slot.logical_agent_id,
+                slot.session.logical_agent_id,
                 principal_id=actor.principal_id,
                 event_id=request.event_id,
                 limit=request.limit,

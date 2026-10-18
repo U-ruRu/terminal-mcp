@@ -25,6 +25,7 @@ def maintenance():
     app.last_error = None
     app.tick = AsyncMock()
     app.cleanup = AsyncMock()
+    app._expire_unused_slots = AsyncMock()
     return app
 
 
@@ -73,6 +74,7 @@ def signature_store(tmp_path):
         db.executescript("""
             CREATE TABLE access_mesh_attachments(issuer_id,slot_id,logical_agent_id);
             CREATE TABLE access_mesh_slot_replicas(issuer_id,slot_id,revision);
+            CREATE TABLE access_mesh_sessions(issuer_id,slot_id,logical_agent_id,active);
             CREATE TABLE access_mesh_number_claims(issuer_id,slot_id,number);
             CREATE TABLE access_mesh_number_starts(number,event_id);
             CREATE TABLE access_mesh_number_ends(number,event_id);
@@ -85,6 +87,7 @@ def signature_store(tmp_path):
             CREATE TABLE commands(command);
             INSERT INTO access_mesh_attachments VALUES('local','s','a');
             INSERT INTO access_mesh_slot_replicas VALUES('local','s',1);
+            INSERT INTO access_mesh_sessions VALUES('local','s','a',1);
             INSERT INTO access_mesh_number_claims VALUES('local','s','0012');
             INSERT INTO access_mesh_local_sessions VALUES('local','s','w');
             INSERT INTO logical_agent_work_sessions VALUES(

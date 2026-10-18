@@ -10,8 +10,7 @@ function identifier(value: unknown): string {
   return value
 }
 
-export function readNativeCodeReceipt(payload: JsonRecord): { logicalAgentId: string; slotId: string; issuerNodeId: string; revision: number; value: StoredAccessCode } {
-  const logicalAgentId = identifier(payload.logical_agent_id)
+export function readNativeCodeReceipt(payload: JsonRecord): { slotId: string; issuerNodeId: string; revision: number; value: StoredAccessCode } {
   const slotId = identifier(payload.slot_id)
   const issuerNodeId = identifier(payload.issuer_node_id)
   if (typeof payload.access_code !== 'string' || !/^\d{4}$/.test(payload.access_code)) throw new Error('invalid_code_receipt')
@@ -21,7 +20,7 @@ export function readNativeCodeReceipt(payload: JsonRecord): { logicalAgentId: st
   const expiresAt = payload.code_expires_at
   if (expiresAt !== undefined && expiresAt !== null && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) throw new Error('invalid_code_receipt')
   return {
-    logicalAgentId, slotId, issuerNodeId, revision: Number(payload.revision),
+    slotId, issuerNodeId, revision: Number(payload.revision),
     value: {
       code: payload.access_code,
       generation: Number(generation),

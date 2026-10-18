@@ -26,6 +26,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
         "warning_after_seconds": 20 * 60,
         "alert_after_seconds": 22 * 60,
         "rearm_after_seconds": 3 * 60,
+        "rearm_enabled": True,
+        "legacy_admission_enabled": False,
     }
 
     def __init__(
@@ -405,6 +407,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
                 warning_after_seconds=int(payload["warning_after_seconds"]),
                 alert_after_seconds=int(payload["alert_after_seconds"]),
                 rearm_after_seconds=int(payload["rearm_after_seconds"]),
+                rearm_enabled=payload["rearm_enabled"],
+                legacy_admission_enabled=payload["legacy_admission_enabled"],
                 expected_revision=payload.get("expected_revision"),
             )
         if operation == "reset-policy":
@@ -783,6 +787,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
         warning_after_seconds: int,
         alert_after_seconds: int,
         rearm_after_seconds: int,
+        rearm_enabled: bool = True,
+        legacy_admission_enabled: bool = False,
         expected_revision: int | None = None,
     ) -> dict:
         if not self.is_control_node:
@@ -793,6 +799,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
                     "warning_after_seconds": warning_after_seconds,
                     "alert_after_seconds": alert_after_seconds,
                     "rearm_after_seconds": rearm_after_seconds,
+                    "rearm_enabled": rearm_enabled,
+                    "legacy_admission_enabled": legacy_admission_enabled,
                     "expected_revision": expected_revision,
                 },
             )
@@ -828,6 +836,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
             warning_after_seconds=warning_after_seconds,
             alert_after_seconds=alert_after_seconds,
             rearm_after_seconds=rearm_after_seconds,
+            rearm_enabled=rearm_enabled,
+            legacy_admission_enabled=legacy_admission_enabled,
             expected_revision=expected_revision,
         )
         state = await self.snapshot()

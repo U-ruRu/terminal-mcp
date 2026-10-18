@@ -198,8 +198,9 @@ class MessageEventMesh:
             for item in payload["recipients"]:
                 known = await (
                     await db.execute(
-                        "SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? "
-                        "AND slot_id=? AND logical_agent_id=? AND state!='deleted'",
+                        "SELECT 1 FROM access_mesh_slot_replicas r JOIN access_mesh_sessions s "
+                        "USING(issuer_id,slot_id) WHERE r.issuer_id=? AND r.slot_id=? "
+                        "AND s.logical_agent_id=?",
                         (peer, item["slot_id"], item["recipient_agent_id"]),
                     )
                 ).fetchone()

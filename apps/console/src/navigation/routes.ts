@@ -18,8 +18,8 @@ export function slotsRoute(instanceId: string): string {
   return `${serverRoute(instanceId)}/slots`
 }
 
-export function slotRoute(instanceId: string, logicalAgentId: string): string {
-  return `${slotsRoute(instanceId)}/${part(logicalAgentId)}`
+export function slotRoute(instanceId: string, slotId: string): string {
+  return `${slotsRoute(instanceId)}/${part(slotId)}`
 }
 
 export function tasksRoute(instanceId: string): string {
@@ -57,6 +57,6 @@ export function meshSlotsRoute(meshId: string): string {
   return `${meshRoute(meshId)}/slots`
 }
 
-export function meshSlotRoute(meshId: string, logicalAgentId: string): string {
-  return `${meshSlotsRoute(meshId)}/${part(logicalAgentId)}`
+export function meshSlotRoute(meshId: string, slotId: string): string {
+  return `${meshSlotsRoute(meshId)}/${part(slotId)}`
 }

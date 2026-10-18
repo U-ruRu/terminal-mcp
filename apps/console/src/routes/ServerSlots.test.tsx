@@ -18,7 +18,13 @@ function setup(route = '/slots', overrides: Partial<ServerSlotsProps> = {}) {
     if (request.action === 'defaults') {
       state.defaults.revision++
       if (request.policy?.duration_seconds !== undefined) state.defaults.policy.durationSeconds = request.policy.duration_seconds
+      if (request.policy?.rearm_enabled !== undefined) state.defaults.policy.rearmEnabled = request.policy.rearm_enabled
+      if (request.legacy_admission_enabled !== undefined) state.defaults.legacyAdmissionEnabled = request.legacy_admission_enabled
       return { ok: true, payload: { revision: state.defaults.revision } }
+    }
+    if (request.action === 'delete') {
+      state.slots = state.slots.filter((slot) => slot.slotId !== request.slot_id)
+      return { ok: true, payload: { revision: request.expected_revision + 1 } }
     }
     if (request.action !== 'policy') throw new Error('unexpected mutation in policy fixture')
     const slot = state.slots.find((item) => item.slotId === request.slot_id)!
@@ -35,11 +41,11 @@ function setup(route = '/slots', overrides: Partial<ServerSlotsProps> = {}) {
   })
   const props: ServerSlotsProps = { instances: [fleetInstance()], loadAccessMeshSlots: loadSlots, loadAccessMeshDefaults: loadDefaults, loadFleetControl: loadControl, mutateAccessMesh: mutate, ...overrides }
   const view = render(<I18nProvider><MemoryRouter initialEntries={[route]}><Routes>
-    {['/slots', '/servers/:instanceId/slots', '/servers/:instanceId/slots/:logicalAgentId'].map((path) => <Route key={path} path={path} element={<ServerSlots {...props} />} />)}
+    {['/slots', '/servers/:instanceId/slots', '/servers/:instanceId/slots/:slotId'].map((path) => <Route key={path} path={path} element={<ServerSlots {...props} />} />)}
   </Routes></MemoryRouter></I18nProvider>)
   return { state, props, loadSlots, loadDefaults, loadControl, mutate, view }
 }
-const detail = '/servers/alpha/slots/la_alpha?issuer=alpha&slot=as_alpha'
+const detail = '/servers/alpha/slots/as_alpha?issuer=alpha&slot=as_alpha'
 
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.restoreAllMocks() })
 
@@ -101,17 +107,30 @@ test('a stale slot revision preserves the unsaved draft', async () => {
   expect(screen.getByRole('button', { name: 'Save slot policy' })).toBeDisabled()
 })
 
-test('saving Standalone policy uses the native defaults revision', async () => {
+test('saving Standalone policy sends its admission and Rearm settings with the defaults revision', async () => {
   const env = setup('/servers/alpha/slots')
   const input = await screen.findByRole('spinbutton', { name: 'Session duration' })
   fireEvent.change(input, { target: { value: '3' } })
   fireEvent.change(screen.getByRole('combobox', { name: 'Session duration · Unit' }), { target: { value: 'hours' } })
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Legacy admission' }))
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Rearm' }))
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
   await waitFor(() => expect(env.mutate).toHaveBeenCalledWith('alpha', expect.objectContaining({
-    action: 'defaults', expected_revision: 2, policy: expect.objectContaining({ duration_seconds: 10800 }),
+    action: 'defaults', expected_revision: 2, legacy_admission_enabled: true,
+    policy: expect.objectContaining({ duration_seconds: 10800, rearm_enabled: false }),
   })))
+})
+
+test('confirmed deletion removes the slot from every displayed node snapshot', async () => {
+  setup('/slots', { instances: [fleetInstance(), fleetInstance('beta')] })
+  await screen.findByRole('link', { name: 'Alpha' })
+  await userEvent.click(screen.getByLabelText('More actions'))
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+  await waitFor(() => expect(screen.queryByRole('link', { name: 'Alpha' })).not.toBeInTheDocument())
 })
 
 test('read-only pairing can display fresh slots while all native writes remain disabled', async () => {
