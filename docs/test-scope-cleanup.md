@@ -346,3 +346,20 @@ deletion at missing or gapped replicas, stale-delete protection, late recipient
 holds after deletion, consistent slot/session snapshots, and suspended-slot
 retention. The obsolete legacy-receipt-kind conversion test is removed; it
 asserted a retired mode rather than the current admission switch.
+
+### Slot/session owner fixture follow-up
+
+- `test_subscription_hold_fences_slot_deletion` now checks physical deletion,
+  release of the recipient hold and number, and retention of the historical
+  subscription recipient. A hold no longer prevents deletion under the current
+  slot contract; recipient challenge rechecking still protects immutable identity.
+- `test_hot_control_scope_conversion_preserves_existing_acs_registry` is replaced
+  by `test_control_reinitialization_preserves_existing_acs_registry`. The artificial
+  rollback to control schema 4 and conversion of `old-domain` are retired. The
+  current obligation remains: reinitializing FleetControl and applying its policy
+  preserve the Mesh namespace and the complete slot projection, including session
+  identity and policy. The common recovery fixture supplies the required creation
+  time; the other recovery and authority handoff cases remain.
+- Existing rotated-code and subscriber fixtures use session-owned identity. The
+  native message admission checks are unchanged and verify the repaired lookup of
+  session identity through a number claim's immutable slot reference.

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import pytest_asyncio
 
-from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
+from terminal_mcp.core.access_mesh_grants import AccessSlotEvent, SessionSnapshot, SlotPolicy
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_admission import (
     VerifiedAdmissionContext,
@@ -189,7 +189,8 @@ async def test_subscription_rechecks_recipient_identity_after_the_callback_chall
     events, resolver
 ):
     async def challenge(url, body, headers):
-        resolver.mesh.store.code_slot.return_value.logical_agent_id = "replacement-recipient"
+        slot = resolver.mesh.store.code_slot.return_value
+        slot.session = replace(slot.session, logical_agent_id="replacement-recipient")
         return 200, json.dumps({"challenge": json.loads(body)["challenge"]}).encode()
 
     adapter = MCPEventsAdapter(
@@ -331,7 +332,7 @@ async def test_successful_webhook_delivery_preserves_the_message_ack_obligation(
 @pytest.fixture
 def resolver():
     slot = SimpleNamespace(
-        issuer_id=NODE, slot_id="slot", logical_agent_id="recipient", state="active"
+        issuer_id=NODE, slot_id="slot", session=SessionSnapshot("recipient"), state="active"
     )
     store = SimpleNamespace(
         local_node_id=NODE,
@@ -446,7 +447,7 @@ async def test_subscription_hold_prevents_reusing_an_expired_number(pinned):
 
 
 @pytest.mark.asyncio
-async def test_subscription_hold_fences_slot_deletion(pinned):
+async def test_slot_deletion_releases_the_subscription_hold_and_number(pinned):
     events, mesh = pinned
     await subscription(events)
     deletion = AccessSlotEvent(
@@ -458,10 +459,14 @@ async def test_subscription_hold_fences_slot_deletion(pinned):
         kind="SlotDeleted",
     )
 
-    with pytest.raises(AccessMeshError, match="access_mesh_subscription_hold"):
-        mesh.apply_event(deletion, authenticated_peer_id=NODE)
+    result = mesh.apply_event(deletion, authenticated_peer_id=NODE)
 
-    assert mesh.slot(NODE, "slot").state == "active"
+    assert result.outcome == "applied"
+    assert mesh.slot(NODE, "slot") is None
+    with mesh._connect() as db:
+        assert db.execute("SELECT 1 FROM access_mesh_recipient_holds").fetchone() is None
+        assert mesh.numbers._occupied(db, "1234", "new-owner") is False
+    assert (await events.subscription("sub"))["subscriber_agent_id"] == "recipient"
 
 
 def hold_row(**changes):

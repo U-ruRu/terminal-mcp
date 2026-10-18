@@ -468,7 +468,12 @@ class AccessMeshMessaging:
             await asyncio.to_thread(number_registry.snapshot) if number_registry is not None else []
         )
         for claim in claims:
-            original_name = public_name(claim["issuer_id"], claim["logical_agent_id"])
+            slot = await asyncio.to_thread(
+                self.mesh.store.slot, claim["issuer_id"], claim["slot_id"]
+            )
+            if slot is None or slot.session is None:
+                continue
+            original_name = public_name(slot.issuer_id, slot.session.logical_agent_id)
             if original_name.casefold() == target.casefold():
                 winner = await asyncio.to_thread(
                     self.mesh.store.numbers.group_winner,

@@ -16,7 +16,7 @@ async def test_rotated_replica_code_attaches_to_existing_slot(fixture):
         AccessSlotEvent(
             issuer_id="firstbyte",
             slot_id=original.slot_id,
-            logical_agent_id=original.logical_agent_id,
+            logical_agent_id=original.session.logical_agent_id,
             revision=2,
             event_id="rotate-event",
             kind="AccessCodeRotated",
@@ -25,5 +25,5 @@ async def test_rotated_replica_code_attaches_to_existing_slot(fixture):
         authenticated_peer_id="firstbyte",
     )
     attached = f.store.attach(issuer_id="firstbyte", code="5678", connection_key="new-connection")
-    assert attached.logical_agent_id == original.logical_agent_id
+    assert attached.session.logical_agent_id == original.session.logical_agent_id
     assert attached.slot_id == original.slot_id

@@ -36,14 +36,15 @@ def seed_inactive_slot(store, issuer_id, slot_id):
         db.execute(
             "INSERT INTO access_mesh_slot_replicas "
             "(issuer_id,slot_id,kind,state,revision,event_id,"
-            "policy_json,code_tag) "
-            "VALUES(?,?,'persistent','suspended',7,?,?,?)",
+            "policy_json,code_tag,created_at) "
+            "VALUES(?,?,'persistent','suspended',7,?,?,?,?)",
             (
                 issuer_id,
                 slot_id,
                 "event-" + slot_id,
                 json.dumps(asdict(SlotPolicy(1200, 120))),
                 store.code_tag(issuer_id, "1234"),
+                "2026-10-18T00:00:00+00:00",
             ),
         )
         db.execute(
@@ -131,11 +132,11 @@ async def test_real_primary_handoff_preserves_slots_and_their_policy(mesh_pair, 
         controller.native_access.store.assert_registry_ready()
 
 
-async def test_hot_control_scope_conversion_preserves_existing_acs_registry(tmp_path):
+async def test_control_reinitialization_preserves_existing_acs_registry(tmp_path):
     private, _ = keypair()
     control = FleetControlStore(
-        tmp_path / "old-control.db",
-        fleet_id="old-domain",
+        tmp_path / "control.db",
+        fleet_id="mesh-a",
         node_id="source",
         control_node_id="source",
     )
@@ -146,15 +147,10 @@ async def test_hot_control_scope_conversion_preserves_existing_acs_registry(tmp_
         nodes=[{"node_id": "source"}],
         policy=POLICY,
     )
-    async with control._connect("test_previous_namespace") as db:
-        await db.execute("UPDATE control_meta SET fleet_id='old-domain'")
-        await db.execute("UPDATE control_schema SET version=4")
-        await db.commit()
-    control.fleet_id = "old-domain"
     access = native_access(tmp_path / "preserved-access.db", "source")
     access.store.install_registry_scope(mesh_id="mesh-a", authority_id="source")
-    seed_inactive_slot(access.store, "source", "pre-upgrade")
-    before = access.store.registry_slot("pre-upgrade")
+    seed_inactive_slot(access.store, "source", "existing")
+    before = access.store.registry_slot("existing")
 
     await control.initialize()
     controller = ManagedFleetControl(
@@ -166,9 +162,9 @@ async def test_hot_control_scope_conversion_preserves_existing_acs_registry(tmp_
     controller.native_access = access
     await controller.reconcile_local()
 
-    assert control.fleet_id == "old-domain"
+    assert control.fleet_id == "mesh-a"
     assert access.store.namespace_id == "mesh-a"
-    assert access.store.registry_slot("pre-upgrade") == before
+    assert access.store.registry_slot("existing") == before
 
 
 async def test_restart_rehomes_a_committed_follower_detach_before_scope_cleanup(
