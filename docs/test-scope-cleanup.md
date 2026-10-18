@@ -290,3 +290,12 @@ Registry admission now checks each activity kind independently through one
 parameterized storage case; active and suspended snapshots reuse the existing
 handoff and departure cases. Native authority retirement remains a local-store
 check, and existing HTTP attach coverage verifies lazy primary lookup.
+
+## Pairing link V1 retirement (2026-10-18)
+
+The pairing URL contract is now version 2 only, with a single code field
+and the existing server/name/optional profile metadata retained. Old version 1
+links and the former exchange request key are intentionally unsupported.
+Existing Console pairing fixtures are updated to version 2; the only new
+version-1 check is an atomic negative parser case. The pairing store's
+one-time and expiry rules remain unchanged.

@@ -708,8 +708,8 @@ def compile_tool(
     lines.append("Returns: " + output_summary(strict_output) + ".")
     lines.append(
         "Errors: input_validation_failed (types, fields, values, conditions); "
-        "input_admission_failed (oversize/complex input); unchanged authorization and "
-        "domain errors in error.code. Validation failures return structuredContent "
+        "input_admission_failed (oversize/complex input); other domain errors "
+        "retain their codes in error.code. Validation failures return structuredContent "
         "{ok:false,error:{code,reason,path,expected?},outcome:not_committed}."
     )
     published["description"] = "\n".join(lines)

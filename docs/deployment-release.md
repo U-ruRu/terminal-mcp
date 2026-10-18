@@ -184,12 +184,14 @@ any destructive action.
 This revokes paired-device clients and refresh tokens and removes device and
 pending-pairing records while preserving ChatGPT OAuth clients. After the
 new release is ready, the installer creates a one-time Console pairing URL
-valid for **10,800 seconds (three hours)**. It prints the link to the
+valid for **10,800 seconds (three hours)**. Its fragment contains a Base64URL-
+encoded JSON payload with version 2, server, name, code and supported optional
+profile metadata; earlier version 1 links are rejected. It prints the link to the
 operator and saves it to `/etc/terminal-mcp/pairing-url.txt` (or the configured
 environment directory), with root-only `0600` access. An authorized server
-agent can read this file to give the link to the user. Treat the link as a
-bearer secret: anyone holding it can use it once before expiry. An expired or
-consumed link must be reissued explicitly. Both `--reset-auth` and
+agent can read this file to give the link to the user. The pairing link
+can be used once before expiry. An expired or consumed link must be reissued
+explicitly. Both `--reset-auth` and
 `--reset-pairing` can be used together; the pairing URL is created **only**
 when `--reset-pairing` is specified.
 

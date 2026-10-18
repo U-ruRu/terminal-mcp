@@ -197,12 +197,12 @@ export class PairingTransport {
 
   async exchange(
     origin: string,
-    secret: string,
+    code: string,
     publicKey: string,
     deviceLabel: string,
   ): Promise<PairingExchangeResponse> {
     const data = {
-      secret,
+      code,
       public_key: publicKey,
       device_label: deviceLabel,
     }

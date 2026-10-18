@@ -48,7 +48,7 @@
       {
         "anchor": "issuer_session(",
         "source": "src/terminal_mcp/mcp/access.py",
-        "text": "start issues a four-digit session_number; end ends the shared access cycle"
+        "text": "start issues a four-digit session_number; end ends the shared session cycle"
       }
     ],
     "strict_input_sha256": "ad65cbe81e04672c5b25d30bc67d46d42967016c971c82a158bf9be6b3f5da18",

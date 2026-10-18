@@ -461,7 +461,7 @@ class MCPEventsAdapter:
         try:
             signing_key(secret)
         except (TypeError, ValueError, AttributeError):
-            return reject("validation", "signing_key_invalid", -32602, "Invalid signing secret")
+            return reject("validation", "signing_key_invalid", -32602, "Invalid webhook key")
         if params.get("cursor") is not None:
             return reject("validation", "replay_unsupported", -32602, "Replay cursor unsupported")
         ttl_ms = params.get("ttlMs")

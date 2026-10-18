@@ -15,10 +15,10 @@ function pairingLink(payload: object): string {
 }
 
 const core = {
-  v: 1,
+  v: 2,
   server: 'https://terminal.example',
   name: 'Terminal',
-  secret: 'one-time-secret-123456789',
+  code: 'one-time-code-123456789',
 }
 
 test('preserves bounded unknown safe profile extensions and ignores unknown top-level fields', () => {
@@ -38,6 +38,7 @@ test('preserves bounded unknown safe profile extensions and ignores unknown top-
     },
   }))
 
+  expect(parsed.code).toBe(core.code)
   expect(parsed.profile).toEqual({
     labelHint: 'Lab',
     clearedHint: null,
@@ -62,5 +63,22 @@ test('rejects prototype-control keys in profile extensions', () => {
   expect(() => parseCanonicalPairingLink(pairingLink({
     ...core,
     profile: { extensions: { vendor: { ['__proto__']: { polluted: true } } } },
+  }))).toThrowError('invalid_pairing_link')
+})
+
+
+test('rejects the retired version 1 link', () => {
+  expect(() => parseCanonicalPairingLink(pairingLink({
+    ...core,
+    v: 1,
+    secret: core.code,
+  }))).toThrowError('unsupported_pairing_version')
+})
+
+test('rejects a version 2 link without code', () => {
+  const missingCode = { v: core.v, server: core.server, name: core.name }
+  expect(() => parseCanonicalPairingLink(pairingLink({
+    ...missingCode,
+    secret: core.code,
   }))).toThrowError('invalid_pairing_link')
 })

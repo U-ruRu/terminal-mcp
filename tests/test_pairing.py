@@ -70,6 +70,9 @@ def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     assert payload["name"] == "Secondary Test"
     assert payload["server"] == "https://terminal.example"
+    assert payload["v"] == 2
+    assert payload["code"] == "explicit-name-secret-value"
+    assert "secret" not in payload
     assert auth_path.exists()
 
 
@@ -179,3 +182,21 @@ def test_devices_cli_revokes_selected_device(tmp_path, monkeypatch, capsys):
     devices = asyncio.run(store.list_devices())
     assert devices[0]["device_id"] == exchange.device_id
     assert devices[0]["revoked_at"] is not None
+
+
+def test_console_smoke_decodes_pairing_fragment_to_server_and_code():
+    from scripts.console_transport_smoke import parse_pair_url
+
+    code = "a" * 43
+    url = cli._pairing_url(
+        "https://terminal-console.solvenger.app",
+        "https://terminal.example",
+        code,
+        "Console",
+    )
+    server, console, parsed_code = parse_pair_url(url)
+    assert (server, console, parsed_code) == (
+        "https://terminal.example",
+        "https://terminal-console.solvenger.app",
+        code,
+    )

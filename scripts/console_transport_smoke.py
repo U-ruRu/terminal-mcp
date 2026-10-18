@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
+import re
 import secrets
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -14,16 +16,38 @@ from websockets.asyncio.client import connect
 
 
 def parse_pair_url(value: str) -> tuple[str, str, str]:
+    """Decode only the current pairing contract; return server, Console origin, code."""
     parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.fragment:
-        raise ValueError("pair URL must be absolute http(s) with a fragment secret")
-    path = parsed.path.rstrip("/")
-    if not path.endswith("/connect"):
-        raise ValueError("pair URL path must end in /connect")
-    base_path = path[: -len("/connect")]
-    base_url = urlunsplit((parsed.scheme, parsed.netloc, base_path, "", "")).rstrip("/")
-    origin = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
-    return base_url, origin, parsed.fragment
+    if parsed.scheme != "https" or not parsed.netloc or not parsed.fragment:
+        raise ValueError("pair URL must be HTTPS with an encoded fragment")
+    if parsed.path != "/connect" or parsed.query or parsed.username or parsed.password:
+        raise ValueError("invalid pairing URL path")
+    if len(parsed.fragment) > 8192 or not re.fullmatch(r"[A-Za-z0-9_-]+", parsed.fragment):
+        raise ValueError("invalid pairing fragment")
+    try:
+        padding = "=" * (-len(parsed.fragment) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(parsed.fragment + padding))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValueError("invalid encoded pairing fragment") from exc
+    if not isinstance(payload, dict) or payload.get("v") != 2:
+        raise ValueError("unsupported pairing version")
+    server = payload.get("server")
+    code = payload.get("code")
+    if not isinstance(server, str) or not isinstance(code, str) or len(code) < 20:
+        raise ValueError("invalid pairing data")
+    server_url = urlsplit(server)
+    if (
+        server_url.scheme != "https"
+        or not server_url.netloc
+        or server_url.username
+        or server_url.password
+        or server_url.path not in ("", "/")
+        or server_url.query
+        or server_url.fragment
+    ):
+        raise ValueError("invalid paired server origin")
+    console_origin = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    return server_url.geturl().rstrip("/"), console_origin, code
 
 
 def endpoint(base_url: str, path: str) -> str:
@@ -46,16 +70,12 @@ async def checked_json(response: httpx.Response) -> dict:
     return data
 
 
-async def fetch_snapshot(
-    client: httpx.AsyncClient, base_url: str, headers: dict[str, str]
-) -> dict:
+async def fetch_snapshot(client: httpx.AsyncClient, base_url: str, headers: dict[str, str]) -> dict:
     response = await client.get(endpoint(base_url, "/actions/console/snapshot"), headers=headers)
     return await checked_json(response)
 
 
-async def issue_ticket(
-    client: httpx.AsyncClient, base_url: str, headers: dict[str, str]
-) -> str:
+async def issue_ticket(client: httpx.AsyncClient, base_url: str, headers: dict[str, str]) -> str:
     response = await client.post(endpoint(base_url, "/console/ws-ticket"), headers=headers)
     data = await checked_json(response)
     ticket = data.get("ticket")
@@ -65,13 +85,13 @@ async def issue_ticket(
 
 
 async def run(args: argparse.Namespace) -> int:
-    base_url, origin, secret = parse_pair_url(args.pair_url)
+    base_url, origin, code = parse_pair_url(args.pair_url)
     async with httpx.AsyncClient(timeout=httpx.Timeout(args.timeout)) as client:
         pair_response = await client.post(
             endpoint(base_url, "/pairing/exchange"),
             headers={"Origin": origin},
             json={
-                "secret": secret,
+                "code": code,
                 "public_key": secrets.token_urlsafe(48),
                 "device_label": args.device_label,
             },

@@ -61,7 +61,7 @@ def pair(client, app):
     response = client.post(
         "/pairing/exchange",
         json={
-            "secret": secret,
+            "code": secret,
             "device_label": "Browser",
             "public_key": "k" * 64,
         },

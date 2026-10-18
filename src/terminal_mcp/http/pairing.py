@@ -7,12 +7,12 @@ CONNECT_PAGE = """<!doctype html>
 <title>Terminal MCP Console pairing</title></head>
 <body><h1>Terminal MCP Console pairing</h1>
 <p>This one-time link must be opened by a Terminal MCP Console client.</p>
-<p>The pairing secret stays in the URL fragment and is never sent by this page.</p>
+<p>The pairing code is carried in the URL fragment and is not sent by this page.</p>
 </body></html>"""
 
 
 class PairingExchangeRequest(BaseModel):
-    secret: str = Field(min_length=32, max_length=512)
+    code: str = Field(min_length=32, max_length=512)
     public_key: str = Field(min_length=32, max_length=8192)
     device_label: str = Field(min_length=1, max_length=100)
 
@@ -36,14 +36,12 @@ def build_pairing_router(settings, auth, pairing_store):
             if not label or not public_key:
                 raise ValueError("blank device metadata")
         except (ValueError, TypeError, ValidationError):
-            await pairing_store.record_audit(
-                "pairing_exchange", "rejected", "malformed"
-            )
+            await pairing_store.record_audit("pairing_exchange", "rejected", "malformed")
             return JSONResponse({"error": "invalid_request"}, 400)
 
         scope = " ".join(dict.fromkeys(settings.oauth_required_scopes.split()))
         result, _reason = await pairing_store.exchange(
-            model.secret,
+            model.code,
             public_key,
             label,
             scope,

@@ -627,9 +627,7 @@ def build_role_mcp(
         request, failure = _validate(boundary, role, "session")
         if failure is not None:
             return failure
-        return await application.session(
-            _actor(application, role), **request.model_dump()
-        )
+        return await application.session(_actor(application, role), **request.model_dump())
 
     @mcp.tool(
         name="task_list",
@@ -902,9 +900,10 @@ def build_role_mcp(
                 "Refresh intent every 180 seconds. The first due call warns; the next write "
                 "is blocked until refresh. Reads, cancel, recovery, release and "
                 "message ACK/reply "
-                "remain available under their existing policy. Access only issues the number. "
+                "remain available under their existing policy. "
+                "The issuer provides the session number. "
                 "The local binding survives restart and automatic work-cycle rearm. "
-                "Manage issuance and end the shared access cycle through Access MCP. "
+                "Use the issuer connector to begin and end the shared session cycle. "
                 "Contract updated for Terminal MCP 0.14.1."
             )
             tool.annotations = ToolAnnotations(
@@ -923,7 +922,7 @@ def build_role_mcp(
         elif tool.name == "command_read":
             tool.description = (
                 "Read any local command by cmd_hash, or omit cmd_hash for the local "
-                "command journal. Access Code and active work cycle are unnecessary. "
+                "command journal. A session number and active work cycle are unnecessary. "
                 "Use the returned opaque cursor for the next bounded page."
             )
         elif tool.name == "agent_observe":
@@ -933,10 +932,10 @@ def build_role_mcp(
                 "includes live sessions; include_inactive adds ended/expired latest sessions. "
                 "Filter logical_agent_id to resolve an Events agent ID. Continue next_cursor. "
                 "Intent staleness, activity staleness and session expiry are separate states. "
-                "Available without an active work cycle or Access Code."
+                "Available without an active work cycle or session number."
             )
         elif tool.name in {"task_list", "task_get", "task_graph", "health"}:
-            tool.description = text + " Available without an active work cycle or Access Code."
+            tool.description = text + " Available without an active work cycle or session number."
         elif tool.name == "message":
             tool.description = (
                 "Read inbox, history, and recipients; send, acknowledge, or reply on "

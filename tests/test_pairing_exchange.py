@@ -40,7 +40,7 @@ def settings(tmp_path, **updates):
 
 def pairing_payload(secret):
     return {
-        "secret": secret,
+        "code": secret,
         "device_label": "Test phone",
         "public_key": "public-key-material-" + ("x" * 64),
     }
@@ -159,3 +159,19 @@ def test_pairing_exchange_is_rate_limited(tmp_path):
 
     assert limited.status_code == 429
     assert limited.json() == {"error": "rate_limited"}
+
+
+def test_pairing_exchange_request_requires_code_field():
+    import pytest
+    from pydantic import ValidationError
+
+    from terminal_mcp.http.pairing import PairingExchangeRequest
+
+    with pytest.raises(ValidationError):
+        PairingExchangeRequest.model_validate(
+            {
+                "secret": "z" * 43,
+                "public_key": "p" * 48,
+                "device_label": "Phone",
+            }
+        )

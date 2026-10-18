@@ -38,10 +38,10 @@ afterEach(() => {
 
 function pairingLink(): string {
   const payload = JSON.stringify({
-    v: 1,
+    v: 2,
     server: 'https://secondary.example',
     name: 'Secondary',
-    secret: 'one-time-secret-123456789',
+    code: 'one-time-secret-123456789',
   })
   const bytes = new TextEncoder().encode(payload)
   let binary = ''

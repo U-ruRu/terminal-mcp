@@ -12,7 +12,7 @@ The first load migrates the M1 singleton connection record into the registry ato
 the scoped credential is written, the registry is committed, then the legacy singleton
 record is removed. If the registry commit fails, the legacy record remains available.
 
-Adding a CLI pairing link validates /connect#secret, rejects an already-registered
+Adding a CLI pairing link validates /connect#Base64URL-payload, rejects an already-registered
 canonical origin before network exchange, exchanges the one-time secret, then creates the
 profile. Rename changes only local presentation metadata. Disconnect/remove deletes the
 profile and its scoped credential without affecting other servers.

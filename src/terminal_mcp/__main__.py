@@ -17,9 +17,7 @@ from terminal_mcp.platform_paths import ENV_FILE
 def _local_settings() -> Settings:
     """Load the installed instance env when CLI is invoked from a shell."""
 
-    env_path = Path(
-        os.environ.get("TERMINAL_MCP_ENV_FILE_PATH", str(ENV_FILE))
-    )
+    env_path = Path(os.environ.get("TERMINAL_MCP_ENV_FILE_PATH", str(ENV_FILE)))
     if env_path.is_file():
         return Settings(_env_file=env_path)
     return Settings()
@@ -28,14 +26,15 @@ def _local_settings() -> Settings:
 def _pairing_url(
     console_public_base_url: str,
     public_base_url: str,
-    secret: str,
+    code: str,
     display_name: str | None = None,
 ) -> str:
     target = urlsplit(public_base_url)
     target_origin = f"{target.scheme}://{target.netloc}"
     preferred_name = display_name.strip() if display_name is not None else ""
     name = (preferred_name or target.hostname or target.netloc).strip()[:120]
-    payload = {"v": 1, "server": target_origin, "name": name, "secret": secret}
+    # The full JSON payload is Base64URL-encoded in the URL fragment.
+    payload = {"v": 2, "server": target_origin, "name": name, "code": code}
     encoded = (
         base64.urlsafe_b64encode(
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -56,9 +55,9 @@ async def _pairing_store() -> PairingStore:
 async def _issue_pairing(ttl_seconds: int, display_name: str | None = None) -> str:
     settings = _local_settings()
     store = await _pairing_store()
-    secret = await store.create(ttl_seconds)
+    code = await store.create(ttl_seconds)
     return _pairing_url(
-        settings.console_public_base_url, settings.public_base_url, secret, display_name
+        settings.console_public_base_url, settings.public_base_url, code, display_name
     )
 
 
@@ -102,8 +101,11 @@ def _parser() -> argparse.ArgumentParser:
 def _run_server() -> None:
     settings = Settings()
     uvicorn.run(
-        "terminal_mcp.app:create_app", factory=True,
-        host=settings.host, port=settings.port, reload=False
+        "terminal_mcp.app:create_app",
+        factory=True,
+        host=settings.host,
+        port=settings.port,
+        reload=False,
     )
 
 

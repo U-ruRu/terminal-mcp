@@ -7,7 +7,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Attach this connector once using session_number. Use action='attach' with session_number and optional initial intent. Repeated attach preserves existing intent and its timer. Before any domain write, set intent here with action='intent', intent=...; refresh uses the existing binding and never needs session_number. Refresh intent every 180 seconds. The first due call warns; the next write is blocked until refresh. Reads, cancel, recovery, release and message ACK/reply remain available under their existing policy. Access only issues the number. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.",
+      "description": "Attach this connector once using session_number. Use action='attach' with session_number and optional initial intent. Repeated attach preserves existing intent and its timer. Before any domain write, set intent here with action='intent', intent=...; refresh uses the existing binding and never needs session_number. Refresh intent every 180 seconds. The first due call warns; the next write is blocked until refresh. Reads, cancel, recovery, release and message ACK/reply remain available under their existing policy. The issuer provides the session number. The local binding survives restart and automatic work-cycle rearm. Use the issuer connector to begin and end the shared session cycle. Contract updated for Terminal MCP 0.14.1.",
       "inputSchema": {
         "additionalProperties": false,
         "allOf": [
@@ -163,7 +163,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read bounded TaskListItem records for work orientation. By default excludes done and archived; state='done' includes only non-archived done tasks. namespace=None spans namespaces; state/lane/tags filter the results. Available without an active work cycle or Access Code.",
+      "description": "Read bounded TaskListItem records for work orientation. By default excludes done and archived; state='done' includes only non-archived done tasks. namespace=None spans namespaces; state/lane/tags filter the results. Available without an active work cycle or session number.",
       "inputSchema": {
         "properties": {
           "cursor": {
@@ -406,7 +406,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal. Access Code and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.",
+      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal. A session number and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.",
       "inputSchema": {
         "properties": {
           "cmd_hash": {
@@ -813,7 +813,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Run a recovery command under the current Access session. Attach this connector once; writes use its local work cycle.",
+      "description": "Run a recovery command under the current session. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "properties": {
           "command": {

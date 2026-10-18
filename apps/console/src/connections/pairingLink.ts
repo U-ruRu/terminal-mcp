@@ -20,10 +20,10 @@ export type SafeJsonValue =
 export type SafePairingProfile = { [key: string]: SafeJsonValue }
 
 export type CanonicalPairingPayload = {
-  v: 1
+  v: 2
   server: string
   name: string
-  secret: string
+  code: string
   profile?: SafePairingProfile | null
   ephemeral?: unknown
 }
@@ -31,7 +31,7 @@ export type CanonicalPairingPayload = {
 export type ParsedPairingLink = {
   origin: string
   name: string
-  secret: string
+  code: string
   profile: SafePairingProfile | null
 }
 
@@ -186,7 +186,7 @@ export function parseCanonicalPairingLink(
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) invalidPairingLink()
   const item = payload as Record<string, unknown>
-  if (item.v !== 1) {
+  if (item.v !== 2) {
     if (typeof item.v === 'number' && Number.isInteger(item.v)) {
       throw new Error('unsupported_pairing_version')
     }
@@ -197,14 +197,14 @@ export function parseCanonicalPairingLink(
   if (typeof item.name !== 'string') invalidPairingLink()
   const name = item.name.trim()
   if (!name || name.length > 120) invalidPairingLink()
-  if (typeof item.secret !== 'string' || !/^[A-Za-z0-9_-]{20,256}$/.test(item.secret)) {
+  if (typeof item.code !== 'string' || !/^[A-Za-z0-9_-]{20,256}$/.test(item.code)) {
     invalidPairingLink()
   }
 
   return {
     origin,
     name,
-    secret: item.secret,
+    code: item.code,
     profile: normalizeSafePairingProfile(item.profile),
   }
 }

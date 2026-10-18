@@ -1,8 +1,8 @@
 import { expect,test,vi } from 'vitest'
 import { attachAppUrlSource,PRODUCTION_CONSOLE_ORIGIN } from './handoff'
 
-function pairingLink(server: string, name: string, secret: string): string {
-  const payload = JSON.stringify({ v: 1, server, name, secret })
+function pairingLink(server: string, name: string, code: string): string {
+  const payload = JSON.stringify({ v: 2, server, name, code })
   const bytes = new TextEncoder().encode(payload)
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)

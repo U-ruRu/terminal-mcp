@@ -164,7 +164,7 @@ function parseDocument(raw: string): ConnectionRegistryDocument {
 function parsePairingLink(value: string): {
   origin: string
   name: string
-  secret: string
+  code: string
   profile: SafePairingProfile | null
 } {
   try {
@@ -381,13 +381,13 @@ export class BrowserConnectionRegistry {
     transport = new PairingTransport(),
     keyFactory: () => Promise<string> = generateDevicePublicKey,
   ): Promise<PairedProfile> {
-    const { origin, name, secret, profile: pairingProfile } = parsePairingLink(pairingLink)
+    const { origin, name, code, profile: pairingProfile } = parsePairingLink(pairingLink)
     const document = this.document()
     const existing = document.profiles.find((profile) => profile.origin === origin)
     const resolvedName = this.cleanDisplayName(displayName ?? name ?? existing?.displayName ?? defaultDisplayName(origin))
 
     const publicKey = await keyFactory()
-    const exchanged = await transport.exchange(origin, secret, publicKey, deviceLabel)
+    const exchanged = await transport.exchange(origin, code, publicKey, deviceLabel)
     const pairedAt = this.now()
     const connection: StoredConnection = {
       origin,

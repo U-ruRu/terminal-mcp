@@ -509,7 +509,7 @@ ROLE_TOOL_MODELS: dict[tuple[str, str], type[StrictRoleInput]] = {
 
 ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("executor", "session"): (
-        "Attach this connector to an Access slot or refresh its current intent."
+        "Bind this connector to a numbered session or refresh its current intent."
     ),
     ("executor", "task_list"): (
         "Read bounded TaskListItem records for work orientation. By default excludes "
@@ -527,7 +527,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "readable."
     ),
     ("executor", "command_cancel"): ("Cancel a command owned by the current LogicalAgent."),
-    ("executor", "command_recovery"): ("Run a recovery command under the current Access session."),
+    ("executor", "command_recovery"): ("Run a recovery command under the current session."),
     ("executor", "task_claim"): (
         "Claim/release a task. claim uses claim_intent; release may use release_reason."
         " Ordinary success is only ok:true; actual incoming messages and warnings "
@@ -546,7 +546,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "reading does not satisfy ACK/reply."
     ),
     ("coordinator", "session"): (
-        "Attach this connector to an Access slot or refresh its current intent."
+        "Bind this connector to a numbered session or refresh its current intent."
     ),
     ("coordinator", "task_get"): (
         "Read one task inside task without detail/kind response wrappers. Snapshot "
@@ -582,7 +582,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("coordinator", "health"): (
         "Read ok, healthy, application, agent_name, version and storage. extended=true "
         "adds complete components, terminal and workflow. Hidden mandatory components "
-        "still contribute to healthy; auth/identity diagnostics are excluded."
+        "still contribute to healthy; identity verification details are excluded."
     ),
 }
 
@@ -653,9 +653,7 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
         from terminal_mcp.application.base import ROLE_TASK_ACTIONS
         from terminal_mcp.mcp.task_planning import task_action_planning_schema
 
-        return task_action_planning_schema(
-            actions=ROLE_TASK_ACTIONS["coordinator"]
-        )
+        return task_action_planning_schema(actions=ROLE_TASK_ACTIONS["coordinator"])
     runtime = model.model_json_schema()
     definitions = runtime.get("$defs", {})
     properties = {}

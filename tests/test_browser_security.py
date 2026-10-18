@@ -36,7 +36,7 @@ def settings(tmp_path, **updates):
 
 
 def payload(secret):
-    return {"secret": secret, "device_label": "Browser", "public_key": "k" * 64}
+    return {"code": secret, "device_label": "Browser", "public_key": "k" * 64}
 
 
 def test_connect_bootstrap_applies_security_headers(tmp_path):

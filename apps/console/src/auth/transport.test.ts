@@ -55,7 +55,7 @@ test('Android pairing uses native HTTP instead of WebView fetch', async () => {
     expect(options.method).toBe('POST')
     expect(options.headers).toEqual({ 'Content-Type': 'application/json' })
     expect(options.data).toEqual({
-      secret: 'one-time-secret',
+      code: 'one-time-secret',
       public_key: 'public-key',
       device_label: 'Android console',
     })

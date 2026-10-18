@@ -48,8 +48,8 @@ def build_access_mcp(
             readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
         ),
         description=(
-            "Start an Access session and obtain its four-digit session_number, "
-            "or end the current session."
+            "Start a session and obtain its four-digit session_number for "
+            "binding the agent identity to the session, or end the session."
         ),
     )
     async def session(*, boundary: RuntimeBoundary) -> dict:
@@ -82,7 +82,7 @@ def build_access_mcp(
             "Read this agent's unconsumed MCP Events, oldest first, and mark returned "
             "events read. With event_id, return one owned event even if read; "
             "show_read=true includes previously read events. No agent ID or "
-            "subscription ID is needed: identity comes from the Access binding."
+            "subscription ID is needed: identity comes from the session binding."
         ),
     )
     async def get_events(*, boundary: RuntimeBoundary) -> dict:
