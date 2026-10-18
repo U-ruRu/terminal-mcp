@@ -1,11 +1,14 @@
 """Atomic membership preparation, local cleanup and recovery boundaries."""
 
+import json
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from test_fleet_control_hardening import PolicyProbe, _managed_replica_snapshot, keypair
 from test_fleet_control_storage import POLICY
+from test_mesh_primary_handoff import RegistryProbe
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
@@ -87,6 +90,83 @@ async def test_pending_local_transition_blocks_membership_before_topology_commit
 
     assert (await store.control_state())["revisions"] == before["revisions"]
     assert (await store.managed_node("home"))["mesh_id"] == "mesh-a"
+
+
+@pytest.mark.parametrize("entrypoint", ("upsert_node", "reconcile_pending", "replicate"))
+async def test_committed_membership_is_delivered_before_guarded_policy(topology, entrypoint):
+    store, controller, public = topology
+    controller._apply_local = ManagedFleetControl._apply_local.__get__(controller)
+    access = RegistryProbe({"namespace_id": "mesh-a", "tables": {}})
+    controller.native_access = access
+    steps = []
+    apply_policy = access.apply_fleet_policy
+
+    async def apply_after_release(state):
+        await apply_policy(state)
+        steps.append("policy")
+
+    access.apply_fleet_policy = apply_after_release
+    member = {
+        "node_id": "member",
+        "mesh_id": "mesh-a",
+        "origin": "https://member.example",
+        "public_key": public,
+        "auth_token": "member-enrollment",
+    }
+    if entrypoint != "upsert_node":
+        await store.upsert_managed_node(**member)
+        await store.prepare_topology_transition(
+            node_id="member",
+            operation_id="committed-join",
+            target_mesh_id="mesh-a",
+            target_authority_id="home",
+            coordinator_id="home",
+            payload={
+                "peer": {
+                    "instance_id": "member",
+                    "origin": member["origin"],
+                    "public_key": public,
+                    "auth_token": member["auth_token"],
+                }
+            },
+        )
+        await store.complete_topology_transition("member", "committed-join", "committed")
+        await access.begin_topology_transition("committed-join")
+
+    async def accept_topology(request):
+        assert request.url.path == "/internal/fleet/control/apply"
+        assert access.guard is not None
+        steps.append("topology")
+        return httpx.Response(
+            200, json={"ok": True, "control": json.loads(request.content)["state"]}
+        )
+
+    controller.client_factory = lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(accept_topology)
+    )
+
+    if entrypoint == "upsert_node":
+        await controller.upsert_node(**member)
+    else:
+        await getattr(controller, entrypoint)()
+
+    assert steps == ["topology", "policy"]
+    assert access.guard is None
+
+
+async def test_replica_does_not_acknowledge_a_fenced_policy(topology):
+    store, controller, _ = topology
+    controller._apply_local = ManagedFleetControl._apply_local.__get__(controller)
+    controller.native_access = RegistryProbe({"namespace_id": "mesh-a", "tables": {}})
+    await controller.native_access.begin_topology_transition("pending-handoff")
+    accepted = await store.control_state()
+    controller._accept_replica = AsyncMock(return_value=accepted)
+
+    with pytest.raises(AccessMeshError, match="mesh_transition_pending"):
+        await controller.apply_replica(accepted, source_node_id="peer")
+
+    assert await store.control_state() == accepted
+    assert controller.native_access.guard == "pending-handoff"
 
 
 async def test_member_departure_preserves_the_source_registry(topology):

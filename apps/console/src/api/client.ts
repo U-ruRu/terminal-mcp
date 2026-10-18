@@ -1,4 +1,4 @@
-import { decodeAccessMeshSlot, decodeAccessMeshSlots, decodeAccessMeshDefaults, decodeSlotMutation, publicErrorCode } from './slotContracts'
+import { ConsoleOperationError, decodeAccessMeshSlot, decodeAccessMeshSlots, decodeAccessMeshDefaults, decodeSlotMutation, publicErrorCode } from './slotContracts'
 import {
   ConsoleContractError,
   decodeActivityFeed,
@@ -207,7 +207,11 @@ export class ConsoleClient {
   }
 
   async fleetControl(): Promise<ManagedFleetControlReadModel> {
-    return decodeManagedFleetControl(await this.request('/actions/fleet/control'))
+    const raw = await this.request('/actions/fleet/control')
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && (raw as Record<string, unknown>).ok === false) {
+      throw new ConsoleOperationError(publicErrorCode(raw))
+    }
+    return decodeManagedFleetControl(raw)
   }
 
   async fleetEnrollment(): Promise<ManagedFleetEnrollment> {

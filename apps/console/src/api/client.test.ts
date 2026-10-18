@@ -132,6 +132,15 @@ const snapshot = {
   ],
 }
 
+test('fleet control preserves a public operation error from HTTP 200', async () => {
+  const fetcher = vi.fn(async () => jsonResponse({ ok: false, code: 'mesh_transition_pending' }))
+  const client = new ConsoleClient('https://terminal.example', () => 'paired-access', fetcher)
+
+  await expect(client.fleetControl()).rejects.toMatchObject({
+    name: 'ConsoleOperationError', code: 'mesh_transition_pending',
+  })
+})
+
 test('snapshot decodes the current console read model', async () => {
   const fetcher = vi.fn(async () => jsonResponse(snapshot))
   const client = new ConsoleClient('https://terminal.example/base', () => 'access-token', fetcher)

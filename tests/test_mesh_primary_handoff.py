@@ -49,7 +49,8 @@ class RegistryProbe:
         await self.abort_topology_transition(operation_id)
 
     async def apply_fleet_policy(self, state=None):
-        pass
+        if self.guard is not None:
+            raise AccessMeshError("mesh_transition_pending")
 
 
 @pytest.fixture

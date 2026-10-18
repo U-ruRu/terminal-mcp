@@ -65,18 +65,22 @@ function renderOverview(model: FleetReadModel, instances: FleetInstanceView[], c
 
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); nativeRows.clear(); vi.useRealTimers(); vi.restoreAllMocks() })
 
-test('groups Servers by Mesh with standalone last and renders authoritative Mesh index count/link', async () => {
-  const controls = { 'server-a': managedControl(), 'server-b': managedControl(), 'server-c': standaloneControl('server-c') }
+test.each([true, false])('groups Servers by observed membership when participant applied=%s', async (applied) => {
+  const authority = managedControl()
+  if (!applied) authority.nodes[1].appliedTopologyRevision = 0
+  const controls = { 'server-a': authority,
+    'server-b': applied ? { ...managedControl(), nodeId: 'node-2' } : standaloneControl('server-b'),
+    'server-c': standaloneControl('server-c') }
   renderOverview(fixtureFleetModel, [], controls)
   await waitFor(() => expect(screen.getAllByText('Production').length).toBeGreaterThan(0))
   const groups = document.querySelectorAll('.fleet-server-group')
   expect(groups).toHaveLength(2)
   expect(within(groups[0] as HTMLElement).getByText('Production')).toBeInTheDocument()
   expect(within(groups[0] as HTMLElement).getByRole('article', { name: 'Server A server' })).toBeInTheDocument()
-  expect(within(groups[0] as HTMLElement).getByRole('article', { name: 'Server B server' })).toBeInTheDocument()
+  expect(within(groups[applied ? 0 : 1] as HTMLElement).getByRole('article', { name: 'Server B server' })).toBeInTheDocument()
   expect(within(groups[1] as HTMLElement).getByText('Standalone')).toBeInTheDocument()
   expect(within(groups[1] as HTMLElement).getByRole('article', { name: 'Server C server' })).toBeInTheDocument()
-  const meshLink = screen.getByRole('link', { name: /Production.*2 servers/ })
+  const meshLink = screen.getByRole('link', { name: new RegExp(`Production.*${applied ? 2 : 1} servers`) })
   expect(meshLink).toHaveAttribute('href', '/meshes/mesh-prod')
 })
 

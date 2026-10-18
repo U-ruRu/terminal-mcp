@@ -11,6 +11,7 @@ import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer, select_peer_transport
 from terminal_mcp.fleet.control_storage import FleetControlError
 from terminal_mcp.fleet.primary_handoff import PrimaryHandoffControl
@@ -1006,10 +1007,10 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
             await self.store.claim_local_control_authority()
             await self._complete_namespace()
             self._sync_control_node(self.store.control_node_id)
-            await self._apply_local(await self.snapshot())
+            await self._apply_local(await self.snapshot(), require_ready=True)
             return acknowledgement
         self._sync_control_node(self.store.control_node_id)
-        await self._apply_local(state)
+        await self._apply_local(state, require_ready=True)
         return await self.snapshot()
 
     async def _restore_local_policy(self) -> None:
@@ -1031,12 +1032,23 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
         )
         self._replace_runtime_config(config)
 
-    async def _apply_local(self, state: dict) -> None:
+    async def _apply_local(self, state: dict, *, require_ready: bool = False) -> None:
         await self._complete_namespace()
         if hasattr(self.store, "topology_transition"):
             await self._finish_local_membership(state)
         if self.native_access is not None:
-            await self.native_access.apply_fleet_policy(state)
+            try:
+                await self.native_access.apply_fleet_policy(state)
+            except AccessMeshError as exc:
+                if exc.code != "mesh_transition_pending" or require_ready:
+                    raise
+                # The coordinator keeps Access fenced until the member accepts
+                # its committed topology. Deliver that topology before applying
+                # policy; pending recovery must not block Control API startup.
+                # The store guard still rejects every Access mutation, and no
+                # local policy/trust revision is acknowledged here.
+                await self._refresh_reconcile_task()
+                return
         if not state.get("managed"):
             if self.native_access is not None and hasattr(
                 self.native_access.store, "clear_managed_proof"
@@ -1351,4 +1363,8 @@ class ManagedFleetControl(TopologyControl, PrimaryHandoffControl):
                             )
                     except FleetControlError:
                         pass
+        # A membership acknowledgement releases the authority's Access fence.
+        # Apply the latest durable policy only after that release, including
+        # when this replication was requested directly to recover a lost reply.
+        await self._apply_local(await self.snapshot())
         return await self.snapshot()

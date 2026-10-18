@@ -1,11 +1,14 @@
 import { ConsoleHttpError } from '../api/client'
+import { ConsoleContractError } from '../api/contracts'
 import type { ManagedFleetControlReadModel } from '../api/models'
+import { ConsoleOperationError } from '../api/slotContracts'
 import { diagnosticErrorCode } from '../diagnostics/journal'
 import { isFleetControlRevisionRegression, type FleetControlFreshness } from './controlState'
 
 export type ControlObservation = {
   control?: ManagedFleetControlReadModel
   error?: string
+  contractPath?: string
   elapsedMs?: number
   status?: number
   freshness: FleetControlFreshness
@@ -16,7 +19,10 @@ export async function observeControl(load: () => Promise<ManagedFleetControlRead
   try { return { control: await load(), freshness: 'fresh', observedAt: Date.now() } }
   catch (error) {
     return { freshness: 'unknown',
-      error: error instanceof ConsoleHttpError ? diagnosticErrorCode(error.code) ?? 'control_request_failed' : 'control_unavailable',
+      error: error instanceof ConsoleContractError ? 'control_contract_invalid'
+        : error instanceof ConsoleHttpError || error instanceof ConsoleOperationError
+          ? diagnosticErrorCode(error.code) ?? 'control_request_failed' : 'control_unavailable',
+      contractPath: error instanceof ConsoleContractError ? error.path : undefined,
       elapsedMs: error instanceof ConsoleHttpError ? error.elapsedMs ?? Date.now() - started : Date.now() - started,
       status: error instanceof ConsoleHttpError ? error.status : undefined,
     }
@@ -25,7 +31,7 @@ export async function observeControl(load: () => Promise<ManagedFleetControlRead
 export function mergeControlObservation(prior: ControlObservation | undefined, next: ControlObservation): ControlObservation {
   if (next.control && !isFleetControlRevisionRegression(next.control, prior?.control)) return next
   return { ...prior, freshness: prior?.control ? 'stale' : 'unknown',
-    error: next.control ? 'control_revision_regression' : next.error, elapsedMs: next.elapsedMs, status: next.status }
+    error: next.control ? 'control_revision_regression' : next.error, contractPath: next.contractPath, elapsedMs: next.elapsedMs, status: next.status }
 }
 export function currentControlObservation(value: ControlObservation, now: number): ControlObservation {
   return value.freshness === 'fresh' && (!value.observedAt || now - value.observedAt > 30_000)
