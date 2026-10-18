@@ -72,25 +72,25 @@ async def _revoke_device(device_id: str) -> bool:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="terminal-mcp")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    pair = subcommands.add_parser("pair", help="create a one-time local Console pairing URL")
-    pair.add_argument(
+    link = subcommands.add_parser("link", help="create a one-time Console connection link")
+    link.add_argument(
         "--ttl",
         type=int,
         default=PAIRING_DEFAULT_TTL_SEC,
         metavar="SECONDS",
-        help=f"pairing lifetime in seconds (default: {PAIRING_DEFAULT_TTL_SEC})",
+        help=f"link lifetime in seconds (default: {PAIRING_DEFAULT_TTL_SEC})",
     )
-    pair.add_argument(
+    link.add_argument(
         "--name",
         default=None,
         metavar="DISPLAY_NAME",
-        help="suggested server display name embedded in the pairing link",
+        help="suggested server display name embedded in the connection link",
     )
     vpn = subcommands.add_parser("mesh-vpn", help="register and manage WireGuard Mesh transport")
     from terminal_mcp.mesh_vpn import add_cli
 
     add_cli(vpn)
-    devices = subcommands.add_parser("devices", help="manage paired Console devices")
+    devices = subcommands.add_parser("devices", help="manage connected Console devices")
     device_commands = devices.add_subparsers(dest="device_command", required=True)
     device_commands.add_parser("list", help="list paired devices")
     revoke = device_commands.add_parser("revoke", help="revoke one paired device")
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None):
         except VPNError as exc:
             print(f"mesh-vpn: {exc}", file=sys.stderr)
             return 2
-    if parsed.command == "pair":
+    if parsed.command == "link":
         if parsed.ttl <= 0:
             _parser().error("--ttl must be a positive number of seconds")
         url = asyncio.run(_issue_pairing(parsed.ttl, parsed.name))

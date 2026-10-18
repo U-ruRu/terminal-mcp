@@ -252,9 +252,9 @@ def test_doctor_rejects_public_mesh_missing_when_local_mesh_is_enabled(tmp_path)
     "action,flag",
     [
         ("update", "--reset-auth"),
-        ("install", "--reset-pairing"),
+        ("install", "--reset-connections"),
         ("doctor", "--reset-auth"),
-        ("ingress", "--reset-pairing"),
+        ("ingress", "--reset-connections"),
     ],
 )
 def test_reset_switches_rejected_outside_clean_deploy(action, flag):

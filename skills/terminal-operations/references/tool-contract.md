@@ -179,8 +179,8 @@ bindings and authority. The remaining source Mesh preserves every registry row,
 including slots originally issued through that node. A primary departure first
 hands the complete registry to the application's successor. The destination
 registry and policy replace the departed node's local authority; source slots
-are never imported into a different Mesh. Independent node identity and pairing
-survive.
+are never imported into a different Mesh. Independent node identity and Console
+device connections survive.
 
 There is one runtime and one set of role validators. Hot upgrade performs a
 one-time conversion of retained data. No configuration flag re-enables old role

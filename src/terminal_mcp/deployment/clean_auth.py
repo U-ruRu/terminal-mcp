@@ -218,8 +218,8 @@ def bootstrap_credentials(username_file: Path, password_file: Path) -> None:
 
 def save_link(config: Path, url: str) -> None:
     if len(url) > 4096 or not url.startswith("https://") or "/connect#" not in url:
-        raise ValueError("invalid pairing URL")
-    path = config / "pairing-url.txt"
+        raise ValueError("invalid connection link")
+    path = config / "link-url.txt"
     _checked(path)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as stream:
@@ -238,7 +238,7 @@ def main() -> None:
             "runtime-path",
             "main-path",
             "auth-path",
-            "reset-pairing",
+            "reset-connections",
             "bootstrap",
             "check-bootstrap",
             "save-link",
@@ -263,7 +263,7 @@ def main() -> None:
         print(paths(args.config, args.data)[2])
     elif args.action == "auth-path":
         print(paths(args.config, args.data)[1])
-    elif args.action == "reset-pairing":
+    elif args.action == "reset-connections":
         reset_pairing(paths(args.config, args.data)[1])
     elif args.action == "bootstrap":
         if args.username_file is None or args.password_file is None:

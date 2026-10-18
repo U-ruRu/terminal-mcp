@@ -15,19 +15,19 @@ CMD=${1:-install}
 [ $# -eq 0 ] || shift
 ALLOW_DOWNGRADE=false
 RESET_AUTH=false
-RESET_PAIRING=false
+RESET_CONNECTIONS=false
 AUTH_STATE=fresh
 while [ $# -gt 0 ]; do
   case "$1" in
     --allow-downgrade) ALLOW_DOWNGRADE=true ;;
     --reset-auth) RESET_AUTH=true ;;
-    --reset-pairing) RESET_PAIRING=true ;;
-    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|clean-deploy [--reset-auth] [--reset-pairing]|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
+    --reset-connections) RESET_CONNECTIONS=true ;;
+    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|clean-deploy [--reset-auth] [--reset-connections]|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
   esac
   shift
 done
-if { [ "$RESET_AUTH" = true ] || [ "$RESET_PAIRING" = true ]; } && [ "$CMD" != clean-deploy ]; then
-  echo '--reset-auth and --reset-pairing are valid only with clean-deploy' >&2
+if { [ "$RESET_AUTH" = true ] || [ "$RESET_CONNECTIONS" = true ]; } && [ "$CMD" != clean-deploy ]; then
+  echo '--reset-auth and --reset-connections are valid only with clean-deploy' >&2
   exit 2
 fi
 if [ "$ALLOW_DOWNGRADE" = true ] && [ "$CMD" != update ]; then
@@ -890,7 +890,7 @@ clean_state(){
     --backups "$BACKUPS" --extra-directory "${UNIT_FILE}.d" --protect "$SOURCE" "$@"
 }
 clean_deploy(){
-  local keep_flag=() previous_runtime='' pairing_url='' username_file password_file
+  local keep_flag=() previous_runtime='' link_url='' username_file password_file
   [ ! -e "$ROOT/current" ] || [ -L "$ROOT/current" ] || { echo 'Current release must be a symlink' >&2; return 1; }
   clean_state >/dev/null
   if [ "$RESET_AUTH" = false ]; then
@@ -926,8 +926,8 @@ clean_deploy(){
     $SYSTEMCTL disable terminal-mcp-executor
   fi
   clean_state --protect "$STAGED_RELEASE" "${keep_flag[@]}" --apply
-  if [ "$RESET_PAIRING" = true ] && [ "$RESET_AUTH" = false ] && [ "$AUTH_STATE" = existing ]; then
-    auth_clean reset-pairing
+  if [ "$RESET_CONNECTIONS" = true ] && [ "$RESET_AUTH" = false ] && [ "$AUTH_STATE" = existing ]; then
+    auth_clean reset-connections
   fi
   rm -f -- "$ROOT/current"
   install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
@@ -945,10 +945,10 @@ clean_deploy(){
   configure_console_caddy
   activate "$STAGED_RELEASE"
   $SYSTEMCTL enable terminal-mcp
-  if [ "$RESET_PAIRING" = true ]; then
-    pairing_url=$(TERMINAL_MCP_ENV_FILE_PATH="$ENV_FILE" runtime_python "$STAGED_RELEASE" -m terminal_mcp pair --ttl 10800)
-    printf '%s' "$pairing_url" | auth_clean save-link
-    printf 'Pairing URL (expires in 3 hours): %s\n' "$pairing_url"
+  if [ "$RESET_CONNECTIONS" = true ]; then
+    link_url=$(TERMINAL_MCP_ENV_FILE_PATH="$ENV_FILE" runtime_python "$STAGED_RELEASE" -m terminal_mcp link --ttl 10800)
+    printf '%s' "$link_url" | auth_clean save-link
+    printf 'Connection link (expires in 3 hours): %s\n' "$link_url"
   fi
 }
 
@@ -973,5 +973,5 @@ case "$CMD" in
  update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
  ingress) ensure_env_defaults; configure_console_caddy ;;
  doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_mesh_ingress; check_public_console_ingress ;;
- *) echo 'Usage: install.sh {install|clean-deploy [--reset-auth] [--reset-pairing]|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
+ *) echo 'Usage: install.sh {install|clean-deploy [--reset-auth] [--reset-connections]|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
 esac
