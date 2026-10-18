@@ -299,3 +299,16 @@ links and the former exchange request key are intentionally unsupported.
 Existing Console pairing fixtures are updated to version 2; the only new
 version-1 check is an atomic negative parser case. The pairing store's
 one-time and expiry rules remain unchanged.
+
+## Console connection link naming (2026-10-18)
+
+The current operator/agent CLI uses the one-time Connection Link terminology:
+the issuing subcommand is 'terminal-mcp link', the clean-deploy opt-in is
+'--reset-connections', the protected output file is 'link-url.txt', and
+installer stdout says 'Connection link'. The previous command, flag and file
+name are deliberately retired without compatibility aliases. Existing CLI,
+installer and protected-file tests now assert the new surface. An atomic CLI
+help test guards against reintroducing credential-sounding terminology.
+
+Device registration, one-time code verification, the HTTP exchange protocol
+and OAuth retention/reset boundaries have not changed.

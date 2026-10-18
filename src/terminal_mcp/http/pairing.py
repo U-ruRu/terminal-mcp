@@ -4,10 +4,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 CONNECT_PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
-<title>Terminal MCP Console pairing</title></head>
-<body><h1>Terminal MCP Console pairing</h1>
-<p>This one-time link must be opened by a Terminal MCP Console client.</p>
-<p>The pairing code is carried in the URL fragment and is not sent by this page.</p>
+<title>Terminal MCP Console connection</title></head>
+<body><h1>Terminal MCP Console connection</h1>
+<p>Open this one-time connection link with Terminal MCP Console.</p>
+<p>The connection code is carried in the URL fragment and is not sent by this page.</p>
 </body></html>"""
 
 

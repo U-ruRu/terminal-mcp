@@ -46,7 +46,7 @@ async def test_pairing_exchange_rejects_expired_secret(tmp_path):
     assert reason == "expired"
 
 
-def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
+def test_link_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "terminal.sqlite3"
     auth_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
@@ -63,7 +63,7 @@ def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "explicit-name-secret-value")
 
-    assert cli.main(["pair", "--name", "Secondary Test"]) == 0
+    assert cli.main(["link", "--name", "Secondary Test"]) == 0
     url = capsys.readouterr().out.strip()
     fragment = urlsplit(url).fragment
     padded = fragment + "=" * ((4 - len(fragment) % 4) % 4)
@@ -200,3 +200,11 @@ def test_console_smoke_decodes_pairing_fragment_to_server_and_code():
         "https://terminal-console.solvenger.app",
         code,
     )
+
+
+
+def test_agent_facing_link_cli_help_is_neutral():
+    text = cli._parser().format_help().lower()
+    assert "connection link" in text
+    assert "pairing" not in text
+    assert "secret" not in text

@@ -164,8 +164,8 @@ databases, cache, backups, Mesh state and old runtime configuration. It retains
 the OAuth authorization database (including WAL, SHM, journal, access key and
 identity anchor), ChatGPT client registrations and grants, refresh tokens,
 signing/session secrets, administrator credentials and OAuth username/password
-files. Existing Console device pairing also survives by default. No new pairing
-URL is issued. Existing administrative password and trust domain are reused:
+files. Existing Console device connections also survive by default. No new connection
+link is issued. Existing administrative password and trust domain are reused:
 attempted implicit authentication or issuer/public-origin rotation is rejected.
 
 **Explicit full authorization reset:**
@@ -177,23 +177,31 @@ removed; fresh secrets and credential files are created. Old tokens stop
 working. New admin and OAuth username/password inputs are mandatory before
 any destructive action.
 
-**Explicit device pairing reset:**
+**Explicit Console connection reset:**
 
-    bash deploy/install.sh clean-deploy --reset-pairing
+    bash deploy/install.sh clean-deploy --reset-connections
 
-This revokes paired-device clients and refresh tokens and removes device and
-pending-pairing records while preserving ChatGPT OAuth clients. After the
-new release is ready, the installer creates a one-time Console pairing URL
+This revokes connected-device clients and refresh tokens and removes device and
+pending-connection records while preserving ChatGPT OAuth clients. After the
+new release is ready, the installer creates a one-time Console connection link
 valid for **10,800 seconds (three hours)**. Its fragment contains a Base64URL-
 encoded JSON payload with version 2, server, name, code and supported optional
 profile metadata; earlier version 1 links are rejected. It prints the link to the
-operator and saves it to `/etc/terminal-mcp/pairing-url.txt` (or the configured
-environment directory), with root-only `0600` access. An authorized server
-agent can read this file to give the link to the user. The pairing link
+operator and saves it to `/etc/terminal-mcp/link-url.txt` (or the configured
+environment directory), with root-only `0600` access. A server operator
+can read this file and share the link with the user. The connection link
 can be used once before expiry. An expired or consumed link must be reissued
 explicitly. Both `--reset-auth` and
-`--reset-pairing` can be used together; the pairing URL is created **only**
-when `--reset-pairing` is specified.
+`--reset-connections` can be used together; the connection link is created **only**
+when `--reset-connections` is specified.
+
+To create a new connection link without resetting existing Console devices
+or ChatGPT OAuth, use the CLI on the selected server:
+
+    terminal-mcp link --ttl 10800
+
+The command prints one HTTPS link to stdout. This direct CLI command does not
+save a file; the installer saves link-url.txt only during --reset-connections.
 
 Both reset switches are exclusive to `clean-deploy`. For a new installation
 without a preexisting auth database, supply `TERMINAL_MCP_ADMIN_PASSWORD`,
@@ -208,8 +216,8 @@ lineage, and unauthorized trust-domain changes fail before state deletion.
 **Recovery:** There is no automatic old-release rollback after clean cleanup.
 If interrupted, keep the retained environment and protected auth SQLite and
 sidecars intact; rerun ordinary `clean-deploy` after correcting the reported
-failure. A partially completed pairing reset may be rerun with
-`--reset-pairing` to issue a new link. Never use `--reset-auth` as a recovery
+failure. A partially completed connection reset may be rerun with
+`--reset-connections` to issue a new link. Never use `--reset-auth` as a recovery
 shortcut; it irreversibly invalidates prior OAuth clients and tokens.
 
 ### Standalone Console ingress acceptance

@@ -171,12 +171,12 @@ def test_reset_pairing_revokes_device_grants_only(tmp_path):
             assert db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
 
 
-def test_pairing_url_file_is_root_private(tmp_path):
+def test_connection_link_file_is_root_private(tmp_path):
     from terminal_mcp.deployment.clean_auth import save_link
 
     url = "https://terminal-console.example/connect#one-time-secret"
     save_link(tmp_path, url)
-    output = tmp_path / "pairing-url.txt"
+    output = tmp_path / "link-url.txt"
     assert output.read_text().strip() == url
     assert output.stat().st_mode & 0o777 == 0o600
 
