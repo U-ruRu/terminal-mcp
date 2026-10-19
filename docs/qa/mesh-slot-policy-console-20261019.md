@@ -78,3 +78,104 @@ were saved on each of the four nodes under
 `/var/backups/terminal-mcp/slot-scope-20261019T0620Z`, with private permissions.
 The backup inventory records original device rows and identity file hashes.
 Production data was not reset.
+
+## Console scope correction
+
+The global Slots screen now has one registry context for each observed Mesh and
+one for each observed Standalone. A member's own fresh control observation
+determines its actual scope. A desired membership row from another control does
+not override an observed Standalone. Unknown connections are not management
+targets.
+
+Slots was removed from server workspace navigation. The global Slots entry and
+the Mesh Slots entry remain. An existing member slot route replaces itself with
+the corresponding Mesh route before loading native slots or defaults. Existing
+Standalone routes still address their own independent scope.
+
+A Mesh uses one available ingress for its reads and mutations. A pending operation
+prefers its original paired device; journal identity includes the registry and
+the pairing. Explicit `not_committed` failures clear the pending operation.
+Late responses from an old registry cannot confirm or remove data in a new one.
+Adding an unrelated registry no longer clears existing observations or cancels
+another target's pending defaults request.
+
+Mesh policy writes use the existing fleet policy action through a member or the
+authority. The native authoritative parent revision must match that ingress's
+fresh control policy revision. A lost receipt, including a structured
+`control_mutation_unconfirmed`, is confirmed only by a newer exact policy read
+from the original Mesh. Standalone policy keeps its local defaults action.
+No alternate agent methods, compatibility modes or migrations were introduced.
+
+## Scoped Console verification
+
+The first Console freeze passed 40 atomic cases across eight existing owners in
+8.09 seconds, followed by TypeScript and Vite production build:
+
+```sh
+npm test -- src/components/AppShell.test.tsx \
+  src/AppSlotsNativeWiring.qa.test.tsx \
+  src/routes/ServerSlots.test.tsx \
+  src/routes/MeshSlotPolicyTransitions.test.tsx \
+  src/routes/SlotAuthorityTransition.qa.test.tsx \
+  src/slots/accessMeshState.test.ts \
+  src/slots/accessMeshReadIsolation.test.tsx \
+  src/slots/operationJournal.test.ts
+npm run build
+```
+
+The final navigation and policy-response scope changes were checked by rerunning
+only their two owners: `AppShell.test.tsx` and
+`MeshSlotPolicyTransitions.test.tsx`, with 11 passed in 3.50 seconds. That selector
+reuses ten cases and adds one foreign-Mesh receipt case, giving 41 distinct
+Console cases across the bounded selectors, not 51 distinct cases.
+
+The old assertion that an independently paired primary timeout always makes
+policy read-only was updated to check the missing matching authoritative parent
+revision. Member forwarding is an existing supported operation; authorization,
+CAS, freshness and draft-preservation checks remain. No new test owner or broad
+suite was added. Independent reviews checked registry identity, pending journal
+ownership and stale response handling.
+
+The final read-state hook cleanup updates callback guards during layout commit and
+prunes cache only when target identities change. It does not disable lint rules.
+The three affected existing owners (`accessMeshState.test.ts`,
+`accessMeshReadIsolation.test.tsx`, `SlotAuthorityTransition.qa.test.tsx`) passed
+14 reused atomic cases. Scoped ESLint with `--max-warnings=0`, TypeScript with
+`--noEmit -p tsconfig.app.json`, and `git diff --check` then passed.
+
+## Live update and operator verification
+
+Backend commit `91bdf6bb7b3e5016ad0c929c73c7649780948710` was archived once and
+installed through the data-preserving update procedure on all four nodes.
+Archive SHA-256:
+`1372700f9b70b26e58368bf3784a73093aecf3b40ea64807f5fd57f0af2e05b0`.
+
+| Node | Running release | Mesh role |
+| --- | --- | --- |
+| BacLOUD | `0.29.3-91bdf6b` | Authority |
+| FirstByte | `0.30.3-91bdf6b` | Member |
+| Solvenger Main | `0.29.3-91bdf6b` | Member |
+| TokyoHH | `0.15.3-91bdf6b` | Member |
+
+All four update units completed successfully and extended health reported
+healthy. The ordinary Tokyo release, environment hash and registry scope were
+compared before/after and remained unchanged. It is still Standalone on
+`0.29.0-4dbffe9`. Secondary was not accessed.
+
+The same legitimate temporary Console devices were used before and after the
+update. The following individual live actions succeeded:
+
+| Action | Ingress | Result | Trace ID |
+| --- | --- | --- | --- |
+| Create an unused temporary probe slot | FirstByte | HTTP 200, `ok=true`, revision 1 | `01a152e2-6dba-7c9b-b6d4-94279f888924` |
+| Set that slot's policy | TokyoHH | HTTP 200, `ok=true`, revision 2 | `01a152e4-108e-77a5-aa06-752580158ac4` |
+| Save existing shared policy values | Main | HTTP 200, `ok=true`; values and revision 1 preserved | `01a152e6-490d-7f4f-bc5a-a6bcc16e8133` |
+| Delete only the probe slot | Main | HTTP 200, `ok=true`, deletion receipt revision 3 | `01a152eb-4b70-71e4-b14b-b1623de33195` |
+
+At 06:49 UTC all four nodes returned successful control, slots and defaults
+reads. They agreed on the BacLOUD authority, Mesh ID, topology revision 5, trust
+revision 4 and policy revision 1. Every node had three verified peers, an
+authoritative converged Mesh policy parent, and `write_target=fleet_control`.
+The probe slot was absent from all four lists. The original shared policy values
+were preserved. Actual MCP terminal commands also ran successfully after the
+TokyoHH update using the existing logical agent binding.

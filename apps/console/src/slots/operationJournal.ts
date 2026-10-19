@@ -1,4 +1,11 @@
 import type { AccessMeshMutationRequest } from '../api/models'
+import { connectionAuthorityScope } from '../connections/authorityScope'
+import type { ConnectionProfile } from '../connections/types'
+
+/** An idempotency key belongs to one registry and the original paired principal. */
+export function slotOperationScope(registryScope: string, profile: ConnectionProfile): string {
+  return JSON.stringify([registryScope, connectionAuthorityScope(profile)])
+}
 
 export const SLOT_OPERATION_PREFIX = 'terminal-mcp.console.slot-operation.v1.'
 export type PendingSlotOperation = {

@@ -6,7 +6,8 @@ import { afterEach,expect,test,vi } from 'vitest'
 import { ConsoleHttpError } from '../api/client'
 import type { AccessMeshMutationRequest,AccessMutationResult } from '../api/models'
 import { I18nProvider } from '../i18n/I18nProvider'
-import { fleetInstance,nativeDefaults,nativeInheritance,nativeSlot,standaloneControl } from '../slots/testFixtures'
+import { saveCachedFleetControl } from '../connections/controlState'
+import { fleetInstance,meshControl,nativeDefaults,nativeInheritance,nativeSlot,standaloneControl } from '../slots/testFixtures'
 import { ServerSlots,type ServerSlotsProps } from './ServerSlots'
 
 function setup(route = '/slots', overrides: Partial<ServerSlotsProps> = {}) {
@@ -123,14 +124,53 @@ test('saving Standalone policy sends its admission and Rearm settings with the d
   })))
 })
 
-test('confirmed deletion removes the slot from every displayed node snapshot', async () => {
-  setup('/slots', { instances: [fleetInstance(), fleetInstance('beta')] })
-  await screen.findByRole('link', { name: 'Alpha' })
-  await userEvent.click(screen.getByLabelText('More actions'))
-  await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+test('confirmed deletion removes only the selected registry row', async () => {
+  let alphaSlots = [nativeSlot()]
+  setup('/slots?filter=all', {
+    instances: [fleetInstance(), fleetInstance('beta')],
+    loadAccessMeshSlots: async (id) => structuredClone(id === 'alpha' ? alphaSlots : [nativeSlot()]),
+    mutateAccessMesh: async (_id, request) => {
+      if (request.action !== 'delete') throw new Error('unexpected fixture action')
+      alphaSlots = []
+      return { ok: true, payload: { revision: request.expected_revision + 1 } }
+    },
+  })
+  await waitFor(() => expect(screen.getAllByRole('link', { name: 'Alpha' })).toHaveLength(2))
+  const card = screen.getAllByRole('link', { name: 'Alpha' })[0].closest('article')!
+  await userEvent.click(within(card).getByLabelText('More actions'))
+  await userEvent.click(within(card).getByRole('button', { name: 'Delete' }))
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
 
-  await waitFor(() => expect(screen.queryByRole('link', { name: 'Alpha' })).not.toBeInTheDocument())
+  await waitFor(() => expect(screen.getAllByRole('link', { name: 'Alpha' })).toHaveLength(1))
+  expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', expect.stringContaining('owner=server%3Abeta'))
+})
+
+test('scope choices share one Mesh registry, retain actual Standalone and omit unavailable profiles', async () => {
+  const shared = (id: string) => {
+    const control = meshControl(id)
+    control.nodes.push({ ...control.nodes[1], nodeId: 'gamma', origin: 'https://gamma.example' })
+    return control
+  }
+  const secondary = fleetInstance('secondary')
+  saveCachedFleetControl('secondary', standaloneControl('secondary'), Date.now())
+  const loadSlots = vi.fn(async (id: string) => [nativeSlot(id)])
+  const loadDefaults = vi.fn(async () => nativeDefaults())
+  setup('/slots?filter=all', {
+    instances: [fleetInstance('gamma'), fleetInstance('beta'), fleetInstance(), secondary],
+    loadFleetControl: async (id) => {
+      if (id === 'secondary') throw new ConsoleHttpError(0, 'request_timeout')
+      return id === 'beta' ? standaloneControl(id) : shared(id)
+    },
+    loadAccessMeshSlots: loadSlots, loadAccessMeshDefaults: loadDefaults,
+  })
+
+  await waitFor(() => expect(loadSlots).toHaveBeenCalledTimes(2))
+
+  expect(loadSlots.mock.calls.map(([id]) => id).sort()).toEqual(['alpha', 'beta'])
+  expect(loadDefaults).toHaveBeenCalledTimes(2)
+  const scopePicker = screen.getByRole('combobox', { name: 'Filter' })
+  expect(within(scopePicker).getAllByRole('option').map((option) => option.textContent)).toEqual(['All', 'Beta server', 'Production'])
+  expect(screen.queryByRole('combobox', { name: 'Create on server' })).not.toBeInTheDocument()
 })
 
 test('read-only pairing can display fresh slots while all native writes remain disabled', async () => {

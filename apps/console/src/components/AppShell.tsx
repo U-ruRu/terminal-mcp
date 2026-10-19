@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 import { navigationReturnTo, serverSwitchDestination } from '../navigation/context'
+import { meshSlotsRoute } from '../navigation/routes'
 import { APK_VERSION_LABEL } from '../appVersion'
 
 import type { FleetServerReadModel } from '../fleet/readModel'
@@ -34,7 +35,6 @@ const globalNavigation: NavigationItem[] = [
 
 const serverNavigation: NavigationItem[] = [
   { key: 'agents', icon: 'agents', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
-  { key: 'slots', icon: 'slots', labelKey: 'nav.slots', globalPath: '/slots', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots' },
   { key: 'tasks', icon: 'tasks', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
   { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
   { key: 'context', icon: 'context', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
@@ -42,7 +42,7 @@ const serverNavigation: NavigationItem[] = [
 
 const meshNavigation: NavigationItem[] = [
   { key: 'agents', icon: 'agents', labelKey: 'nav.agents', globalPath: '/agents', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/agents' },
-  { key: 'slots', icon: 'slots', labelKey: 'nav.slots', globalPath: '/slots', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/persistent' },
+  { key: 'slots', icon: 'slots', labelKey: 'nav.slots', globalPath: '/slots', meshPath: meshSlotsRoute },
   { key: 'tasks', icon: 'tasks', labelKey: 'nav.tasks', globalPath: '/tasks', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/tasks' },
   { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/activity' },
 ]
@@ -70,7 +70,6 @@ function activeKey(pathname: string): NavigationKey {
   if (pathname === '/activity' || pathname.endsWith('/activity')) return 'activity'
   if (pathname === '/settings') return 'settings'
   if (pathname === '/connections' || pathname === '/connect') return 'connections'
-  if (pathname.startsWith('/meshes/') && pathname.includes('/persistent')) return 'slots'
   if (pathname === '/agents' || pathname.endsWith('/agents')) return 'agents'
   if (pathname === '/slots' || pathname.includes('/slots')) return 'slots'
   if (pathname === '/tasks' || pathname.includes('/tasks')) return 'tasks'
@@ -101,8 +100,8 @@ function contextNavigation(pathname: string, search: string, returnTo?: string):
   }
   if (parts[0] === 'meshes' && parts[1]) {
     const meshPath = '/meshes/' + parts[1]
-    if (parts[2] === 'persistent' && parts.length >= 4) return { to: returnTo ?? meshPath + '/persistent', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
-    if (parts[2] === 'persistent') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.serverSlots' }
+    if (parts[2] === 'slots' && parts.length >= 4) return { to: returnTo ?? meshPath + '/slots', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
+    if (parts[2] === 'slots') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.serverSlots' }
     if (parts[2] === 'agents') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'nav.agents' }
     if (parts[2] === 'tasks') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'nav.tasks' }
     if (parts[2] === 'activity') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.activity' }

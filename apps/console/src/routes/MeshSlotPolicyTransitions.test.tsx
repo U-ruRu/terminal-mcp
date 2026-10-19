@@ -7,23 +7,29 @@ import type { AccessMeshMutationRequest,ManagedAccessPolicyReadModel,ManagedFlee
 import { I18nProvider } from '../i18n/I18nProvider'
 import { fleetInstance,meshControl,nativeDefaults,nativeInheritance,nativeSlot } from '../slots/testFixtures'
 import type { MeshAccessPolicyRequest } from './MeshAccessPolicyControls'
+import * as PolicyControls from './MeshAccessPolicyControls'
 import { ServerSlots } from './ServerSlots'
 
-function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthority = false) {
+function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthority = false, memberOnly = false) {
   const state = {
     policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1290, rearmAfterSeconds: 180,
       rearmEnabled: true, legacyAdmissionEnabled: false,
       revision: 2, updatedAt: '2026-10-12T05:00:00Z' } as ManagedAccessPolicyReadModel,
     slots: [nativeSlot()], defaults: { ...nativeDefaults(), meshPolicySupported: capability, inheritanceSupported: capability,
-      inheritance: nativeInheritance('inherit', 'mesh') },
-    failAuthority, conflict: false, loseReceipt: false,
+      inheritance: nativeInheritance('inherit', 'mesh'), writeTarget: 'fleet_control' as const },
+    failAuthority, conflict: false, loseReceipt: false as false | 'network' | 'unconfirmed', meshId: 'mesh-prod', replyMeshId: '',
   }
-  const control = (id: string): ManagedFleetControlReadModel => ({ ...meshControl(id), policy: structuredClone(state.policy) })
+  const control = (id: string): ManagedFleetControlReadModel => {
+    const value = meshControl(id)
+    return { ...value, policy: structuredClone(state.policy), mesh: { ...value.mesh!, meshId: state.meshId },
+      meshes: value.meshes.map((mesh) => ({ ...mesh, meshId: state.meshId })),
+      nodes: value.nodes.map((node) => ({ ...node, meshId: state.meshId })) }
+  }
   const loadControl = vi.fn(async (id: string) => {
     if (id === 'alpha' && state.failAuthority) throw new ConsoleHttpError(0, 'request_timeout')
     return control(id)
   })
-  const loadSlots = vi.fn(async (id: string) => id === 'alpha' ? structuredClone(state.slots) : [])
+  const loadSlots = vi.fn(async () => structuredClone(state.slots))
   const loadDefaults = vi.fn(async () => structuredClone(state.defaults))
   const mutateMesh = vi.fn(async (_id: string, _path: string, body: Record<string, unknown>) => {
     const request = body as MeshAccessPolicyRequest
@@ -35,11 +41,17 @@ function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthori
       alertAfterSeconds: request.alert_after_seconds, rearmAfterSeconds: request.rearm_after_seconds,
       rearmEnabled: request.rearm_enabled, legacyAdmissionEnabled: request.legacy_admission_enabled,
       revision: state.policy.revision + 1, updatedAt: state.policy.updatedAt }
-    if (state.loseReceipt) throw new ConsoleHttpError(0, 'request_timeout')
+    state.defaults.inheritance.parent!.revision = state.policy.revision
+    if (state.replyMeshId) {
+      state.meshId = state.replyMeshId
+      state.defaults.inheritance.parent!.id = state.meshId
+    }
+    if (state.loseReceipt === 'network') throw new ConsoleHttpError(0, 'request_timeout')
+    if (state.loseReceipt === 'unconfirmed') return { ok: false, code: 'control_mutation_unconfirmed' }
     return { ok: true, control: control('alpha') }
   })
   const mutateNative = vi.fn<(id: string, request: AccessMeshMutationRequest) => Promise<AccessMutationResult>>(async () => ({ ok: true, payload: {} }))
-  const props = { instances: [fleetInstance(), fleetInstance('beta')], loadFleetControl: loadControl, loadAccessMeshSlots: loadSlots,
+  const props = { instances: memberOnly ? [fleetInstance('beta')] : [fleetInstance(), fleetInstance('beta')], loadFleetControl: loadControl, loadAccessMeshSlots: loadSlots,
     loadAccessMeshDefaults: loadDefaults, mutateFleetControl: mutateMesh, mutateAccessMesh: mutateNative }
   render(<I18nProvider><MemoryRouter initialEntries={[route]}><Routes>
     <Route path="/meshes/:meshId/slots" element={<ServerSlots {...props} />} />
@@ -56,22 +68,28 @@ async function editThreeHours() {
 }
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.useRealTimers(); vi.restoreAllMocks() })
 
-test('saving Mesh policy sends its admission and Rearm settings with the control revision', async () => {
-  const env = setup()
+test.each([
+  ['/meshes/mesh-prod/slots', false, 'alpha'],
+  ['/servers/beta/slots', false, 'alpha'],
+  ['/servers/beta/slots', true, 'beta'],
+])('saving Mesh policy through %s (member-only pairing: %s) keeps its shared owner', async (route, memberOnly, ingress) => {
+  const env = setup(route, true, false, memberOnly)
   await editThreeHours()
   await userEvent.click(screen.getByRole('checkbox', { name: 'Legacy admission' }))
   await userEvent.click(screen.getByRole('checkbox', { name: 'Rearm' }))
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-  await waitFor(() => expect(env.mutateMesh).toHaveBeenCalledWith('alpha', '/actions/fleet/control/policy', {
+  await waitFor(() => expect(env.mutateMesh).toHaveBeenCalledWith(ingress, '/actions/fleet/control/policy', {
     duration_seconds: 10800, warning_after_seconds: 1200, alert_after_seconds: 1290,
     rearm_after_seconds: 180, rearm_enabled: false, legacy_admission_enabled: true, expected_revision: 2,
   }))
+  expect(env.mutateNative).not.toHaveBeenCalled()
 })
 
-test('authority read timeout leaves Mesh settings read-only despite a readable member and its confirmed Production topology', async () => {
+test('a member policy without the authoritative parent revision stays read-only', async () => {
   const env = setup('/meshes/mesh-prod/slots', true, true)
+  env.state.defaults.inheritance.parent!.revision = 3
   const input = await screen.findByRole('spinbutton', { name: 'Session duration' })
   expect(input).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
@@ -90,15 +108,30 @@ test('a Mesh policy revision conflict preserves the unsaved draft', async () => 
   expect(input).toHaveValue(3)
 })
 
-test('an exact newer policy read confirms a lost Mesh save receipt', async () => {
+test.each([
+  { mode: 'network', sameMesh: true },
+  { mode: 'unconfirmed', sameMesh: true },
+  { mode: 'unconfirmed', sameMesh: false },
+] as const)('an exact newer $mode policy read confirms only its original Mesh (same: $sameMesh)', async ({ mode, sameMesh }) => {
+  const outcomes = vi.fn()
+  const Component = PolicyControls.MeshAccessPolicyControls
+  vi.spyOn(PolicyControls, 'MeshAccessPolicyControls').mockImplementation((props) => <Component {...props} save={async (request) => {
+    const result = await props.save(request)
+    outcomes(result)
+    return result
+  }} />)
   const env = setup()
-  env.state.loseReceipt = true
+  env.state.loseReceipt = mode
+  if (!sameMesh) env.state.replyMeshId = 'mesh-other'
   await editThreeHours()
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
   await waitFor(() => expect(env.loadControl.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(2))
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled())
-  expect(screen.getByRole('spinbutton', { name: 'Session duration' })).toHaveValue(3)
+  await waitFor(() => expect(outcomes).toHaveBeenCalledWith(expect.objectContaining({ confirmed: sameMesh })))
+  if (sameMesh) {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled())
+    expect(screen.getByRole('spinbutton', { name: 'Session duration' })).toHaveValue(3)
+  }
   expect(env.mutateMesh).toHaveBeenCalledTimes(1)
 })

@@ -11,7 +11,8 @@ test('slots become readable while the defaults request remains pending', async (
   const loadDefaults = vi.fn(() => new Promise<AccessMeshDefaultsReadModel>(() => undefined))
   const instance = fleetInstance()
 
-  const { result } = renderHook(() => useAccessMeshState([instance], loadSlots, loadDefaults))
+  const targets = [{ instance, registryScope: 'server:alpha', available: true }]
+  const { result } = renderHook(() => useAccessMeshState(targets, loadSlots, loadDefaults))
 
   await waitFor(() => expect(result.current.states[instance.profile.instanceId]?.slots).toHaveLength(1))
   expect(result.current.states[instance.profile.instanceId]?.defaults).toBeUndefined()
