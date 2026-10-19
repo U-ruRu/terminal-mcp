@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from terminal_mcp.application.actor import ActorContext
@@ -30,6 +30,7 @@ from terminal_mcp.mesh_vpn import (
     status,
     switch,
 )
+from terminal_mcp.platform_paths import IS_WINDOWS
 
 
 class StrictRequest(BaseModel):
@@ -64,7 +65,11 @@ class BackendRequest(StrictRequest):
 
 
 def build_mesh_vpn_control_router(controller, application, settings) -> APIRouter:
-    router = APIRouter(tags=["fleet-control"])
+    async def platform_guard(request: Request):
+        if IS_WINDOWS and request.method == "POST":
+            raise HTTPException(409, detail="vpn_platform_unsupported")
+
+    router = APIRouter(tags=["fleet-control"], dependencies=[Depends(platform_guard)])
     state_dir = Path(settings.mesh_vpn_state_dir)
     transport_file = Path(settings.fleet_peer_transports_path)
 
@@ -103,6 +108,19 @@ def build_mesh_vpn_control_router(controller, application, settings) -> APIRoute
         return public_key
 
     def snapshot(control: dict) -> dict:
+        if IS_WINDOWS:
+            return {
+                "ok": True,
+                "node_id": controller.config.instance_id,
+                "provisioning_supported": False,
+                "prepared": False,
+                "tunnel": None,
+                "overlay_ip": None,
+                "endpoint": None,
+                "backend": None,
+                "peers": [],
+                "offer": None,
+            }
         local_file = state_dir / "local.json"
         prepared = local_file.is_file()
         observed = status(state_dir) if prepared else None
@@ -117,6 +135,7 @@ def build_mesh_vpn_control_router(controller, application, settings) -> APIRoute
         )
         return {
             "ok": True,
+            "provisioning_supported": True,
             "node_id": controller.config.instance_id,
             "prepared": prepared,
             "tunnel": observed,

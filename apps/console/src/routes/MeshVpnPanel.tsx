@@ -109,7 +109,7 @@ export function MeshVpnPanel({ instanceId, nodeId, peers, client, expectedTopolo
             <span>{view?.tunnel?.running ? t('vpn.ready') : t('vpn.offline')}</span>
             <span>{t('vpn.backend')}: {view?.backend ?? '—'}</span>
           </div>
-          {!view?.prepared ? (
+          {view?.provisioning_supported === false ? <p className="muted">{t('runtime.systemTunnel')}</p> : !view?.prepared ? (
             <div className="stack">
               <label className="ui-field">{t('vpn.overlay')}
                 <input type="text" value={overlayIp} onChange={(e) => setOverlayIp(e.target.value)}

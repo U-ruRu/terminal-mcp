@@ -332,6 +332,7 @@ export type NodeRuntimeStatus = {
 
 export type MeshVpnStatus = {
   ok: boolean
+  provisioning_supported?: boolean
   node_id: string
   prepared: boolean
   backend: 'auto' | 'kernel' | 'userspace' | null

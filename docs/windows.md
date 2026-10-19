@@ -86,6 +86,8 @@ Console сохраняет ожидающий идентификатор на у
 WireGuard, имя которой задаётся при установке: `-TunnelName tmcp-laptop`.
 Привязка хранится в `service\runtime.json`. Панель Console предлагает операции,
 объявленные узлом. Выполняемые команды могут завершиться при перезапуске TerminalMCP.
+Mesh transport API объявляет `provisioning_supported=false` для Windows; Console
+направляет управление установленным туннелем в панель служб.
 
 ## Explicit clean installation
 

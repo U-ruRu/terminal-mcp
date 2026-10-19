@@ -1,4 +1,5 @@
 export const en = {
+  "runtime.systemTunnel": "WireGuard uses the installed Windows tunnel service. Restart it in Windows services.",
   "runtime.title": "Windows services",
   "runtime.terminal": "Terminal MCP",
   "runtime.tunnel": "WireGuard",
@@ -611,6 +612,7 @@ export type MessageKey = keyof typeof en
 export type Catalog = { [K in MessageKey]: string }
 
 export const ru: Catalog = {
+  "runtime.systemTunnel": "WireGuard использует установленную службу туннеля Windows. Перезапуск доступен в панели служб.",
   "runtime.title": "Службы Windows",
   "runtime.terminal": "Terminal MCP",
   "runtime.tunnel": "WireGuard",
@@ -1220,6 +1222,7 @@ export const ru: Catalog = {
 }
 
 export const ka: Catalog = {
+  "runtime.systemTunnel": "WireGuard იყენებს Windows-ის დაყენებულ გვირაბის სერვისს. გადატვირთვა ხელმისაწვდომია სერვისების პანელში.",
   "runtime.title": "Windows-ის სერვისები",
   "runtime.terminal": "Terminal MCP",
   "runtime.tunnel": "WireGuard",
@@ -1829,6 +1832,7 @@ export const ka: Catalog = {
 }
 
 export const es: Catalog = {
+  "runtime.systemTunnel": "WireGuard usa el servicio de túnel instalado en Windows. Reinícielo en el panel de servicios.",
   "runtime.title": "Servicios de Windows",
   "runtime.terminal": "Terminal MCP",
   "runtime.tunnel": "WireGuard",
