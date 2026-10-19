@@ -227,7 +227,7 @@ def check_migration(root: Path, backup: Path):
         "migration_receipt_mismatch",
     )
     manifest = read_json(backup / "snapshot.json")
-    for name, item in manifest["stores"].items():
+    for item in manifest["stores"].values():
         before = backup / item["backup"]
         require(sha256(before) == item["sha256"], "backup_tampered")
         # migrate_stores verified old rows before publishing this bound completion receipt.

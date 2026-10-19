@@ -144,7 +144,8 @@ def session_split(tmp_path):
             CREATE TABLE access_mesh_slot_replicas(
                 issuer_id TEXT,slot_id TEXT,logical_agent_id TEXT,
                 kind TEXT CHECK(kind IN ('legacy','persistent')),state TEXT,
-                policy_json TEXT,code_tag TEXT,anchor TEXT,deadline_at TEXT,policy_window_json TEXT);
+                policy_json TEXT,code_tag TEXT,anchor TEXT,deadline_at TEXT,
+                policy_window_json TEXT);
             CREATE TABLE access_mesh_event_log(
                 issuer_id TEXT,slot_id TEXT,revision INTEGER,event_json TEXT);
             CREATE TABLE access_mesh_number_claims(

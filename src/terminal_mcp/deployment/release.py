@@ -41,7 +41,9 @@ def offline_driver(profile: Path) -> NodeDriver:
     return driver
 
 
-async def migrate_stores(profile: dict, backup: Path, *, settings=None, access_bridge=False) -> dict:
+async def migrate_stores(
+    profile: dict, backup: Path, *, settings=None, access_bridge=False
+) -> dict:
     # The process environment is supplied by the already-configured node; no .env
     # from the source checkout or packaging environment is inherited.
     from terminal_mcp.auth.identity_migration import (
