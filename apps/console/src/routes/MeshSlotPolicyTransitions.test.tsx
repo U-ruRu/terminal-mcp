@@ -10,14 +10,14 @@ import type { MeshAccessPolicyRequest } from './MeshAccessPolicyControls'
 import * as PolicyControls from './MeshAccessPolicyControls'
 import { ServerSlots } from './ServerSlots'
 
-function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthority = false, memberOnly = false) {
+function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthority = false, memberOnly = false, failAllControls = false) {
   const state = {
     policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1290, rearmAfterSeconds: 180,
       rearmEnabled: true, legacyAdmissionEnabled: false,
       revision: 2, updatedAt: '2026-10-12T05:00:00Z' } as ManagedAccessPolicyReadModel,
     slots: [nativeSlot()], defaults: { ...nativeDefaults(), meshPolicySupported: capability, inheritanceSupported: capability,
       inheritance: nativeInheritance('inherit', 'mesh'), writeTarget: 'fleet_control' as const },
-    failAuthority, conflict: false, loseReceipt: false as false | 'network' | 'unconfirmed', meshId: 'mesh-prod', replyMeshId: '',
+    failAuthority, failAllControls, conflicts: 0, loseReceipt: false as false | 'network' | 'unconfirmed', meshId: 'mesh-prod', replyMeshId: '',
   }
   const control = (id: string): ManagedFleetControlReadModel => {
     const value = meshControl(id)
@@ -26,21 +26,23 @@ function setup(route = '/meshes/mesh-prod/slots', capability = true, failAuthori
       nodes: value.nodes.map((node) => ({ ...node, meshId: state.meshId })) }
   }
   const loadControl = vi.fn(async (id: string) => {
-    if (id === 'alpha' && state.failAuthority) throw new ConsoleHttpError(0, 'request_timeout')
+    if (state.failAllControls || id === 'alpha' && state.failAuthority) throw new ConsoleHttpError(0, 'request_timeout')
     return control(id)
   })
   const loadSlots = vi.fn(async () => structuredClone(state.slots))
   const loadDefaults = vi.fn(async () => structuredClone(state.defaults))
   const mutateMesh = vi.fn(async (_id: string, _path: string, body: Record<string, unknown>) => {
     const request = body as MeshAccessPolicyRequest
-    if (state.conflict) {
+    if (state.conflicts > 0) {
+      state.conflicts--
       state.policy = { ...state.policy, revision: state.policy.revision + 1, durationSeconds: 7200 }
-      throw new ConsoleHttpError(409, 'policy_revision_conflict')
+      state.defaults.inheritance.parent!.revision = state.policy.revision
+      throw new ConsoleHttpError(409, 'access_policy_revision_conflict')
     }
     state.policy = { durationSeconds: request.duration_seconds, warningAfterSeconds: request.warning_after_seconds,
       alertAfterSeconds: request.alert_after_seconds, rearmAfterSeconds: request.rearm_after_seconds,
       rearmEnabled: request.rearm_enabled, legacyAdmissionEnabled: request.legacy_admission_enabled,
-      revision: state.policy.revision + 1, updatedAt: state.policy.updatedAt }
+      revision: request.expected_revision + 1, updatedAt: state.policy.updatedAt }
     state.defaults.inheritance.parent!.revision = state.policy.revision
     if (state.replyMeshId) {
       state.meshId = state.replyMeshId
@@ -87,24 +89,31 @@ test.each([
   expect(env.mutateNative).not.toHaveBeenCalled()
 })
 
-test('a member policy without the authoritative parent revision stays read-only', async () => {
+test('a member saves with the current authority parent revision despite its older local policy', async () => {
   const env = setup('/meshes/mesh-prod/slots', true, true)
   env.state.defaults.inheritance.parent!.revision = 3
-  const input = await screen.findByRole('spinbutton', { name: 'Session duration' })
-  expect(input).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-  expect(env.mutateMesh).not.toHaveBeenCalled()
+  await editThreeHours()
+
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+  await waitFor(() => expect(env.mutateMesh).toHaveBeenCalledWith('beta', '/actions/fleet/control/policy', expect.objectContaining({
+    expected_revision: 3, duration_seconds: 10800, warning_after_seconds: 1200, alert_after_seconds: 1290,
+  })))
 })
 
-test('a Mesh policy revision conflict preserves the unsaved draft', async () => {
+test.each([1, 2])('a Mesh policy Save retries only one definite CAS race (%s conflicts)', async (conflicts) => {
   const env = setup()
-  env.state.conflict = true
+  env.state.conflicts = conflicts
   const input = await editThreeHours()
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-  await waitFor(() => expect(env.loadControl.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(2))
-  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  await waitFor(() => expect(env.mutateMesh).toHaveBeenCalledTimes(2))
+  expect(env.mutateMesh.mock.calls[1][2]).toEqual({
+    duration_seconds: 10800, warning_after_seconds: 1200, alert_after_seconds: 1290,
+    rearm_after_seconds: 180, rearm_enabled: true, legacy_admission_enabled: false, expected_revision: 3,
+  })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled())
   expect(input).toHaveValue(3)
 })
 
@@ -112,7 +121,8 @@ test.each([
   { mode: 'network', sameMesh: true },
   { mode: 'unconfirmed', sameMesh: true },
   { mode: 'unconfirmed', sameMesh: false },
-] as const)('an exact newer $mode policy read confirms only its original Mesh (same: $sameMesh)', async ({ mode, sameMesh }) => {
+  { mode: 'no-op', sameMesh: true },
+] as const)('an exact $mode policy read confirms only its original Mesh (same: $sameMesh)', async ({ mode, sameMesh }) => {
   const outcomes = vi.fn()
   const Component = PolicyControls.MeshAccessPolicyControls
   vi.spyOn(PolicyControls, 'MeshAccessPolicyControls').mockImplementation((props) => <Component {...props} save={async (request) => {
@@ -121,17 +131,32 @@ test.each([
     return result
   }} />)
   const env = setup()
-  env.state.loseReceipt = mode
+  if (mode === 'no-op') env.mutateMesh.mockResolvedValueOnce({ ok: true, control: meshControl('alpha') })
+  else env.state.loseReceipt = mode
   if (!sameMesh) env.state.replyMeshId = 'mesh-other'
-  await editThreeHours()
+  if (mode === 'no-op') await screen.findByRole('spinbutton', { name: 'Session duration' })
+  else await editThreeHours()
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-  await waitFor(() => expect(env.loadControl.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(2))
+  await waitFor(() => expect(env.loadControl.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(3))
   await waitFor(() => expect(outcomes).toHaveBeenCalledWith(expect.objectContaining({ confirmed: sameMesh })))
   if (sameMesh) {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled())
-    expect(screen.getByRole('spinbutton', { name: 'Session duration' })).toHaveValue(3)
+    expect(screen.getByRole('spinbutton', { name: 'Session duration' })).toHaveValue(mode === 'no-op' ? 23 : 3)
   }
   expect(env.mutateMesh).toHaveBeenCalledTimes(1)
+})
+
+test('an unresolved Mesh route can retry its initial direct control failure', async () => {
+  const env = setup('/meshes/mesh-prod/slots', true, false, false, true)
+  await waitFor(() => expect(env.loadControl).toHaveBeenCalledTimes(2))
+  expect(screen.queryByRole('spinbutton', { name: 'Session duration' })).not.toBeInTheDocument()
+  env.state.failAllControls = false
+
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh slot settings' }))
+
+  expect(await screen.findByRole('spinbutton', { name: 'Session duration' })).toBeEnabled()
+  expect(env.loadControl).toHaveBeenCalledTimes(4)
+  expect(env.mutateMesh).not.toHaveBeenCalled()
 })

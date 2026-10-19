@@ -35,6 +35,7 @@ const globalNavigation: NavigationItem[] = [
 
 const serverNavigation: NavigationItem[] = [
   { key: 'agents', icon: 'agents', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
+  { key: 'slots', icon: 'slots', labelKey: 'nav.slots', globalPath: '/slots' },
   { key: 'tasks', icon: 'tasks', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
   { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
   { key: 'context', icon: 'context', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },

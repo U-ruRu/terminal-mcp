@@ -1,13 +1,13 @@
 import { meshPolicyMatches } from '../slots/meshPolicy'
 import { MeshAccessPolicyControls, type MeshAccessPolicyRequest, type MeshAccessPolicyOutcome } from './MeshAccessPolicyControls'
 import { connectionAuthorityScope } from '../connections/authorityScope'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 
 import { ConsoleHttpError } from '../api/client'
-import type { AccessMeshDefaultsReadModel, AccessMeshMutationRequest, AccessMeshSlotReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult } from '../api/models'
+import type { AccessMeshDefaultsReadModel, AccessMeshMutationRequest, AccessMeshSlotReadModel, AccessMutationResult, ManagedFleetControlReadModel, ManagedFleetMutationResult } from '../api/models'
 import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
-import { loadCachedFleetControlForProfile, propagateCachedFleetControl, saveCachedFleetControl } from '../connections/controlState'
+import { propagateCachedFleetControl, saveCachedFleetControl } from '../connections/controlState'
 import type { FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
@@ -51,6 +51,13 @@ function defaultsMatchContext(context: SlotScopeContext | undefined, defaults: A
     ? defaults?.writeTarget === 'fleet_control' && defaults.inheritance?.parent?.source === 'mesh' && defaults.inheritance.parent.id === context.meshId
     : context?.kind === 'server' && defaults?.writeTarget === 'access_defaults' && defaults.inheritance?.source === 'standalone'
 }
+function isRevisionConflict(code: string | undefined): boolean {
+  return Boolean(code && /(?:^|_)(?:parent_)?revision_conflict$/.test(code))
+}
+function definiteRejection(result: AccessMutationResult): boolean {
+  return result.payload.outcome === 'not_committed' || result.code === 'identity_metadata_missing'
+    || /revision_conflict|parent.*conflict|invalid_|_invalid|denied|forbidden|disabled|not_found|unsupported|auth_required/.test(result.code ?? '')
+}
 async function writeClipboard(value: string): Promise<boolean> {
   try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return true } } catch { /* Use the existing WebView fallback. */ }
   const element = document.createElement('textarea')
@@ -82,65 +89,74 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const query = new URLSearchParams(location.search)
   const [filterKey, setFilterKey] = useState(query.get('filter') ?? sessionStorage.getItem('slots-list-filter') ?? '')
   const [clock, setClock] = useState(() => Date.now())
+  const hasControlLoader = Boolean(loadFleetControl)
   const targets = JSON.stringify(instances.map((item) => ({ id: item.profile.instanceId, connected: item.runtime.authStatus === 'connected', authority: connectionAuthorityScope(item.profile) })).sort((a, b) => a.id.localeCompare(b.id)))
-  const [controlCache, setControlCache] = useState<{
-    targets: string
-    controls: Record<string, ManagedFleetControlReadModel | undefined>
-    errors: Record<string, string | undefined>
-    confirmed: Record<string, boolean | undefined>
-    observedAt: Record<string, number | undefined>
-  }>(() => ({ targets, controls: Object.fromEntries(instances.map((item) => [item.profile.instanceId, loadCachedFleetControlForProfile(item.profile.instanceId, item.profile.origin)?.control])), errors: {}, confirmed: {}, observedAt: {} }))
-  if (controlCache.targets !== targets) setControlCache({ targets, controls: {}, errors: {}, confirmed: {}, observedAt: {} })
-  const controls = controlCache.targets === targets ? controlCache.controls : {}
-  const controlErrors = controlCache.targets === targets ? controlCache.errors : {}
-  const controlsConfirmed = controlCache.targets === targets ? controlCache.confirmed : {}
+  const controlIdentity = JSON.stringify(instances.map((item) => [item.profile.instanceId, connectionAuthorityScope(item.profile)]).sort(([a], [b]) => a.localeCompare(b)))
+  const [controlCache, setControlCache] = useState<Record<string, {
+    authority: string; control?: ManagedFleetControlReadModel; error?: string
+  }>>({})
+  const [cachedControlIdentity, setCachedControlIdentity] = useState(controlIdentity)
+  if (cachedControlIdentity !== controlIdentity) {
+    const identities = Object.fromEntries(JSON.parse(controlIdentity) as Array<[string, string]>)
+    setCachedControlIdentity(controlIdentity)
+    setControlCache((current) => Object.fromEntries(Object.entries(current).filter(([id, entry]) => identities[id] === entry.authority)))
+  }
+  const controlInputs = useRef({ instances, loadFleetControl })
+  useLayoutEffect(() => { controlInputs.current = { instances, loadFleetControl } }, [instances, loadFleetControl])
   const controlSerial = useRef<Record<string, number>>({})
-  const controlInFlight = useRef<Record<string, number | undefined>>({})
+  const initializedControls = useRef<Record<string, string | undefined>>({})
+  const reconciledControls = useRef<Record<string, string>>({})
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const refreshControl = useCallback(async (instanceId: string) => {
-    const currentTargets: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
-    if (!loadFleetControl || !currentTargets.some((item) => item.id === instanceId && item.connected)) return undefined
+    const { instances: currentInstances, loadFleetControl: loader } = controlInputs.current
+    const profile = currentInstances.find((item) => item.profile.instanceId === instanceId)?.profile
+    if (!loader || !profile) return undefined
+    const authority = connectionAuthorityScope(profile)
     const serial = (controlSerial.current[instanceId] ?? 0) + 1
     controlSerial.current[instanceId] = serial
-    controlInFlight.current[instanceId] = serial
-    setControlCache((current) => current.targets === targets ? { ...current, confirmed: { ...current.confirmed, [instanceId]: false } } : current)
+    const isCurrent = () => {
+      const current = controlInputs.current.instances.find((item) => item.profile.instanceId === instanceId)?.profile
+      return mounted.current && serial === controlSerial.current[instanceId]
+        && current && connectionAuthorityScope(current) === authority
+    }
     try {
-      const value = await loadFleetControl(instanceId)
-      if (!mounted.current || serial !== controlSerial.current[instanceId]) return undefined
+      const value = await loader(instanceId)
+      if (!isCurrent()) return undefined
       saveCachedFleetControl(instanceId, value, Date.now()); propagateCachedFleetControl(value, Date.now())
-      setControlCache((current) => current.targets === targets ? { ...current, controls: { ...current.controls, [instanceId]: value }, errors: { ...current.errors, [instanceId]: undefined }, confirmed: { ...current.confirmed, [instanceId]: true }, observedAt: { ...current.observedAt, [instanceId]: Date.now() } } : current)
+      setControlCache((current) => ({ ...current, [instanceId]: { authority, control: value } }))
       return value
     } catch (error) {
-      if (mounted.current && serial === controlSerial.current[instanceId]) setControlCache((current) => current.targets === targets ? { ...current, errors: { ...current.errors, [instanceId]: slotReadFailure(error).code }, confirmed: { ...current.confirmed, [instanceId]: false } } : current)
+      if (isCurrent()) setControlCache((current) => ({ ...current, [instanceId]: {
+        authority, control: current[instanceId]?.authority === authority ? current[instanceId].control : undefined,
+        error: slotReadFailure(error).code,
+      } }))
       return undefined
-    } finally {
-      if (controlInFlight.current[instanceId] === serial) delete controlInFlight.current[instanceId]
     }
-  }, [loadFleetControl, targets])
+  }, [])
   useEffect(() => {
-    const values: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
-    for (const value of values) if (value.connected) void refreshControl(value.id)
-    const poll = () => {
-      if (document.visibilityState === 'hidden') return
-      for (const value of values) if (value.connected && !controlInFlight.current[value.id]) void refreshControl(value.id)
+    const values: Array<{ id: string; connected: boolean; authority: string }> = JSON.parse(targets)
+    const identities = Object.fromEntries(values.map(({ id, authority }) => [id, authority]))
+    for (const [id, authority] of Object.entries(reconciledControls.current)) {
+      if (identities[id] === authority) continue
+      controlSerial.current[id] = (controlSerial.current[id] ?? 0) + 1
+      delete initializedControls.current[id]
     }
-    const timer = window.setInterval(poll, 15_000)
-    document.addEventListener('visibilitychange', poll)
-    const serials = controlSerial.current
-    return () => {
-      window.clearInterval(timer); document.removeEventListener('visibilitychange', poll)
-      for (const value of values) serials[value.id] = (serials[value.id] ?? 0) + 1
+    reconciledControls.current = identities
+    for (const value of values) {
+      if (!value.connected || !controlInputs.current.loadFleetControl || initializedControls.current[value.id] === value.authority) continue
+      initializedControls.current[value.id] = value.authority
+      void refreshControl(value.id)
     }
-  }, [refreshControl, targets])
+  }, [hasControlLoader, refreshControl, targets])
 
-  // Cached topology can contain an authority's intent. Only this screen's direct
-  // participant reads can select a registry or make it a settings destination.
+  // A direct observation belongs to its original pairing. Network status and
+  // another participant's cache never replace that identity or discard its form.
   const directControls = Object.fromEntries(instances.map(({ profile }) => [profile.instanceId,
-    controlCache.observedAt[profile.instanceId] === undefined ? undefined : controls[profile.instanceId]]))
-  const controlAvailable = Object.fromEntries(instances.map(({ profile, runtime }) => [profile.instanceId,
-    runtime.authStatus === 'connected' && Boolean(directControls[profile.instanceId]) && !controlErrors[profile.instanceId]
-      && clock - (controlCache.observedAt[profile.instanceId] ?? 0) <= 30_000]))
+    controlCache[profile.instanceId]?.authority === connectionAuthorityScope(profile) ? controlCache[profile.instanceId].control : undefined]))
+  const controlErrors = Object.fromEntries(instances.map(({ profile }) => [profile.instanceId,
+    controlCache[profile.instanceId]?.authority === connectionAuthorityScope(profile) ? controlCache[profile.instanceId].error : undefined]))
+  const controlAvailable = Object.fromEntries(instances.map(({ profile }) => [profile.instanceId, Boolean(directControls[profile.instanceId])]))
   const contexts = contextsFromTopology(instances, directControls, controlAvailable)
   const registryIngress = useRef<Record<string, string | undefined>>({})
   // Recovery retains the original ingress/principal; it never replays on a
@@ -164,6 +180,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const requestedFilter = resolveContextKey(query.get('owner') ?? filterKey, contexts)
   const filter = activeSessionsOnly || requestedFilter === 'all' ? 'all'
     : selectableContexts.find((context) => context.key === requestedFilter)?.key ?? selectableContexts[0]?.key ?? ''
+  if (globalMode && !activeSessionsOnly && !filterKey && filter) setFilterKey(filter)
   const routeContext = routeMeshId ? contexts.find((item) => item.meshId === routeMeshId) : routeInstanceId ? contexts.find((item) => item.memberInstanceIds.includes(routeInstanceId)) : undefined
   const activeContext = globalMode ? contexts.find((item) => item.key === filter) : routeContext
   const visibleContexts = globalMode ? (filter === 'all' || !filter ? contexts : contexts.filter((item) => item.key === filter)) : routeContext ? [routeContext] : []
@@ -190,13 +207,11 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const owner = resolveContextKey(query.get('owner') ?? '', contexts)
   const selectedCandidates = routeSlotId ? entries.filter((entry) => entry.slot.slotId === routeSlotId && (!owner || entry.contextKey === owner) && (!query.get('issuer') || entry.slot.issuerNodeId === query.get('issuer')) && (!query.get('slot') || entry.slot.slotId === query.get('slot'))) : []
   const selected = selectedCandidates.length === 1 ? selectedCandidates[0] : undefined
-  const selectedInstance = selected ? instances.find((item) => item.profile.instanceId === selected.instanceId) : undefined
   const policyInstanceId = activeContext?.instanceId || ''
   const policyInstance = instances.find((item) => item.profile.instanceId === policyInstanceId)
   const createInstanceId = policyInstanceId
   const createRead = reads[createInstanceId]
   const meshControl = meshControlForContext(activeContext, directControls)
-  const meshAuthorityName = instances.find((item) => directControls[item.profile.instanceId]?.nodeId === meshControl?.controlNodeId)?.profile.displayName ?? meshControl?.controlNodeId ?? ''
   const defaults = reads[policyInstanceId]?.defaults
 
   const [busy, setBusy] = useState('')
@@ -247,39 +262,93 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const blocked = (instanceId: string) => !operationScope(instanceId) || Boolean(contexts.find((context) => context.memberInstanceIds.includes(instanceId))?.memberInstanceIds.some((id) => { const current = pendingFor(id); return current.value || current.unavailable }))
   const pending = visibleContexts.flatMap((context) => context.memberInstanceIds.map((instanceId) => ({ instanceId, name: context.label, ...pendingFor(instanceId) }))).filter((item) => item.value || item.unavailable)
   const finish = (scope: string) => { clearSlotOperation(scope); if (mounted.current) updateOperations((value) => value + 1) }
-  const hasFreshWriteContext = (instanceId: string) => Boolean(mutateAccessMesh && controlAvailable[instanceId]
+  const hasWriteContext = (instanceId: string) => Boolean(mutateAccessMesh && controlAvailable[instanceId]
     && defaultsMatchContext(contexts.find((context) => context.instanceId === instanceId), reads[instanceId]?.defaults)
-    && instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected' && item.profile.metadata.scope.split(/\s+/).includes('terminal:execute')) && reads[instanceId]?.slots && !reads[instanceId]?.slotsError && !reads[instanceId]?.slotsPending && clock - (reads[instanceId]?.observedAt ?? 0) <= 30_000)
+    && instances.some((item) => item.profile.instanceId === instanceId && item.profile.metadata.scope.split(/\s+/).includes('terminal:execute'))
+    && reads[instanceId]?.slots)
   const supportsMutation = (instanceId: string, request: AccessMeshMutationRequest) => {
     const target = 'slot_id' in request ? reads[instanceId]?.slots?.find((slot) => slot.slotId === request.slot_id) : reads[instanceId]?.defaults
     return target?.managementContractVersion === 2 || request.action === 'delete' && !target && reads[instanceId]?.defaults?.managementContractVersion === 2
   }
-  const canMutate = (instanceId: string, slot?: AccessMeshSlotReadModel) => hasFreshWriteContext(instanceId) && !blocked(instanceId)
+  const canMutate = (instanceId: string, slot?: AccessMeshSlotReadModel) => hasWriteContext(instanceId) && !blocked(instanceId)
     && (slot ?? reads[instanceId]?.defaults)?.managementContractVersion === 2
-  const execute = async (instanceId: string, request: AccessMeshMutationRequest, recover = false): Promise<AccessMeshActionResult> => {
+  const readCurrent = async (instanceId: string, context: SlotScopeContext, isCurrent: () => boolean, requireSlots = true) => {
+    const [control, fresh] = await Promise.all([refreshControl(instanceId), refreshNative(instanceId)])
+    const instance = controlInputs.current.instances.find((item) => item.profile.instanceId === instanceId)
+    const observed = instance && control ? contextsFromTopology([instance], { [instanceId]: control }, { [instanceId]: true })[0] : undefined
+    if (!control) throw new Error('request_failed')
+    if (!isCurrent() || observed?.registryScope !== context.registryScope) throw new Error('slot_scope_changed')
+    if (!fresh || fresh.defaultsError || !fresh.defaults || requireSlots && (fresh.slotsError || !fresh.slots)) {
+      throw new Error(fresh?.defaultsError?.code ?? (requireSlots ? fresh?.slotsError?.code : undefined) ?? 'request_failed')
+    }
+    if (!defaultsMatchContext(context, fresh.defaults)) throw new Error('slot_scope_changed')
+    return { ...fresh, defaults: fresh.defaults, control }
+  }
+  const execute = async (instanceId: string, draft: AccessMeshMutationRequest, recover = false): Promise<AccessMeshActionResult> => {
     const scope = operationScope(instanceId)
     const context = contexts.find((item) => item.instanceId === instanceId)
-    if (!scope || !context || !mutateAccessMesh || lock.current || !hasFreshWriteContext(instanceId) || (!recover && blocked(instanceId)) || !instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected')) return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
-    const isCurrent = () => mounted.current && currentOperationScopes.current[instanceId] === scope
-    if (!supportsMutation(instanceId, request)) return { result: { ok: false, code: 'unsupported_management_contract', payload: {} }, confirmed: false }
-    if (request.action === 'policy' || request.action === 'defaults') {
-      const target = request.action === 'defaults' ? reads[instanceId]?.defaults : reads[instanceId]?.slots?.find((slot) => slot.slotId === request.slot_id)
-      if (!target?.inheritanceSupported || target.inheritance?.appliesTo !== 'next_window') return { result: { ok: false, code: 'unsupported_policy_semantics', payload: {} }, confirmed: false }
+    if (!scope || !context || !mutateAccessMesh || lock.current || !hasWriteContext(instanceId) || (!recover && blocked(instanceId))) {
+      setMessage('operation_in_progress')
+      return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
     }
-    lock.current = true; setBusy(request.action === 'create' ? 'create' : `${instanceId}:${request.action}`); setMessage('')
+    const isCurrent = () => mounted.current && currentOperationScopes.current[instanceId] === scope
+    const original = structuredClone(draft)
+    const originalSlot = 'slot_id' in original ? reads[instanceId]?.slots?.find((slot) => slot.slotId === original.slot_id) : undefined
+    const prepare = async (retry: boolean): Promise<AccessMeshMutationRequest> => {
+      const fresh = await readCurrent(instanceId, context, isCurrent)
+      if (fresh.defaults.managementContractVersion !== 2) throw new Error('unsupported_management_contract')
+      // An uncertain operation owns its immutable request and key. Preflight may
+      // verify its scope, but may not turn recovery into a different mutation.
+      if (recover) return original
+      const target = 'slot_id' in original ? fresh.slots?.find((slot) => slot.slotId === original.slot_id) : fresh.defaults
+      if (!target) throw new Error('slot_not_found')
+      if (target.managementContractVersion !== 2) throw new Error('unsupported_management_contract')
+      if ('issuerNodeId' in target && originalSlot && target.issuerNodeId !== originalSlot.issuerNodeId) throw new Error('slot_scope_changed')
+      if ((original.action === 'policy' || original.action === 'defaults') && (!target.inheritanceSupported || target.inheritance?.appliesTo !== 'next_window')) throw new Error('unsupported_policy_semantics')
+      if (original.action === 'deadline' && 'sessionLifecycle' in target && target.sessionLifecycle.startedAt !== originalSlot?.sessionLifecycle.startedAt) throw new Error('session_window_changed')
+      const request = { ...original, idempotency_key: retry ? newSlotOperationKey() : original.idempotency_key }
+      if ('expected_revision' in request) request.expected_revision = target.revision
+      if (request.action === 'policy' && request.inherit_policy) request.expected_parent_revision = fresh.defaults.revision
+      return request
+    }
+    lock.current = true; setBusy(original.action === 'create' ? 'create' : `${instanceId}:${original.action}`); setMessage('')
+    let dispatched = false
+    let accepted = false
     try {
       if (recover) {
         const current = loadSlotOperation(scope)
-        if (current?.backend !== 'access-mesh' || JSON.stringify(current.request) !== JSON.stringify(request)) throw new Error('slot_operation_unresolved')
-      } else beginSlotOperation(scope, { backend: 'access-mesh', request, startedAt: new Date().toISOString(), phase: 'pending' })
-      updateOperations((value) => value + 1)
-      const result = await mutateAccessMesh(instanceId, request)
+        if (current?.backend !== 'access-mesh' || JSON.stringify(current.request) !== JSON.stringify(original)) throw new Error('slot_operation_unresolved')
+      }
+      let request = await prepare(false)
+      let result: AccessMutationResult
+      for (let attempt = 0; ; attempt++) {
+        if (!isCurrent()) throw new Error('slot_scope_changed')
+        if (!recover) beginSlotOperation(scope, { backend: 'access-mesh', request, startedAt: new Date().toISOString(), phase: 'pending' })
+        updateOperations((value) => value + 1)
+        dispatched = true
+        try { result = await mutateAccessMesh(instanceId, request) }
+        catch (error) {
+          if (!recover && attempt === 0 && error instanceof ConsoleHttpError && error.status === 409 && isRevisionConflict(error.code)) {
+            finish(scope); dispatched = false
+            request = await prepare(true)
+            continue
+          }
+          throw error
+        }
+        if (!recover && attempt === 0 && !result.ok && definiteRejection(result) && isRevisionConflict(result.code)) {
+          finish(scope); dispatched = false
+          request = await prepare(true)
+          continue
+        }
+        break
+      }
       if (!result.ok) {
-        if (result.payload.outcome === 'not_committed' || result.code === 'identity_metadata_missing' || /revision_conflict|parent.*conflict|invalid_|_invalid|denied|forbidden|disabled|not_found|unsupported|auth_required/.test(result.code ?? '')) finish(scope)
+        if (definiteRejection(result)) finish(scope)
         if (isCurrent()) { await refreshNative(instanceId); if (isCurrent()) setMessage(safeCode(result.code ?? result.error)) }
         return { result, confirmed: false }
       }
       acceptSlotOperation(scope)
+      accepted = true
       if (!isCurrent()) return { result, confirmed: false }
       let receipt: ReturnType<typeof readNativeCodeReceipt> | undefined
       if (request.action === 'create' || request.action === 'rotate') {
@@ -290,7 +359,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
         if (!prior || prior.generation <= receipt.value.generation) saveAccessCode(receipt.slotId, receipt.value, window.localStorage, codeScope)
         updateCodes((value) => value + 1)
       }
-      const fresh = await refreshNative(instanceId)
+      const fresh = await readCurrent(instanceId, context, isCurrent)
       if (!isCurrent()) return { result, confirmed: false }
       const revision = typeof result.payload.revision === 'number' ? result.payload.revision : 0
       const freshSlot = fresh?.slots?.find((item) => item.slotId === (receipt?.slotId ?? ('slot_id' in request ? request.slot_id : '')) && (!receipt || item.issuerNodeId === receipt.issuerNodeId))
@@ -316,15 +385,19 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
         }
         setMessage(t('slots.managed.confirmed'))
       } else setMessage(t('slots.managed.confirmationPending'))
-      return { result, confirmed }
+      const saved = request.action === 'defaults' ? fresh.defaults : request.action === 'policy' ? freshSlot : undefined
+      return { result, confirmed, savedPolicy: confirmed && saved ? {
+        policy: saved.policy, revision: saved.revision,
+        ...('legacyAdmissionEnabled' in saved ? { legacyAdmissionEnabled: saved.legacyAdmissionEnabled } : {}),
+      } : undefined }
     } catch (error) {
-      if (error instanceof ConsoleHttpError && [400, 401, 403, 404, 405, 409, 422].includes(error.status)) {
+      if (dispatched && !accepted && error instanceof ConsoleHttpError && [400, 401, 403, 404, 405, 409, 422].includes(error.status)) {
         finish(scope)
         if (isCurrent()) { await refreshNative(instanceId); if (isCurrent()) setMessage(safeCode(error.code)) }
-      } else if (isCurrent()) setMessage(t(error instanceof Error && error.message === 'operation_journal_unavailable' ? 'slots.operation.storage' : 'slots.managed.uncertain'))
+      } else if (isCurrent()) setMessage(!dispatched ? slotReadFailure(error).code : t(error instanceof Error && error.message === 'operation_journal_unavailable' ? 'slots.operation.storage' : 'slots.managed.uncertain'))
       if (mounted.current) updateOperations((value) => value + 1)
       throw error
-    } finally { lock.current = false; setBusy('') }
+    } finally { lock.current = false; if (mounted.current) setBusy('') }
   }
   const copy = async (entry: Entry) => { const value = codeFor(entry); setMessage(value ? await writeClipboard(value.code) ? t('slots.accessCodeCopied') : t('slots.copyFailed') : t('slots.accessCodeUnavailable')) }
   const changeState = (entry: Entry, action: 'resume' | 'suspend') => void execute(entry.instanceId, { action, slot_id: entry.slot.slotId, expected_revision: entry.slot.revision, idempotency_key: newSlotOperationKey() }).catch(() => undefined)
@@ -360,62 +433,87 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       details.classList.toggle('slot-more-actions-up', safeBottom - rect.bottom < menu.getBoundingClientRect().height + 8 && rect.top > safeBottom - rect.bottom)
     })
   }
-  const refreshVisible = () => {
-    for (const id of relevantIds) void refreshNative(id)
-    for (const context of visibleContexts) for (const id of context.memberInstanceIds) void refreshControl(id)
+  const refreshVisible = async () => {
+    const controlIds = visibleContexts.length ? visibleContexts.flatMap((context) => context.memberInstanceIds)
+      : routeMeshId ? instances.map((item) => item.profile.instanceId) : []
+    const results = await Promise.all([
+      ...[...relevantIds].map(async (id) => {
+        const value = await refreshNative(id)
+        return value?.slotsError?.code ?? value?.defaultsError?.code
+      }),
+      ...controlIds.map(async (id) => await refreshControl(id) ? undefined : 'request_failed'),
+    ])
+    if (mounted.current && results.some(Boolean)) setMessage(results.find((code) => Boolean(code)) ?? 'request_failed')
   }
   const createdEntry = created ? allEntries.find((entry) => sameSlot(entry, created)) : undefined
   const createdCode = createdEntry ? codeFor(createdEntry) : null
   const selectedCode = selected ? codeFor(selected) : null
-  const createReady = Boolean(createRead?.slots && !createRead.slotsError && createRead.defaults && !createRead.defaultsError && !createRead.defaultsPending && canMutate(createInstanceId))
+  const createReady = canMutate(createInstanceId)
   const meshSettings = activeContext?.kind === 'mesh'
   const standaloneConfirmed = Boolean(controlAvailable[policyInstanceId] && activeContext?.kind === 'server'
     && defaults?.writeTarget === 'access_defaults' && defaults.inheritance?.source === 'standalone')
-  const defaultsWritable = Boolean(standaloneConfirmed && !reads[policyInstanceId]?.defaultsError && !reads[policyInstanceId]?.defaultsPending && canMutate(policyInstanceId))
+  const defaultsWritable = Boolean(standaloneConfirmed && canMutate(policyInstanceId))
   const allRead = relevantIds.size > 0 && [...relevantIds].every((id) => Boolean(reads[id]?.slots && !reads[id]?.slotsError))
 
-  const policyRead = reads[policyInstanceId]
   const meshPolicy = meshControl?.policy
   const meshSupported = Boolean(defaults?.meshPolicySupported && defaults.managementContractVersion === 2)
   const meshParent = defaults?.inheritance?.parent
-  const meshWritable = Boolean(meshSupported && mutateFleetControl && policyInstance?.runtime.authStatus === 'connected'
-    && policyInstance.profile.metadata.scope.split(/\s+/).includes('terminal:execute') && controlsConfirmed[policyInstanceId] && controlAvailable[policyInstanceId]
+  const meshWritable = Boolean(meshSupported && mutateFleetControl
+    && policyInstance?.profile.metadata.scope.split(/\s+/).includes('terminal:execute') && controlAvailable[policyInstanceId]
     && defaults?.writeTarget === 'fleet_control' && meshParent?.source === 'mesh' && meshParent.id === activeContext?.meshId
-    && meshParent.freshness === 'authoritative' && meshParent.revision === meshPolicy?.revision
-    && policyRead?.defaults && !policyRead.defaultsPending && !policyRead.defaultsError
-    && clock - (policyRead.defaultsObservedAt ?? 0) <= 30_000)
-  const saveMesh = async (request: MeshAccessPolicyRequest): Promise<MeshAccessPolicyOutcome> => {
-    if (!meshWritable || !mutateFleetControl || lock.current) return { confirmed: false }
+    && operationScope(policyInstanceId) && !blocked(policyInstanceId))
+  const saveMesh = async (draft: MeshAccessPolicyRequest): Promise<MeshAccessPolicyOutcome> => {
+    if (!meshWritable || !mutateFleetControl || !activeContext || lock.current) {
+      setMessage('operation_in_progress')
+      return { confirmed: false }
+    }
     const scope = operationScope(policyInstanceId)
-    const isCurrent = () => mounted.current && scope && currentOperationScopes.current[policyInstanceId] === scope
-    lock.current = true; setBusy('mesh:policy')
+    if (!scope) { setMessage('slot_scope_changed'); return { confirmed: false } }
+    const isCurrent = () => mounted.current && currentOperationScopes.current[policyInstanceId] === scope
+    const original = structuredClone(draft)
+    let dispatched = false
+    lock.current = true; setBusy('mesh:policy'); setMessage('')
     try {
-      const result = await mutateFleetControl(policyInstanceId, '/actions/fleet/control/policy', request)
-      if (!isCurrent()) return { confirmed: false }
-      const fresh = await refreshControl(policyInstanceId)
-      if (!isCurrent()) return { confirmed: false }
-      const freshPolicy = meshControlForContext(activeContext, { [policyInstanceId]: fresh })?.policy
-      const confirmed = meshPolicyMatches(freshPolicy, request)
-      if (!result.ok && !((result.code ?? result.error) === 'control_mutation_unconfirmed' && confirmed)) return { confirmed: false, conflict: /conflict/.test(result.code ?? result.error ?? '') }
-      void refreshNative(policyInstanceId)
-      return { confirmed, conflict: Boolean(freshPolicy && freshPolicy.revision > request.expected_revision && !confirmed) }
-    } catch (error) {
-      if (!isCurrent()) return { confirmed: false }
-      const fresh = await refreshControl(policyInstanceId)
-      if (!isCurrent()) return { confirmed: false }
-      if (error instanceof ConsoleHttpError && error.status === 409) return { confirmed: false, conflict: true }
-      // A lost receipt can be confirmed by a newer exact server read without resubmitting the mutation.
-      const freshPolicy = meshControlForContext(activeContext, { [policyInstanceId]: fresh })?.policy
-      if (meshPolicyMatches(freshPolicy, request)) {
-        void refreshNative(policyInstanceId)
-        return { confirmed: true }
+      for (let attempt = 0; ; attempt++) {
+        const current = await readCurrent(policyInstanceId, activeContext, isCurrent, false)
+        const parent = current.defaults.inheritance?.parent
+        if (!current.defaults.meshPolicySupported || current.defaults.managementContractVersion !== 2
+          || parent?.freshness !== 'authoritative' || !Number.isSafeInteger(parent.revision) || Number(parent.revision) < 1) throw new Error('policy_authority_unavailable')
+        // The registry parent carries the authority's current CAS revision even
+        // when this member's local control projection has not caught up yet.
+        const request = { ...original, expected_revision: Number(parent.revision) }
+        let result: ManagedFleetMutationResult | undefined
+        let failure: unknown
+        dispatched = true
+        try { result = await mutateFleetControl(policyInstanceId, '/actions/fleet/control/policy', request) }
+        catch (error) { failure = error }
+        const conflict = failure instanceof ConsoleHttpError && failure.status === 409 && isRevisionConflict(failure.code)
+          || Boolean(result && !result.ok && /^(?:access_)?policy_revision_conflict$/.test(result.code ?? ''))
+        if (conflict && attempt === 0) { dispatched = false; continue }
+        if (!isCurrent()) return { confirmed: false }
+        if (conflict) { setMessage(t('slots.managed.conflict')); return { confirmed: false, conflict: true } }
+        const rejected = failure instanceof ConsoleHttpError && [400, 401, 403, 404, 405, 409, 422].includes(failure.status)
+          || result && !result.ok && (result.code ?? result.error) !== 'control_mutation_unconfirmed'
+        if (rejected) {
+          setMessage(safeCode(failure instanceof ConsoleHttpError ? failure.code : result?.code ?? result?.error))
+          return { confirmed: false }
+        }
+        // Unknown outcomes are read back once, never automatically resubmitted.
+        // Equal revision is valid when the authority accepted an unchanged policy.
+        const fresh = await readCurrent(policyInstanceId, activeContext, isCurrent, false)
+        const freshPolicy = meshControlForContext(activeContext, { [policyInstanceId]: fresh.control })?.policy
+        const confirmed = meshPolicyMatches(freshPolicy, request)
+        setMessage(t(confirmed ? 'slots.managed.confirmed' : failure || !result?.ok ? 'slots.managed.uncertain' : 'slots.managed.confirmationPending'))
+        return { confirmed, savedPolicy: confirmed ? freshPolicy : undefined }
       }
-      throw error
-    } finally { lock.current = false; setBusy('') }
+    } catch (error) {
+      if (isCurrent()) setMessage(dispatched ? t('slots.managed.uncertain') : slotReadFailure(error).code)
+      return { confirmed: false }
+    } finally { lock.current = false; if (mounted.current) setBusy('') }
   }
   const operationFeedback = <>
-    {visibleContexts.filter((context) => !context.registryScope || !context.available).map((context) => <FeedbackState key={'scope:' + context.key} variant="partial" title={context.label} detail={`${t('slots.policyScopeUnknown')}${controlErrors[context.instanceId] ? ` · ${controlErrors[context.instanceId]}` : ''}`} />)}
-    {routeMeshId && !routeContext ? <FeedbackState variant="partial" title={t('slots.policyScopeUnknown')} /> : null}
+    {visibleContexts.filter((context) => !context.registryScope).map((context) => <div className="attention-strip" role="status" key={'scope:' + context.key}><span>{context.label} · {t('slots.policyScopeUnknown')}{controlErrors[context.instanceId] ? ` · ${controlErrors[context.instanceId]}` : ''}</span><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh') + ' — ' + context.label} disabled={Boolean(busy)} onClick={() => void refreshControl(context.instanceId)} /></div>)}
+    {routeMeshId && !routeContext ? <div className="attention-strip" role="status"><span>{t('slots.policyScopeUnknown')}</span><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh')} disabled={Boolean(busy)} onClick={() => void refreshVisible()} /></div> : null}
     {[...relevantIds].filter((id) => reads[id]?.defaults && reads[id].defaults.managementContractVersion !== 2
       || reads[id]?.slots?.some((slot) => slot.managementContractVersion !== 2)).map((id) =>
       <FeedbackState key={'contract:' + id} variant="partial" title={visibleContexts.find((context) => context.instanceId === id)?.label ?? id} detail={t('slots.native.managementUpgradeRequired')} />)}
@@ -425,10 +523,10 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       if (!context?.available) return null
       const label = context.label
       if (!read || (!read.slots && read.slotsPending)) return <p role="status" className="muted" key={item.profile.instanceId}>{label} · {t('slots.native.loading')}</p>
-      const failures = [read.slotsError, read.defaultsError].filter((error, index, values) => error && values.findIndex((value) => value?.kind === error.kind && value?.code === error.code) === index)
+      const failures = [read.slots ? undefined : read.slotsError, read.defaults ? undefined : read.defaultsError].filter((error, index, values) => error && values.findIndex((value) => value?.kind === error.kind && value?.code === error.code) === index)
       return failures.map((error) => error ? <div className="attention-strip" role="status" key={item.profile.instanceId + ':' + error.kind + ':' + error.code}><strong>{label}</strong><span>{t(error.kind === 'unsupported' ? 'slots.native.unsupported' : error.kind === 'disabled' ? 'slots.disabled' : error.kind === 'denied' ? 'slots.native.denied' : 'slots.native.failed')} · {error.code}</span><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh') + ' — ' + label} disabled={Boolean(busy)} onClick={() => void refreshNative(item.profile.instanceId)} /></div> : null)
     })}</div>}
-    {pending.map((item) => <div className="attention-strip slot-operation-recovery" role="status" key={item.instanceId}><strong>{item.name}</strong><p>{t(item.unavailable ? 'slots.operation.storage' : 'slots.operation.pending')}</p>{item.value?.backend === 'access-mesh' ? <IconButton icon="retry" variant="secondary" label={t('slots.operation.recover')} disabled={Boolean(busy) || !hasFreshWriteContext(item.instanceId) || !supportsMutation(item.instanceId, item.value.request)} onClick={() => { const operation = item.value; if (operation?.backend === 'access-mesh') void execute(item.instanceId, operation.request, true).catch(() => undefined) }} /> : null}</div>)}
+    {pending.map((item) => <div className="attention-strip slot-operation-recovery" role="status" key={item.instanceId}><strong>{item.name}</strong><p>{t(item.unavailable ? 'slots.operation.storage' : 'slots.operation.pending')}</p>{item.value?.backend === 'access-mesh' ? <IconButton icon="retry" variant="secondary" label={t('slots.operation.recover')} disabled={Boolean(busy) || !hasWriteContext(item.instanceId) || !supportsMutation(item.instanceId, item.value.request)} onClick={() => { const operation = item.value; if (operation?.backend === 'access-mesh') void execute(item.instanceId, operation.request, true).catch(() => undefined) }} /> : null}</div>)}
     {message ? <div className={'transient-toast' + (toastLeaving ? ' transient-toast-exit' : '')} role="status" aria-live="polite" onPointerDown={(event) => { toastStartX.current = event.clientX }} onPointerUp={(event) => { if (toastStartX.current !== null && Math.abs(event.clientX - toastStartX.current) >= 48) setMessage(''); toastStartX.current = null }} onPointerCancel={() => { toastStartX.current = null }}><span>{message}</span></div> : null}
     {confirmation ? <ConfirmationDialog title={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessCode' : 'slots.delete')} subject={confirmation.publicName} detail={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessConfirm' : 'slots.deleteConfirm')} cancelLabel={t('slots.confirmCancel')} confirmLabel={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessCode' : 'slots.delete')} confirmIcon={confirmation.kind === 'rotate' ? 'rotate' : 'delete'} confirmVariant={confirmation.kind === 'rotate' ? 'primary' : 'destructive'} onCancel={() => setConfirmation(null)} onConfirm={confirm} /> : null}
   </>
@@ -476,13 +574,10 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     {globalMode && !routeSlotId ? <div className="slots-global-filter surface-section"><label className="ui-field"><span>{t('slots.filter')}</span><select value={filter || 'all'} onChange={(event) => setFilterKey(event.target.value)}><option value="all">{t('slots.all')}</option>{selectableContexts.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><IconButton icon="retry" variant="quiet" label={t('slots.native.refreshList')} disabled={Boolean(busy)} onClick={refreshVisible} /></div> : null}
     {operationFeedback}
     {!routeSlotId && activeContext ? <article className="surface-section policy-controls">
-      {globalMode ? <h3>{activeContext.label}</h3> : null}
-      {meshSettings ? meshPolicy && meshSupported ? <MeshAccessPolicyControls key={operationScope(policyInstanceId)} policy={meshPolicy} authorityName={meshAuthorityName} canMutate={meshWritable} externalBusy={Boolean(busy)} save={saveMesh} refresh={() => { if (policyInstanceId) { void refreshControl(policyInstanceId); void refreshNative(policyInstanceId) } }} /> : <FeedbackState variant="partial" title={t('slots.native.meshPolicyUnsupported')} /> : defaults ? <AccessMeshDefaultsControls key={operationScope(policyInstanceId)} defaults={defaults} canMutate={defaultsWritable} externalBusy={Boolean(busy)} execute={(request) => execute(policyInstanceId, request)} refresh={() => void refreshNative(policyInstanceId)} /> : null}
-      {policyInstance && policyInstance.runtime.status !== 'live' ? <p className="muted">{t('slots.cachedReadOnly')}</p> : null}
+      {meshSettings ? meshPolicy && meshSupported ? <MeshAccessPolicyControls key={operationScope(policyInstanceId)} policy={meshPolicy} canMutate={meshWritable} externalBusy={Boolean(busy)} save={saveMesh} notify={setMessage} refresh={() => void refreshVisible()} /> : <FeedbackState variant="partial" title={t('slots.native.meshPolicyUnsupported')} /> : defaults ? <AccessMeshDefaultsControls key={operationScope(policyInstanceId)} defaults={defaults} canMutate={defaultsWritable} externalBusy={Boolean(busy)} execute={(request) => execute(policyInstanceId, request)} notify={setMessage} refresh={() => void refreshVisible()} /> : null}
     </article> : null}
-    {!routeSlotId && activeContext && createRead?.defaults && !createRead.defaultsError ? <form className="slot-create surface-section" onSubmit={(event) => { event.preventDefault(); if (createReady) void execute(createInstanceId, { action: 'create', mode: 'persistent', idempotency_key: newSlotOperationKey() }).catch(() => undefined) }}><h3>{t('slots.createSection')}</h3><div className="slot-create-row">
-      <p className="muted">{activeContext.label}</p>
-      <p className="muted">{t('slots.native.assignedName')}</p><IconButton type="submit" icon="create" variant="primary" label={t('slots.create')} busy={busy === 'create'} disabled={!createReady || Boolean(busy)} />
+    {!routeSlotId && activeContext && createRead?.defaults ? <form className="slot-create surface-section" onSubmit={(event) => { event.preventDefault(); if (createReady) void execute(createInstanceId, { action: 'create', mode: 'persistent', idempotency_key: newSlotOperationKey() }).catch(() => undefined) }}><div className="slot-create-row">
+      <IconButton type="submit" icon="create" variant="primary" label={t('slots.create')} busy={busy === 'create'} disabled={!createReady || Boolean(busy)} />
     </div>{createdEntry && createdCode && createdEntry.instanceId === createInstanceId ? <div className="slot-access-code created-access-row" role="status"><span>{createdEntry.slot.publicName}</span><span className="access-code-copy"><code>{createdCode.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + createdEntry.slot.publicName} onClick={() => void copy(createdEntry)} /></span><p className="muted">{createdCode.expiresAt ? t('slots.native.codeExpiry') + ' ' + createdCode.expiresAt : t('slots.native.codeExpiryUnknown')}</p></div> : null}</form> : null}
     {routeSlotId && !selected ? <FeedbackState variant="partial" title={t('slots.detailsUnavailable')} detail={t('slots.detailsUnavailableHint')} /> : null}
     {selected ? <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{selected.slot.publicName}</h3></div><span className={'status server-status slot-session-badge slot-session-' + selected.slot.sessionLifecycle.state}>{t(stateKeys[selected.slot.managementContractVersion === 2 ? selected.slot.sessionLifecycle.state : 'unknown'] ?? 'slots.state.unknown')}</span></div>
@@ -490,8 +585,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       {selectedCode ? <p className="muted">{selectedCode.expiresAt ? t('slots.native.codeExpiry') + ' ' + selectedCode.expiresAt : t('slots.native.codeExpiryUnknown')}{selected.slot.codeGeneration === undefined ? ` ${t('slots.native.codeValidationLimited')}` : ''}</p> : null}
       <details className="technical-details"><summary>{t('slots.technicalDetails')}</summary><dl className="slot-details-grid"><div><dt>{t('slots.native.slotId')}</dt><dd><code>{selected.slot.slotId}</code></dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.slot.issuerNodeId}</dd></div><div><dt>{t('slots.rawState')}</dt><dd><code>{selected.slot.state}</code></dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slot.revision}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.slot.codeGeneration ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.slot.createdAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.slot.updatedAt ?? t('common.unavailable')}</dd></div></dl></details>
       <IconButtonRow className="server-actions"><IconButton icon="rotate" variant="secondary" label={t('slots.rotateAccessCode')} disabled={!canMutate(selected.instanceId, selected.slot) || Boolean(busy)} onClick={() => showConfirmation(selected, 'rotate')} /></IconButtonRow>
-      {selectedInstance?.runtime.authStatus !== 'connected' ? <p className="attention-strip">{t('slots.liveRequired')}</p> : null}
-      <AccessMeshSlotControls key={operationScope(selected.instanceId) + ':' + selected.slot.slotId} slot={selected.slot} canMutate={canMutate(selected.instanceId, selected.slot)} externalBusy={Boolean(busy)} execute={(request) => execute(selected.instanceId, request)} refresh={() => void refreshNative(selected.instanceId)} />
+      <AccessMeshSlotControls key={operationScope(selected.instanceId) + ':' + selected.slot.slotId} slot={selected.slot} canMutate={canMutate(selected.instanceId, selected.slot)} externalBusy={Boolean(busy)} execute={(request) => execute(selected.instanceId, request)} notify={setMessage} refresh={() => void refreshVisible()} />
     </article> : null}
     {!routeSlotId ? <div className="slot-grid">{entries.map((entry) => {
       const value = codeFor(entry), timing = timer(entry, clock, locale)

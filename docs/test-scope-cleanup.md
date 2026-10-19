@@ -363,3 +363,21 @@ asserted a retired mode rather than the current admission switch.
 - Existing rotated-code and subscriber fixtures use session-owned identity. The
   native message admission checks are unchanged and verify the repaired lookup of
   session identity through a number claim's immutable slot reference.
+
+## Console slot editor stability (2026-10-19)
+
+The common slot editor reads policy on entry and on explicit operator actions.
+Background slot polling does not clear, disable, or replace the policy draft.
+
+| Retired expectation | Current obligation and existing owner |
+| --- | --- |
+| A server workspace has no Slots navigation button. | `AppShell.test.tsx` sends its Slots button to the common `/slots` selector. |
+| A failed refresh or an expired observation disables all mutations and displays a transient inline freshness warning. | `ServerSlots.test.tsx` retains known rows, the form and available actions. The action itself reads current metadata; `accessMeshState.test.ts` and `accessMeshReadIsolation.test.tsx` keep policy reads independent from connection churn and slot polling. |
+| A newer backing revision invalidates an edited form and requires discarding its draft. | `ServerSlots.test.tsx` and `MeshSlotPolicyTransitions.test.tsx` send the complete captured draft with action-time CAS. A definite revision conflict permits one retry; uncertain requests are not blindly replayed. |
+| A changed parent revision invalidates an already opened inheritance confirmation. | `SlotWindowAuthority.test.tsx` preserves the reset intent. `ServerSlots.test.tsx` binds the actual mutation to fresh slot and native-defaults revisions. |
+
+`SlotAuthorityTransition.qa.test.tsx` retains actual pairing/registry fences and
+immutable persisted recovery. Its fixtures trigger a registry change through an
+explicit control read, since replacing a loader callback no longer implies that
+the server has changed its registry. These are isolated component consumers with
+injected transports; no full or integration test workflow is added.

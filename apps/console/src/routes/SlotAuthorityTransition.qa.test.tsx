@@ -58,7 +58,7 @@ test('repeated create clicks in one render send a single keyed operation', async
   fireEvent.click(create)
   fireEvent.click(create)
 
-  expect(mutate).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
   expect(mutate.mock.calls[0][1]).toMatchObject({ action: 'create', idempotency_key: expect.any(String) })
 })
 
@@ -67,12 +67,13 @@ test.each(['pairing', 'registry'])('a late response cannot restore rows after a 
   let oldReply: (slots: AccessMeshSlotReadModel[]) => void = () => undefined
   const loadSlots = vi.fn<(id: string) => Promise<AccessMeshSlotReadModel[]>>()
     .mockImplementationOnce(() => new Promise((resolve) => { oldReply = resolve }))
-    .mockResolvedValueOnce([nativeSlot('beta')])
+    .mockResolvedValue([nativeSlot('beta')])
   const mutate = vi.fn(async () => ({ ok: false, payload: {} }))
   const view = render(<Screen instances={[original]} loadSlots={loadSlots} mutate={mutate} />)
   await waitFor(() => expect(loadSlots).toHaveBeenCalledTimes(1))
   const replacement: FleetInstanceView = change === 'pairing' ? { ...original, profile: { ...original.profile, origin: 'https://replacement.example', credentialRef: 'new-credential' } } : original
   view.rerender(<Screen instances={[replacement]} loadSlots={loadSlots} mutate={mutate} control={change === 'registry' ? sharedControl : loadControl} defaults={change === 'registry' ? sharedDefaults : loadDefaults} />)
+  if (change === 'registry') fireEvent.click(screen.getByRole('button', { name: 'Refresh slots' }))
   expect(await screen.findByRole('link', { name: 'Beta' })).toBeInTheDocument()
   await act(async () => { oldReply([nativeSlot()]) })
   expect(screen.getByRole('link', { name: 'Beta' })).toBeInTheDocument()
@@ -156,11 +157,9 @@ test('a delete receipt from the prior registry cannot confirm against the new re
   await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
   loadSlots.mockResolvedValue([])
   view.rerender(<Screen instances={[instance]} loadSlots={loadSlots} mutate={mutate} control={sharedControl} defaults={sharedDefaults} />)
-  await waitFor(() => expect(loadSlots).toHaveBeenCalledTimes(2))
-
   await act(async () => { finishDelete({ ok: true, payload: { revision: 8 } }) })
 
   expect(loadSlotOperation(scope)?.phase).toBe('accepted')
   expect(mutate).toHaveBeenCalledTimes(1)
-  expect(screen.queryByText('Confirmed by server')).not.toBeInTheDocument()
+  expect(screen.queryByText('Server values confirmed.')).not.toBeInTheDocument()
 })

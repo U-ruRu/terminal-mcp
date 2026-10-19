@@ -46,7 +46,7 @@ test('removing a slot prevents a previously started read from restoring it', asy
   expect(result.current.states.alpha?.slots).toEqual([])
 })
 
-test('adding an unrelated target preserves the existing read and its pending defaults', async () => {
+test.each(['unrelated target', 'transient connection status'] as const)('%s preserves the existing read and its pending defaults', async (change) => {
   const alpha = { instance: fleetInstance(), registryScope: 'mesh:production', available: true }
   const beta = { instance: fleetInstance('beta'), registryScope: 'server:beta', available: true }
   let finishDefaults: (defaults: AccessMeshDefaultsReadModel) => void = () => undefined
@@ -58,9 +58,14 @@ test('adding an unrelated target preserves the existing read and its pending def
   })
   await waitFor(() => expect(result.current.states.alpha?.slots).toEqual([slot]))
 
-  rerender({ targets: [alpha, beta] })
+  if (change === 'unrelated target') {
+    rerender({ targets: [alpha, beta] })
+    await waitFor(() => expect(result.current.states.beta?.slots).toEqual([]))
+  } else {
+    rerender({ targets: [{ ...alpha, available: false, instance: { ...alpha.instance, runtime: { ...alpha.instance.runtime, authStatus: 'restoring' } } }] })
+    rerender({ targets: [alpha] })
+  }
 
-  await waitFor(() => expect(result.current.states.beta?.slots).toEqual([]))
   expect(result.current.states.alpha?.slots).toEqual([slot])
   expect(loadSlots.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(1)
   expect(loadDefaults.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(1)

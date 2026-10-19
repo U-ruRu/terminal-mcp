@@ -11,16 +11,16 @@ function renderShell(path: string, shellServers: FleetServerReadModel[] = server
   return render(<I18nProvider><MemoryRouter initialEntries={[path]}><AppShell servers={shellServers}><div>Page body</div></AppShell></MemoryRouter></I18nProvider>)
 }
 
-test('server navigation binds Tasks and keeps slot selection in the global navigation', () => {
+test('server navigation binds Tasks and sends Slots to the shared owner selector', () => {
   renderShell('/servers/server-a/tasks', fixtureFleetModel.servers)
 
   const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
   const tasks = within(bottom).getByRole('link', { name: /Tasks/ })
   expect(tasks).toHaveAttribute('href', '/servers/server-a/tasks')
   expect(tasks).toHaveAttribute('aria-current', 'page')
-  expect(within(bottom).queryByRole('link', { name: /Slots/ })).not.toBeInTheDocument()
+  expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   const serverNavigation = document.querySelector('.navigation-context-group') as HTMLElement
-  expect(within(serverNavigation).queryByRole('link', { name: /Slots/ })).not.toBeInTheDocument()
+  expect(within(serverNavigation).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
 })
 
 test.each([
