@@ -8,6 +8,8 @@ READ_ONLY_ACTIONS = frozenset(
         "getTerminalHealth",
         "getConsoleSnapshot",
         "getManagedFleetControl",
+        "getNodeRuntime",
+        "getNodeRuntimeOperation",
         "listAccessMeshSlots",
         "getAccessMeshSlot",
         "getAccessMeshDefaults",

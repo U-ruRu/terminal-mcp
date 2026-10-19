@@ -150,6 +150,7 @@ COMPONENT_MODULES = frozenset(
         "test_deployment_retention.py",
         "test_deployment_clean.py",
         "test_deployment_windows.py",
+        "test_deployment_runtime_control.py",
         "test_execution_ipc.py",
         "test_execution_port.py",
         "test_execution_topology.py",

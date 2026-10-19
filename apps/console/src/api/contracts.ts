@@ -1,4 +1,6 @@
 import type {
+  NodeRuntimeOperation,
+  NodeRuntimeStatus,
   ActivityEventReadModel,
   ActivityFeedReadModel,
   ActivityMessageReadModel,
@@ -17,6 +19,42 @@ import type {
   TaskReadModel,
   WebSocketTicketReadModel,
 } from './models'
+
+export function decodeRuntimeOperation(value: unknown): NodeRuntimeOperation {
+  const item = record(value, '$.operation')
+  if (!['terminal', 'tunnel'].includes(String(item.target))) throw new ConsoleContractError('$.operation.target', 'invalid maintenance target')
+  if (!['pending', 'running', 'succeeded', 'failed', 'unknown'].includes(String(item.status))) throw new ConsoleContractError('$.operation.status', 'invalid maintenance state')
+  return {
+    request_id: string(item.request_id, '$.operation.request_id'),
+    target: item.target as NodeRuntimeOperation['target'],
+    status: item.status as NodeRuntimeOperation['status'],
+    created_at: number(item.created_at, '$.operation.created_at'),
+    expires_at: number(item.expires_at, '$.operation.expires_at'),
+    error: item.error == null ? null : string(item.error, '$.operation.error'),
+  }
+}
+
+export function decodeNodeRuntime(value: unknown): NodeRuntimeStatus {
+  const item = record(value, '$')
+  if (item.ok !== true) throw new ConsoleContractError('$.ok', 'runtime read failed')
+  const services = record(item.services, '$.services')
+  const decoded: NodeRuntimeStatus['services'] = {}
+  for (const target of ['terminal', 'tunnel'] as const) {
+    if (services[target] === undefined) continue
+    const service = record(services[target], '$.services.' + target)
+    if (!['running', 'stopped', 'transitioning', 'missing'].includes(String(service.state))) throw new ConsoleContractError('$.services.' + target + '.state', 'invalid service state')
+    decoded[target] = { state: service.state as NonNullable<typeof decoded.terminal>['state'], pid: service.pid === null ? null : integer(service.pid, '$.services.' + target + '.pid') }
+  }
+  const targets = array(item.restart_targets, '$.restart_targets')
+  if (targets.some((target) => target !== 'terminal' && target !== 'tunnel')) throw new ConsoleContractError('$.restart_targets', 'invalid maintenance target')
+  return {
+    supported: boolean(item.supported, '$.supported'),
+    platform: string(item.platform, '$.platform'),
+    services: decoded,
+    restart_targets: targets as NodeRuntimeStatus['restart_targets'],
+    operation: item.operation === null ? null : decodeRuntimeOperation(item.operation),
+  }
+}
 
 export class ConsoleContractError extends Error {
   constructor(readonly path: string, message: string) {

@@ -5,6 +5,8 @@ import {
   decodeAgents,
   decodeContexts,
   decodeManagedFleetControl,
+  decodeNodeRuntime,
+  decodeRuntimeOperation,
   decodeSnapshot,
   decodeTaskDetail,
   decodeTasks,
@@ -23,6 +25,7 @@ import type {
   ManagedFleetMutationResult,
   MeshVpnResult,
   MeshVpnStatus,
+  NodeRuntimeTarget,
   AccessMutationResult,
   TaskCollectionReadModel,
   TaskReadModel,
@@ -212,6 +215,26 @@ export class ConsoleClient {
       throw new ConsoleOperationError(publicErrorCode(raw))
     }
     return decodeManagedFleetControl(raw)
+  }
+
+  async nodeRuntime() {
+    return decodeNodeRuntime(await this.request('/actions/fleet/control/runtime'))
+  }
+
+  async nodeRuntimeOperation(requestId: string) {
+    const raw = await this.request('/actions/fleet/control/runtime/operations/' + encodeURIComponent(requestId))
+    const operation = decodeRuntimeOperation((raw as Record<string, unknown>).operation)
+    if (operation.request_id !== requestId) throw new ConsoleContractError('$.operation.request_id', 'receipt belongs to another request')
+    return operation
+  }
+
+  async restartNodeRuntime(target: NodeRuntimeTarget, requestId: string) {
+    const raw = await this.request('/actions/fleet/control/runtime/restart', {
+      method: 'POST', body: JSON.stringify({ target, request_id: requestId }),
+    })
+    const operation = decodeRuntimeOperation((raw as Record<string, unknown>).operation)
+    if (operation.request_id !== requestId || operation.target !== target) throw new ConsoleContractError('$.operation', 'receipt belongs to another request')
+    return operation
   }
 
   async fleetEnrollment(): Promise<ManagedFleetEnrollment> {

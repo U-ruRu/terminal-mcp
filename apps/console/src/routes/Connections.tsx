@@ -24,6 +24,7 @@ import { ConfirmationDialog, FeedbackState, IconButton, IconButtonRow } from '..
 import { returnToState } from '../navigation/context'
 import { meshSlotsRoute, meshRoute, serverRoute } from '../navigation/routes'
 import { MeshVpnPanel } from './MeshVpnPanel'
+import { NodeRuntimePanel } from './NodeRuntimePanel'
 
 
 
@@ -1131,6 +1132,9 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                       </div>
                       <p className="muted">{t('connections.device')}: {profile.metadata.deviceLabel}</p>
                       <ConnectionDataFacts server={servers.find((item) => item.instanceId === profile.instanceId)} control={observed} canConfigure={connectionIsLive} />
+                      <NodeRuntimePanel key={profile.instanceId + ':' + profile.metadata.deviceId}
+                        instanceId={profile.instanceId} deviceId={profile.metadata.deviceId}
+                        enabled={state?.status === 'connected'} canRestart={connectionIsLive} client={client} />
                       <div className="connection-fleet-status">
                         <span>
                           {t('connections.mesh')}: {membership.kind === 'mesh' && membership.meshId && !routeMeshId

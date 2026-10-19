@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import fcntl
 import json
 import os
 from pathlib import Path
+
+if os.name != "nt":
+    import fcntl
 
 from terminal_mcp.deployment._release_common import (
     ReleaseError,
@@ -39,7 +41,7 @@ def offline_driver(profile: Path) -> NodeDriver:
     return driver
 
 
-async def migrate_stores(profile: dict, backup: Path) -> dict:
+async def migrate_stores(profile: dict, backup: Path, *, settings=None) -> dict:
     # The process environment is supplied by the already-configured node; no .env
     # from the source checkout or packaging environment is inherited.
     from terminal_mcp.auth.identity_migration import (
@@ -53,7 +55,7 @@ async def migrate_stores(profile: dict, backup: Path) -> dict:
     # executor are already stopped and their entire persistent state snapshotted.
     from terminal_mcp.app import create_app
 
-    app = create_app()
+    app = create_app() if settings is None else create_app(settings)
 
     state = app.state
     await state.service.repo.initialize(preserve_active_commands=True)

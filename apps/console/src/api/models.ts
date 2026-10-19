@@ -313,6 +313,23 @@ export type MeshVpnOffer = {
   signature: string
 }
 
+export type NodeRuntimeTarget = 'terminal' | 'tunnel'
+export type NodeRuntimeOperation = {
+  request_id: string
+  target: NodeRuntimeTarget
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'unknown'
+  created_at: number
+  expires_at: number
+  error: string | null
+}
+export type NodeRuntimeStatus = {
+  supported: boolean
+  platform: string
+  restart_targets: NodeRuntimeTarget[]
+  services: Partial<Record<NodeRuntimeTarget, { state: 'running' | 'stopped' | 'transitioning' | 'missing'; pid: number | null }>>
+  operation: NodeRuntimeOperation | null
+}
+
 export type MeshVpnStatus = {
   ok: boolean
   node_id: string

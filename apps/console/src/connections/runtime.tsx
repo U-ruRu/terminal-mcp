@@ -30,7 +30,7 @@ type ConnectionRuntimeValue = {
   pair: (pairingLink: string, displayName?: string) => Promise<void>
   retry: (instanceId: string) => Promise<void>
   disconnect: (instanceId: string) => void
-  client: (instanceId: string) => Pick<ConsoleClient, 'fleetControl' | 'fleetControlMutation' | 'fleetEnrollment' | 'meshVpnStatus' | 'meshVpnMutation'> | null
+  client: (instanceId: string) => (Pick<ConsoleClient, 'fleetControl' | 'fleetControlMutation' | 'fleetEnrollment' | 'meshVpnStatus' | 'meshVpnMutation'> & Partial<Pick<ConsoleClient, 'nodeRuntime' | 'nodeRuntimeOperation' | 'restartNodeRuntime'>>) | null
 }
 
 const ConnectionRuntimeContext = createContext<ConnectionRuntimeValue | null>(null)
@@ -233,7 +233,7 @@ export function ConnectionRuntimeProvider({
   }, [])
 
   const client = useCallback(
-    (instanceId: string): Pick<ConsoleClient, 'fleetControl' | 'fleetControlMutation' | 'fleetEnrollment' | 'meshVpnStatus' | 'meshVpnMutation'> | null => {
+    (instanceId: string): ReturnType<ConnectionRuntimeValue['client']> => {
       const profile = profiles.find((item) => item.instanceId === instanceId)
       if (!profile || !registry.credential(instanceId)) return null
       return {
@@ -242,6 +242,9 @@ export function ConnectionRuntimeProvider({
         fleetEnrollment: () => authority.fleetEnrollment(instanceId),
         meshVpnStatus: () => authority.meshVpnStatus(instanceId),
         meshVpnMutation: (action, body) => authority.meshVpnMutation(instanceId, action, body ?? {}),
+        nodeRuntime: () => authority.nodeRuntime(instanceId),
+        nodeRuntimeOperation: (requestId) => authority.nodeRuntimeOperation(instanceId, requestId),
+        restartNodeRuntime: (target, requestId) => authority.restartNodeRuntime(instanceId, target, requestId),
       }
     },
     [authority, profiles, registry],

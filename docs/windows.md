@@ -47,10 +47,45 @@ ACL установки предоставляет FullControl SYSTEM и Administ
 ```
 
 Deployment lock сериализует операции. Update готовит релиз, останавливает службу,
-сохраняет согласованные SQLite backup вместе с config и identity sidecars, активирует
-релиз и проверяет HTTP health. Rollback переключает executable при совпадении текущих
+сохраняет согласованные SQLite backup всех настроенных хранилищ вместе с config,
+VPN-конфигурацией и identity sidecars. Затем выполняется offline migration с проверкой
+сохранности существующих строк и защищённых файлов. Activation подтверждается
+`/health/ready`, `ready=true` и ожидаемым release. Rollback переключает executable при совпадении текущих
 схем со снимком. Durable data и identity сохраняют текущее состояние. Uninstall
 снимает регистрацию службы; каталоги экземпляра сохраняются.
+
+Начало миграции фиксируется в `migration.started.json`, завершение — в
+`migration.completed.json` внутри backup. `service\release.json` хранит pending
+release. `-Action Resume` проверяет завершённую миграцию и продолжает activation.
+Ошибка после начала миграции требует forward recovery с сохранением текущих данных.
+
+## Console management
+
+Pairing использует штатную одноразовую ссылку `terminal-mcp link --name PC`.
+Console показывает узел в группе Standalone и управляет его локальными слотами и
+политикой через общий API. Параметры членства описаны в
+[Mesh contract](mesh-product-contract.md).
+
+Установщик регистрирует SYSTEM-задачу `TerminalMCP-Maintenance`. Она работает при
+питании от батареи и выполняет перезапуск отдельно от процесса API. ACL задачи и
+операционных файлов предоставляет доступ SYSTEM и Administrators.
+
+| API | Результат |
+| --- | --- |
+| `GET /actions/fleet/control/runtime` | Возможности, состояние служб, последняя операция |
+| `POST /actions/fleet/control/runtime/restart` | HTTP 202; `target=terminal\|tunnel`, `request_id` |
+| `GET /actions/fleet/control/runtime/operations/{request_id}` | Сохранённый результат операции |
+
+Каждый вызов требует действующего pairing; перезапуск дополнительно требует
+`terminal:execute`. `request_id` связывает повторное чтение с принятой операцией.
+Результат проходит состояния pending, running, succeeded, failed либо unknown.
+Console сохраняет ожидающий идентификатор на устройстве и восстанавливает наблюдение
+после разрыва связи. Deployment lock разделяется с установщиком.
+
+`terminal` соответствует службе TerminalMCP. `tunnel` соответствует штатной службе
+WireGuard, имя которой задаётся при установке: `-TunnelName tmcp-laptop`.
+Привязка хранится в `service\runtime.json`. Панель Console предлагает операции,
+объявленные узлом. Выполняемые команды могут завершиться при перезапуске TerminalMCP.
 
 ## Explicit clean installation
 

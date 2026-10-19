@@ -55,6 +55,11 @@ def secure_path(path: Path, *, include_current=True):
     )
 
 
+def secure_deployment_path(path: Path):
+    administrators = win32security.ConvertStringSidToSid("S-1-5-32-544")
+    secure_path(path, include_current=not win32security.CheckTokenMembership(None, administrators))
+
+
 def check_private_fd(fd: int):
     """Validate the descriptor of the same opened file whose bytes will be read."""
     descriptor = win32security.GetSecurityInfo(

@@ -164,7 +164,8 @@ def inventory(
     vpn = values.get("TERMINAL_MCP_MESH_VPN_STATE_DIR")
     if vpn:
         directories.append(Path(vpn))
-    files = [runtime_path, root / "CANONICAL_BASELINE.json", root / "service/release.json"]
+    files = [runtime_path, root / "CANONICAL_BASELINE.json", root / "service/release.json",
+             root / "service/runtime.json"]
     for key in _STORE_KEYS:
         value = values.get("TERMINAL_MCP_" + key)
         if value:

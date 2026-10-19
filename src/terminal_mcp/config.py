@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8080"
     console_public_base_url: str = "https://terminal-console.solvenger.app"
     console_allowed_origins: str = ""
+    windows_service_root: Path | None = None
+    windows_tunnel_name: str = ""
     env_file_path: Path = ENV_FILE
     database_path: Path = (
         PROGRAM_DATA / "data/terminal-mcp.sqlite3"

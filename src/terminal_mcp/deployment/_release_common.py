@@ -59,6 +59,8 @@ def safe_path(path: Path, *, owner: bool = False) -> Path:
 
 
 def sync_dir(path: Path) -> None:
+    if os.name == "nt":
+        return
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
@@ -72,10 +74,15 @@ def atomic(path: Path, data: bytes, *, mode: int = 0o600) -> None:
     fd, name = tempfile.mkstemp(prefix=".release-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
-            os.fchmod(stream.fileno(), mode)
+            if os.name != "nt":
+                os.fchmod(stream.fileno(), mode)
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        if os.name == "nt":
+            from terminal_mcp.platform_windows import secure_deployment_path
+
+            secure_deployment_path(Path(name))
         os.replace(name, path)
         sync_dir(path.parent)
     finally:

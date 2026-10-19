@@ -42,7 +42,10 @@ try {
     assert "diagnostic" in (tmp_path / "install.log").read_text(encoding="utf-16")
 
 
-def test_installer_health_uses_persisted_bind_address_and_port(tmp_path):
+@pytest.mark.parametrize("first_ready,first_release", [(False, "expected"), (True, "old")])
+def test_installer_health_uses_persisted_bind_address_and_port(
+    tmp_path, first_ready, first_release
+):
     script = Path(__file__).resolve().parents[2] / "deploy/windows/Manage-TerminalMCP.ps1"
     shell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     config = tmp_path / "config"
@@ -62,14 +65,28 @@ $function = $ast.Find({param($n) $n -is $functionType -and $n.Name -eq 'Wait-Hea
 Invoke-Expression $function.Extent.Text
 function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec) {
     $script:observed = $Uri
-    return @{ok=$true}
+    $script:calls += 1
+    if ($script:calls -eq 1) {
+        return @{ok=$true; ready=($env:TMCP_FIRST_READY -eq 'True');
+            release=$env:TMCP_FIRST_RELEASE}
+    }
+    return @{ok=$true; ready=$true; release='expected'}
 }
-Wait-Healthy
-if ($script:observed -ne 'http://10.77.17.2:18080/health/live') { exit 9 }
+function Start-Sleep([int]$Milliseconds) { }
+$script:calls = 0
+Wait-Healthy -ExpectedRelease 'expected'
+if ($script:calls -ne 2) { exit 10 }
+if ($script:observed -ne 'http://10.77.17.2:18080/health/ready') { exit 9 }
 """
     result = subprocess.run(
         [str(shell), "-NoProfile", "-NonInteractive", "-Command", command],
-        env={**os.environ, "TMCP_SCRIPT": str(script), "TMCP_ROOT": str(tmp_path)},
+        env={
+            **os.environ,
+            "TMCP_SCRIPT": str(script),
+            "TMCP_ROOT": str(tmp_path),
+            "TMCP_FIRST_READY": str(first_ready),
+            "TMCP_FIRST_RELEASE": first_release,
+        },
         capture_output=True,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )

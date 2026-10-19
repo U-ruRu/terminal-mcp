@@ -9,6 +9,13 @@ function jsonResponse(body: object, status = 200) {
   })
 }
 
+test('maintenance receipts cannot confirm another request', async () => {
+  const response = { ok: true, operation: { request_id: 'another-runtime-request', target: 'terminal',
+    status: 'succeeded', created_at: 1, expires_at: 181, error: null } }
+  const client = new ConsoleClient('https://terminal.example', () => 'token', vi.fn().mockResolvedValue(jsonResponse(response)))
+  await expect(client.nodeRuntimeOperation('requested-runtime-id')).rejects.toMatchObject({ path: '$.operation.request_id' })
+})
+
 const task = {
   namespace: 'console',
   task_id: 'M1-003',

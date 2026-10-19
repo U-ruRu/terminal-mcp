@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.http.fleet_control import build_fleet_control_router
+from terminal_mcp.http.runtime_control import build_runtime_router
 
 
 class PairingProbe:
@@ -53,11 +54,25 @@ class ControlProbe:
         return {"node_id": "node", "control_node_id": "next"}
 
 
+class RuntimeProbe:
+    def __init__(self):
+        self.calls = []
+
+    def snapshot(self):
+        return {"ok": True, "supported": True}
+
+    def submit(self, target, request_id):
+        self.calls.append((target, request_id))
+        return {"request_id": request_id, "target": target, "status": "pending"}
+
+
 def protected_app(mode):
     app = FastAPI()
     controller = ControlProbe()
     pairing = PairingProbe()
     app.include_router(build_fleet_control_router(controller, None))
+    app.state.runtime = RuntimeProbe()
+    app.include_router(build_runtime_router(None, control=app.state.runtime))
     app.add_middleware(
         AuthMiddleware,
         settings=SimpleNamespace(mode_for=lambda _: mode, public_base_url="https://node.test"),
@@ -119,3 +134,39 @@ async def test_paired_read_scope_cannot_issue_a_topology_credential():
     assert response.status_code == 401
     assert metadata.status_code == 200
     assert controller.calls == []
+
+
+@pytest.mark.parametrize("token", [None, "static-admin", "unpaired", "read-only", "paired"])
+@pytest.mark.parametrize("mode", ["none", "bearer", "oauth"])
+async def test_runtime_restart_requires_current_execute_pairing(mode, token):
+    app, _, pairing = protected_app(mode)
+    headers = {"Authorization": "Bearer " + token} if token else {}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://node.test"
+    ) as client:
+        response = await client.post(
+            "/actions/fleet/control/runtime/restart",
+            headers=headers,
+            json={"target": "terminal", "request_id": "runtime-pairing-request"},
+        )
+        pairing.active = False
+        revoked = await client.post(
+            "/actions/fleet/control/runtime/restart",
+            headers=headers,
+            json={"target": "terminal", "request_id": "runtime-pairing-revoked"},
+        )
+    assert response.status_code == (202 if token == "paired" else 401)
+    assert revoked.status_code == 401
+    assert len(app.state.runtime.calls) == (1 if token == "paired" else 0)
+
+
+@pytest.mark.parametrize("token,status", [("read-only", 200), ("unpaired", 401)])
+async def test_runtime_status_requires_pairing_and_read_scope(token, status):
+    app, _, _ = protected_app("oauth")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://node.test"
+    ) as client:
+        response = await client.get(
+            "/actions/fleet/control/runtime", headers={"Authorization": "Bearer " + token}
+        )
+    assert response.status_code == status

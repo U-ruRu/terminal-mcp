@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('Install','CleanInstall','Update','Rollback','Status','Uninstall')]
+    [Parameter(Mandatory)][ValidateSet('Install','CleanInstall','Update','Resume','Rollback','Status','Uninstall')]
     [string]$Action,
     [string]$Root = "$env:ProgramData\TerminalMCP",
     [string]$SourcePath = (Resolve-Path "$PSScriptRoot\..\.."),
@@ -9,6 +9,7 @@ param(
     [string]$WinSWSha256,
     [string]$ExpectedCommit,
     [string]$PublicUrl,
+    [string]$TunnelName,
     [string]$ListenHost = '127.0.0.1',
     [ValidateRange(1,65535)][int]$Port = 8080
 )
@@ -47,6 +48,7 @@ function Protect-Directory([string]$Path) {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Wait-Healthy {
+    param([string]$ExpectedRelease = '')
     foreach ($line in [IO.File]::ReadLines((Join-Path $Root 'config\terminal-mcp.env'))) {
         if ($line -match '^TERMINAL_MCP_HOST=(.*)$') {
             $ListenHost = $Matches[1].Trim().Trim('"').Trim("'")
@@ -60,8 +62,8 @@ function Wait-Healthy {
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         try {
-            $health = Invoke-RestMethod "http://${healthHost}:$Port/health/live" -TimeoutSec 3
-            if ($health.ok) { return }
+            $health = Invoke-RestMethod "http://${healthHost}:$Port/health/ready" -TimeoutSec 3
+            if ($health.ready -and (-not $ExpectedRelease -or $health.release -eq $ExpectedRelease)) { return }
         } catch { }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -83,22 +85,44 @@ Assert-Administrator
 if ($Action -eq 'Uninstall') {
     Invoke-Checked $wrapper @('stop')
     Invoke-Checked $wrapper @('uninstall')
+    Get-ScheduledTask -TaskName 'TerminalMCP-Maintenance' -ErrorAction SilentlyContinue |
+        Unregister-ScheduledTask -Confirm:$false
     return
 }
 # Hold one exclusive handle across staging, stop, backup and activation.
 Protect-Directory $Root
 $lock = [IO.File]::Open((Join-Path $Root 'deployment.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
 try {
+    if ($Action -eq 'Resume') {
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        if (-not $state.pendingPython -or -not $state.backup) { throw 'Pending update is required.' }
+        Invoke-Checked $state.pendingPython @('-m','terminal_mcp.deployment.windows',
+            'check-migration','--root',$Root,'--output',$state.backup)
+        Invoke-Checked $state.pendingPython @('-m','terminal_mcp.deployment.windows','render',
+            '--root',$Root,'--python',$state.pendingPython,'--output',$xmlPath)
+        Invoke-Checked $wrapper @('start')
+        $metaPath = Join-Path (Split-Path (Split-Path (Split-Path $state.pendingPython))) 'RELEASE_META.json'
+        $metadata = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+        Wait-Healthy -ExpectedRelease $metadata.release_id
+        Invoke-Checked $state.pendingPython @('-m','terminal_mcp.deployment.windows_runtime',
+            'configure','--root',$Root,'--python',$state.pendingPython)
+        @{ currentPython=$state.pendingPython; previousPython=$state.currentPython;
+            commit=$state.pendingCommit; backup=$state.backup; phase='applied' } |
+            ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+        return
+    }
     if ($Action -eq 'Rollback') {
         $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         if (-not $state.previousPython) { throw 'Previous release is required.' }
-        Invoke-Checked $wrapper @('stop')
         Invoke-Checked $state.currentPython @('-m','terminal_mcp.deployment.windows',
             'check-rollback','--root',$Root,'--output',$state.backup)
+        Invoke-Checked $wrapper @('stop')
         Invoke-Checked $state.previousPython @('-m','terminal_mcp.deployment.windows','render',
             '--root',$Root,'--python',$state.previousPython,'--output',$xmlPath)
         Invoke-Checked $wrapper @('start')
         Wait-Healthy
+        Invoke-Checked $state.previousPython @('-m','terminal_mcp.deployment.windows_runtime',
+            'configure','--root',$Root,'--python',$state.previousPython)
         $old = $state.currentPython
         $state.currentPython = $state.previousPython
         $state.previousPython = $old
@@ -161,7 +185,9 @@ try {
         Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','clean',
             '--root',$Root,'--public-url',$PublicUrl)
         if ($existing) {
+            Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','check-idle','--root',$Root)
             Invoke-Checked $wrapper @('stop')
+            Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','check-idle','--root',$Root)
             Invoke-Checked $wrapper @('uninstall')
         }
         Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','clean',
@@ -176,11 +202,25 @@ try {
     }
     $backup = $null
     $activated = $false
+    $migrationStarted = $false
     try {
+        $taskArguments = @('-m','terminal_mcp.deployment.windows_runtime','configure',
+            '--root',$Root,'--python',$runtime)
+        if ($PSBoundParameters.ContainsKey('TunnelName')) { $taskArguments += @('--tunnel-name',$TunnelName) }
+        Invoke-Checked $runtime $taskArguments
         if ($existing) {
             Invoke-Checked $wrapper @('stop')
             $backup = Join-Path $Root ('backups\' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
             Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','backup',
+                '--root',$Root,'--output',$backup)
+            @{ currentPython=$previousPython; previousPython=$null; commit=$oldState.commit;
+                pendingPython=$runtime; pendingCommit=$ExpectedCommit; backup=$backup;
+                phase='migrating' } | ConvertTo-Json |
+                Set-Content -LiteralPath $statePath -Encoding UTF8
+            $migrationStarted = $true
+            Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','migrate',
+                '--root',$Root,'--output',$backup)
+            Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','check-migration',
                 '--root',$Root,'--output',$backup)
         }
         Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','render',
@@ -188,8 +228,12 @@ try {
         if (-not $existing) { Invoke-Checked $wrapper @('install') }
         Invoke-Checked $wrapper @('start')
         $activated = $true
-        Wait-Healthy
+        $metadata = Get-Content -LiteralPath (Join-Path $release 'RELEASE_META.json') -Raw | ConvertFrom-Json
+        Wait-Healthy -ExpectedRelease $metadata.release_id
     } catch {
+        if ($migrationStarted) {
+            throw 'Update requires forward recovery. Inspect the migration receipt and use Resume after a completed migration.'
+        }
         if ($previousPython) {
             & $wrapper stop | Out-Null
             if ($activated) {
@@ -202,7 +246,7 @@ try {
         }
         throw
     }
-    @{ currentPython=$runtime; previousPython=$previousPython; backup=$backup; commit=$ExpectedCommit } |
+    @{ currentPython=$runtime; previousPython=$previousPython; backup=$backup; commit=$ExpectedCommit; phase='applied' } |
         ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     Get-Service TerminalMCP | Select-Object Name,Status,StartType
 } finally {

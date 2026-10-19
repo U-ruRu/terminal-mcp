@@ -7,7 +7,6 @@ is mandatory. The services are checked before and after stopping admission.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -21,6 +20,9 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+
+if os.name != "nt":
+    import fcntl
 
 from terminal_mcp.deployment._release_common import (
     SHA,
@@ -384,7 +386,7 @@ def snapshot(profile: dict, destination: Path, configs: list[Path]) -> dict:
             copy.close()
             db.close()
         target.chmod(0o600)
-        with target.open("rb") as stream:
+        with target.open("r+b" if os.name == "nt" else "rb") as stream:
             os.fsync(stream.fileno())
         manifest["stores"][name] = {"path": path, "backup": target.name, "sha256": sha256(target)}
     for index, source in enumerate(configs):

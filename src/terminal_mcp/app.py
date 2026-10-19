@@ -68,6 +68,7 @@ from terminal_mcp.http.mesh_vpn_control import build_mesh_vpn_control_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
+from terminal_mcp.http.runtime_control import build_runtime_router
 from terminal_mcp.mcp.access import build_access_mcp
 from terminal_mcp.mcp.event_diagnostics import MCPEventIngressProbe
 from terminal_mcp.mcp.event_server import MCPEventsAdapter
@@ -609,6 +610,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
     app.include_router(build_pairing_router(settings, auth, pairing_store))
+    app.include_router(build_runtime_router(settings))
     app.include_router(
         build_console_events_router(
             settings,

@@ -45,6 +45,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if mesh_control and (
             request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
             or path == "/actions/fleet/control/enrollment"
+            or path == "/actions/fleet/control/runtime"
+            or path.startswith("/actions/fleet/control/runtime/")
         ):
             return await self._paired_mesh_control(request, call_next)
         mode = self.s.mode_for(interface)
@@ -108,7 +110,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return self._deny("pairing_required", path)
         context_token = bind_admission_context(None)
         try:
-            claims = await self.auth.verify_access(token, ["terminal:read", "terminal:execute"])
+            scopes = ["terminal:read", "terminal:execute"]
+            if path.startswith("/actions/fleet/control/runtime") and request.method == "GET":
+                scopes = ["terminal:read"]
+            claims = await self.auth.verify_access(token, scopes)
             client_id = str(claims.get("sub") or "")
             device = (
                 await self.pairing_store.active_device_for_client(client_id) if client_id else None

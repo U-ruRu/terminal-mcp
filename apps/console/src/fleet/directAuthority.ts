@@ -26,6 +26,18 @@ export class BrowserDirectAuthorityClient {
     return this.withReadRetry(instanceId, (client) => client.fleetControl())
   }
 
+  nodeRuntime(instanceId: string) {
+    return this.withReadRetry(instanceId, (client) => client.nodeRuntime())
+  }
+
+  nodeRuntimeOperation(instanceId: string, requestId: string) {
+    return this.withReadRetry(instanceId, (client) => client.nodeRuntimeOperation(requestId))
+  }
+
+  restartNodeRuntime(instanceId: string, target: import('../api/models').NodeRuntimeTarget, requestId: string) {
+    return this.withClient(instanceId, (client) => client.restartNodeRuntime(target, requestId))
+  }
+
   meshVpnStatus(instanceId: string): Promise<MeshVpnStatus> {
     return this.withReadRetry(instanceId, (client) => client.meshVpnStatus())
   }

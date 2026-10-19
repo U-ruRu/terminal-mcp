@@ -10,6 +10,7 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from contextlib import closing
@@ -48,6 +49,7 @@ def service_xml(root: PureWindowsPath, python: PureWindowsPath) -> str:
     for name, value in fields.items():
         ET.SubElement(service, name).text = value
     ET.SubElement(service, "env", name="PYTHONUTF8", value="1")
+    ET.SubElement(service, "env", name="TERMINAL_MCP_WINDOWS_SERVICE_ROOT", value=str(root))
     ET.SubElement(
         service,
         "env",
@@ -129,32 +131,107 @@ def schema(path: Path):
 
 def snapshot(root: Path, destination: Path):
     """Run after SCM has stopped the service. Preserve identity sidecars and config."""
+    from terminal_mcp.config import Settings
+    from terminal_mcp.deployment.update import snapshot as snapshot_stores
     from terminal_mcp.platform_windows import secure_path
 
-    destination.mkdir(parents=True, exist_ok=False)
+    settings = Settings(_env_file=root / "config/terminal-mcp.env")
+    stores = configured_stores(settings)
+    configs = [
+        path for directory in (root / "config", root / "network") for path in directory.rglob("*")
+    ]
+    configs = [path for path in configs if path.is_file()]
+    for path in (
+        settings.runtime_config_path,
+        settings.oauth_username_file,
+        settings.oauth_password_file,
+        settings.auth_database_path.with_name(settings.auth_database_path.name + ".access-key"),
+        settings.auth_database_path.with_name(
+            settings.auth_database_path.name + ".identity-anchor"
+        ),
+        settings.database_path.parent / "node-identity.json",
+    ):
+        if path is not None and path.is_file() and path not in configs:
+            configs.append(path)
+    if (root / "service/runtime.json").is_file():
+        configs.append(root / "service/runtime.json")
+    snapshot_stores({"stores": stores}, destination, configs)
     secure_path(destination, include_current=False)
     shutil.copytree(root / "config", destination / "config")
-    data = destination / "data"
-    data.mkdir()
-    signatures = {}
-    for path in (root / "data").iterdir():
-        if path.name.endswith(("-wal", "-shm", "-journal")):
-            continue
-        if path.suffix == ".sqlite3":
-            with closing(sqlite3.connect(path)) as source:
-                with closing(sqlite3.connect(data / path.name)) as target:
-                    source.backup(target)
-                    if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                        raise RuntimeError("backup integrity check failed")
-            signatures[path.name] = schema(path)
-        elif path.is_file():
-            shutil.copy2(path, data / path.name)
+    signatures = {name: schema(Path(path)) for name, path in stores.items() if Path(path).exists()}
     (destination / "schemas.json").write_text(json.dumps(signatures), encoding="utf-8")
 
 
+def configured_stores(settings):
+    return {
+        "runtime": str(settings.database_path),
+        "auth": str(settings.auth_database_path),
+        "output": str(settings.output_cache_path),
+        "control": str(settings.effective_fleet_control_path()),
+        "node_meta": str(settings.effective_fleet_node_meta_path()),
+        "projection": str(settings.effective_fleet_projection_path()),
+    }
+
+
+def check_idle(root: Path):
+    from terminal_mcp.config import Settings
+    from terminal_mcp.deployment._release_common import readonly, require
+
+    path = Settings(_env_file=root / "config/terminal-mcp.env").database_path
+    with closing(readonly(path)) as database:
+        count = database.execute(
+            "SELECT COUNT(*) FROM commands WHERE status IS NULL OR status NOT IN "
+            "('completed','failed','cancelled')"
+        ).fetchone()[0]
+    require(count == 0, "active_commands_block_restart")
+
+
+async def migrate(root: Path, backup: Path):
+    from terminal_mcp.config import Settings
+    from terminal_mcp.deployment._release_common import atomic, encoded
+    from terminal_mcp.deployment.release import migrate_stores
+
+    if (backup / "migration.started.json").exists():
+        raise RuntimeError("migration already started; inspect the durable receipt")
+    settings = Settings(_env_file=root / "config/terminal-mcp.env")
+    atomic(backup / "migration.started.json", encoded({"python": sys.executable}))
+    versions = await migrate_stores(
+        {"stores": configured_stores(settings)}, backup, settings=settings
+    )
+    atomic(backup / "migration.completed.json", encoded({"versions": versions}))
+
+
+def check_migration(root: Path, backup: Path):
+    from terminal_mcp.config import Settings
+    from terminal_mcp.deployment._release_common import read_json, require, sha256
+    from terminal_mcp.deployment.migration_preservation import receipt_cipher
+    from terminal_mcp.deployment.update import preserved_rows
+
+    require((backup / "migration.completed.json").is_file(), "migration_receipt_required")
+    settings = Settings(_env_file=root / "config/terminal-mcp.env")
+    manifest = read_json(backup / "snapshot.json")
+    for name, item in manifest["stores"].items():
+        before = backup / item["backup"]
+        require(sha256(before) == item["sha256"], "backup_tampered")
+        if name != "output":
+            preserved_rows(
+                before,
+                Path(item["path"]),
+                cipher=receipt_cipher(settings.database_path) if name == "runtime" else None,
+            )
+    for path, item in manifest["configs"].items():
+        require(sha256(Path(path)) == item["sha256"], "protected_configuration_changed")
+
+
 def assert_rollback_compatible(root: Path, backup: Path):
+    from terminal_mcp.config import Settings
+
     expected = json.loads((backup / "schemas.json").read_text(encoding="utf-8"))
-    actual = {path.name: schema(path) for path in (root / "data").glob("*.sqlite3")}
+    if (backup / "snapshot.json").exists():
+        stores = configured_stores(Settings(_env_file=root / "config/terminal-mcp.env"))
+        actual = {name: schema(Path(path)) for name, path in stores.items() if Path(path).exists()}
+    else:
+        actual = {path.name: schema(path) for path in (root / "data").glob("*.sqlite3")}
     if expected != actual:
         raise RuntimeError("code rollback requires matching durable database schemas")
 
@@ -194,6 +271,9 @@ def main():
             "check-install",
             "render",
             "backup",
+            "migrate",
+            "check-migration",
+            "check-idle",
             "check-rollback",
             "probe",
         ),
@@ -219,7 +299,7 @@ def main():
             data=root / "data",
             cache=root / "cache",
             backups=root / "backups",
-            extra_directories=(root / "logs", root / "work"),
+            extra_directories=(root / "logs", root / "work", root / "control"),
         )
         state.validate(protected=(Path(__file__).absolute(),))
         if args.action == "check-install":
@@ -230,6 +310,12 @@ def main():
         args.output.write_text(service_xml(root, args.python), encoding="utf-8")
     elif args.action == "backup":
         snapshot(root, args.output)
+    elif args.action == "migrate":
+        asyncio.run(migrate(root, args.output))
+    elif args.action == "check-migration":
+        check_migration(root, args.output)
+    elif args.action == "check-idle":
+        check_idle(root)
     elif args.action == "check-rollback":
         assert_rollback_compatible(root, args.output)
     else:
