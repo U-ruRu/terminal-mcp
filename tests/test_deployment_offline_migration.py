@@ -85,3 +85,11 @@ async def test_offline_release_preserves_registration_and_application_rows(tmp_p
     assert state.access_mesh_replication._task is None
     projection = state.fleet_projection_service
     assert projection is None or projection._task is None
+    with sqlite3.connect(settings.effective_fleet_control_path()) as db:
+        db.execute("UPDATE fleet_members SET state='draining',updated_at=?", (started,))
+        original_members = db.execute("SELECT * FROM fleet_members").fetchall()
+    next_backup = tmp_path / "next-snapshot"
+    snapshot(profile, next_backup, [])
+    await migrate_stores(profile, next_backup)
+    with sqlite3.connect(settings.effective_fleet_control_path()) as db:
+        assert db.execute("SELECT * FROM fleet_members").fetchall() == original_members

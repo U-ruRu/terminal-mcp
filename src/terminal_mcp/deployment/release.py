@@ -82,7 +82,10 @@ async def migrate_stores(
     ):
         store = getattr(state, name, None)
         if store is not None:
-            await store.initialize()
+            if name == "fleet_control":
+                await store.initialize(preserve_member_state=True)
+            else:
+                await store.initialize()
     if fresh:
         initialize_fresh_identity(Path(stores["runtime"]), Path(stores["auth"]))
     # One-time conversion preserves existing identities, policy and deadlines.

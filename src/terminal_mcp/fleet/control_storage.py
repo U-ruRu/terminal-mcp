@@ -90,7 +90,7 @@ class FleetControlStore(TopologyTransitionStore):
         except SqliteMainFileError as exc:
             raise FleetControlError("fleet_control_invalid_header") from exc
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, preserve_member_state: bool = False) -> None:
         stamp = utc_text()
         async with self._connect("fleet_control_initialize") as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -411,11 +411,15 @@ class FleetControlStore(TopologyTransitionStore):
                     # The persisted control authority is runtime state. The env value is
                     # only a bootstrap default and must not overwrite an explicit rehome.
                     self.control_node_id = validate_protocol_id(str(meta[2]), "control_node_id")
+                member_conflict = (
+                    "DO NOTHING"
+                    if preserve_member_state
+                    else "DO UPDATE SET state='active',updated_at=excluded.updated_at"
+                )
                 await db.execute(
                     "INSERT INTO fleet_members(node_id,capabilities_json,state,updated_at) "
                     "VALUES(?, '[]','active',?) "
-                    "ON CONFLICT(node_id) DO UPDATE SET "
-                    "state='active',updated_at=excluded.updated_at",
+                    "ON CONFLICT(node_id) " + member_conflict,
                     (self.node_id, stamp),
                 )
                 await db.commit()
@@ -511,9 +515,16 @@ class FleetControlStore(TopologyTransitionStore):
                         "rearm_enabled=excluded.rearm_enabled,"
                         "legacy_admission_enabled=excluded.legacy_admission_enabled,"
                         "revision=excluded.revision,updated_at=excluded.updated_at",
-                        (duration, warning, alert, rearm,
-                         int(policy.get("rearm_enabled", True)),
-                         int(policy.get("legacy_admission_enabled", False)), revision, stamp),
+                        (
+                            duration,
+                            warning,
+                            alert,
+                            rearm,
+                            int(policy.get("rearm_enabled", True)),
+                            int(policy.get("legacy_admission_enabled", False)),
+                            revision,
+                            stamp,
+                        ),
                     )
                 await db.commit()
             except Exception:
@@ -1017,10 +1028,16 @@ class FleetControlStore(TopologyTransitionStore):
                         "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
                         "rearm_after_seconds,rearm_enabled,legacy_admission_enabled,revision,updated_at"
                         ") VALUES(1,?,?,?,?,?,?,?,?)",
-                        (duration, warning, alert, rearm,
-                         int(policy.get("rearm_enabled", True)),
-                         int(policy.get("legacy_admission_enabled", False)),
-                         policy_revision, stamp),
+                        (
+                            duration,
+                            warning,
+                            alert,
+                            rearm,
+                            int(policy.get("rearm_enabled", True)),
+                            int(policy.get("legacy_admission_enabled", False)),
+                            policy_revision,
+                            stamp,
+                        ),
                     )
 
                 for item in normalized:
@@ -1481,8 +1498,14 @@ class FleetControlStore(TopologyTransitionStore):
                 current_revision = int(row[6])
                 if expected_revision is not None and current_revision != int(expected_revision):
                     raise FleetControlError("access_policy_revision_conflict")
-                desired = (duration, warning, alert, rearm, int(rearm_enabled),
-                           int(legacy_admission_enabled))
+                desired = (
+                    duration,
+                    warning,
+                    alert,
+                    rearm,
+                    int(rearm_enabled),
+                    int(legacy_admission_enabled),
+                )
                 current = tuple(int(value) for value in row[:6])
                 if current != desired:
                     revision = await self._bump_revision(db, "policy", stamp)
@@ -1816,8 +1839,8 @@ class FleetControlStore(TopologyTransitionStore):
                     "warning_after_seconds=excluded.warning_after_seconds,"
                     "alert_after_seconds=excluded.alert_after_seconds,"
                     "rearm_after_seconds=excluded.rearm_after_seconds,"
-                        "rearm_enabled=excluded.rearm_enabled,"
-                        "legacy_admission_enabled=excluded.legacy_admission_enabled,"
+                    "rearm_enabled=excluded.rearm_enabled,"
+                    "legacy_admission_enabled=excluded.legacy_admission_enabled,"
                     "revision=excluded.revision,updated_at=excluded.updated_at",
                     (
                         duration,
