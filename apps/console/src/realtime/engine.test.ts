@@ -1,5 +1,8 @@
 import { expect,test,vi } from 'vitest';
 import type { ConsoleSnapshotReadModel } from '../api/models';
+import { ConsoleHttpError } from '../api/client';
+import { ConsoleContractError } from '../api/contracts';
+import { describeRealtimeFailure } from './failure';
 import { RealtimeConsoleEngine,consoleEventsUrl,type RealtimeScheduler,type RealtimeSocket } from './engine';
 
 const snap = (seq:number): ConsoleSnapshotReadModel => ({
@@ -54,4 +57,46 @@ test('journal gap resnapshots atomically and reconnects at new high water', asyn
   expect(engine.getState().cursor).toBe(20)
   expect(urls[1]).toBe(consoleEventsUrl('https://terminal.example','b',20))
   engine.stop()
+})
+
+
+test('initial and retry snapshot contract failures report the exact field and stage', async () => {
+  const scheduler = new Scheduler()
+  const error = new ConsoleContractError('$.tasks.tasks[0].state', 'expected one of ready, in_progress, qa, blocked, deferred, done')
+  const client = { snapshot: vi.fn(async () => { throw error }), webSocketTicket: vi.fn() }
+  const onFailure = vi.fn()
+  const engine = new RealtimeConsoleEngine(client, 'https://terminal.example', { scheduler, onFailure })
+
+  await engine.start()
+  expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({
+    stage: 'initial_snapshot',
+    code: 'console_contract_invalid',
+    detail: expect.stringContaining('path=$.tasks.tasks[0].state'),
+  }))
+  expect(engine.getState()).toMatchObject({
+    status: 'reconnecting', lastError: 'console_contract_invalid', snapshot: null,
+  })
+
+  scheduler.run()
+  await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({
+    stage: 'snapshot_resync', detail: expect.stringContaining('path=$.tasks.tasks[0].state'),
+  })))
+  engine.stop()
+})
+
+test('failure details include HTTP context and redact bearer credentials and URLs', () => {
+  const http = describeRealtimeFailure(
+    'initial_snapshot',
+    new ConsoleHttpError(502, 'upstream_unavailable', 'failure', '/actions/console/snapshot', 82),
+  )
+  expect(http).toMatchObject({
+    code: 'upstream_unavailable',
+    detail: 'stage=initial_snapshot http=502 endpoint=/actions/console/snapshot elapsed_ms=82 code=upstream_unavailable',
+  })
+
+  const secret = describeRealtimeFailure('websocket_closed', new Error(
+    'failed https://private.example/path?ticket=SECRET_VALUE Bearer VERY_PRIVATE_TOKEN token=PRIVATE access_token=OTHER_SECRET',
+  ))
+  expect(secret.detail).toContain('stage=websocket_closed')
+  expect(secret.detail).not.toMatch(/SECRET_VALUE|VERY_PRIVATE_TOKEN|PRIVATE|OTHER_SECRET|private.example/)
 })

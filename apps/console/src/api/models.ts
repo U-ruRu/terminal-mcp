@@ -102,8 +102,8 @@ export type TaskReadModel = {
   title: string
   lane: 'implementation' | 'review' | 'release' | 'integration' | 'general'
   priority: 'P0' | 'P1' | 'P2' | 'P3'
-  state: 'ready' | 'in_progress' | 'blocked' | 'deferred' | 'done'
-  operationalStatus: 'ready' | 'in_progress' | 'blocked' | 'deferred' | 'done'
+  state: 'ready' | 'in_progress' | 'qa' | 'blocked' | 'deferred' | 'done'
+  operationalStatus: 'ready' | 'in_progress' | 'qa' | 'blocked' | 'deferred' | 'done'
   active: boolean
   archived: boolean
   tags: string[]

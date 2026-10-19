@@ -10,6 +10,7 @@ import {
   type RealtimeScheduler,
   type RealtimeSocketFactory,
 } from '../realtime/engine'
+import type { RealtimeFailure } from '../realtime/failure'
 import { boundedBackoffDelay } from '../realtime/state'
 import { DEFAULT_FLEET_REQUEST_TIMEOUT_MS, withRequestTimeout } from './policy'
 import type { FleetActivityOptions, FleetInstanceActor, FleetInstanceRuntimeState } from './types'
@@ -41,6 +42,7 @@ export type BrowserFleetActorOptions = {
   reconnectBaseMs?: number
   reconnectMaxMs?: number
   requestTimeoutMs?: number
+  onRealtimeFailure?: (profile: ConnectionProfile, failure: RealtimeFailure) => void
 }
 
 export class BrowserFleetInstanceActor implements FleetInstanceActor {
@@ -101,6 +103,7 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
       reconnectBaseMs: this.reconnectBaseMs,
       reconnectMaxMs: this.reconnectMaxMs,
       reconnectJitter: (delayMs) => jitterDelay(delayMs, this.random),
+      onFailure: (failure) => options.onRealtimeFailure?.(this.profile, failure),
     }
   }
 

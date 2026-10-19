@@ -32,3 +32,19 @@ test('clearing diagnostics preserves the current app build marker', () => {
   expect(journal.list()).toEqual([])
   expect(storage.getItem('terminal-mcp.console.last-build.v1')).toBe('0.14.4 (100)')
 })
+
+
+test('detailed connection failures remain available in exported diagnostics', () => {
+  const journal = new BrowserDiagnosticJournal(new MemoryStorage())
+  journal.append({
+    type: 'connection_failure', instanceId: 'tokyohh', server: 'TokyoHH',
+    code: 'console_contract_invalid',
+    detail: 'stage=initial_snapshot path=$.tasks.tasks[0].state cause=unsupported state',
+  })
+  const entry = journal.list('tokyohh')[0]
+  expect(entry).toMatchObject({
+    type: 'connection_failure', code: 'console_contract_invalid',
+    detail: expect.stringContaining('path=$.tasks.tasks[0].state'),
+  })
+  expect(journal.exportText('tokyohh')).toContain('stage=initial_snapshot')
+})

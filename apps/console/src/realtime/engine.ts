@@ -1,4 +1,6 @@
 import { ConsoleHttpError, type ConsoleClient } from '../api/client'
+import { ConsoleContractError } from '../api/contracts'
+import { describeRealtimeFailure, type RealtimeFailure, type RealtimeFailureStage } from './failure'
 import {
   applyRealtimeFrame,
   beginConnecting,
@@ -34,6 +36,7 @@ export type RealtimeEngineOptions = {
   reconnectMaxMs?: number
   reconnectJitter?: (delayMs: number, attempt: number) => number
   refreshDebounceMs?: number
+  onFailure?: (failure: RealtimeFailure) => void
 }
 type Listener = (state: RealtimeState) => void
 
@@ -52,6 +55,7 @@ export function consoleEventsUrl(origin: string, ticket: string, cursor: number)
   return url.toString()
 }
 function errorCode(error: unknown): string {
+  if (error instanceof ConsoleContractError) return 'console_contract_invalid'
   if (error instanceof ConsoleHttpError) return error.code
   if (error instanceof Error && error.message) return error.message
   return 'realtime_error'
@@ -66,6 +70,7 @@ export class RealtimeConsoleEngine {
   private readonly reconnectMaxMs: number
   private readonly reconnectJitter: (delayMs: number, attempt: number) => number
   private readonly refreshDebounceMs: number
+  private readonly onFailure?: (failure: RealtimeFailure) => void
   private socket: RealtimeSocket | null = null
   private reconnectTimer: unknown = null
   private refreshTimer: unknown = null
@@ -85,6 +90,15 @@ export class RealtimeConsoleEngine {
     this.reconnectMaxMs = options.reconnectMaxMs ?? 8000
     this.reconnectJitter = options.reconnectJitter ?? ((delayMs) => delayMs)
     this.refreshDebounceMs = Math.max(0, options.refreshDebounceMs ?? 100)
+    this.onFailure = options.onFailure
+  }
+
+  private reportFailure(stage: RealtimeFailureStage, error: unknown): void {
+    try {
+      this.onFailure?.(describeRealtimeFailure(stage, error))
+    } catch {
+      // Logging is best-effort and cannot prevent reconnect or recovery.
+    }
   }
 
   getState(): RealtimeState { return this.state }
@@ -104,7 +118,10 @@ export class RealtimeConsoleEngine {
       this.setState(replaceSnapshot(this.state, snapshot, true))
       await this.connect(false)
     } catch (error) {
-      if (this.running) this.handleConnectionFailure(error)
+      if (this.running) {
+        this.reportFailure('initial_snapshot', error)
+        this.handleConnectionFailure(error)
+      }
     }
   }
 
@@ -176,6 +193,11 @@ export class RealtimeConsoleEngine {
       socket.onclose = (event) => {
         if (!this.running || generation !== this.generation) return
         this.socket = null
+        if (event.code !== 4409 && event.code !== 4400) {
+          this.reportFailure('websocket_closed', new Error(
+            'close_code=' + event.code + ' reason=' + event.reason,
+          ))
+        }
         if (event.code === 4409) return void this.resync('journal_gap')
         if (event.code === 4400) return void this.resync('invalid_cursor')
         if (event.code === 4401 || event.code === 4403) {
@@ -186,7 +208,10 @@ export class RealtimeConsoleEngine {
       }
       socket.onerror = () => {}
     } catch (error) {
-      if (this.running && generation === this.generation) this.handleConnectionFailure(error)
+      if (this.running && generation === this.generation) {
+        this.reportFailure('websocket_handshake', error)
+        this.handleConnectionFailure(error)
+      }
     }
   }
 
@@ -195,6 +220,7 @@ export class RealtimeConsoleEngine {
     try {
       frame = decodeRealtimeFrame(JSON.parse(data) as unknown)
     } catch (error) {
+      this.reportFailure('websocket_frame', error)
       void this.resync(`invalid_frame:${errorCode(error)}`)
       return
     }
@@ -242,6 +268,7 @@ export class RealtimeConsoleEngine {
       }
     } catch (error) {
       if (this.running) {
+        this.reportFailure('snapshot_refresh', error)
         this.refreshFailures += 1
         const code = errorCode(error)
         if (this.refreshFailures >= 3) {
@@ -284,6 +311,7 @@ export class RealtimeConsoleEngine {
     } catch (error) {
       if (!this.running) return
       this.resyncInFlight = false
+      this.reportFailure('snapshot_resync', error)
       this.setState(markStale(this.state, reason, errorCode(error)))
       this.scheduleResync(reason)
     }

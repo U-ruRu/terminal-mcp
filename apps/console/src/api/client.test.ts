@@ -193,6 +193,19 @@ test('snapshot decodes the current console read model', async () => {
   )
 })
 
+test('console snapshot accepts the canonical qa task state from TokyoHH', async () => {
+  const qaSnapshot = structuredClone(snapshot)
+  qaSnapshot.tasks.tasks[0].state = 'qa'
+  qaSnapshot.tasks.tasks[0].operational_status = 'qa'
+  const client = new ConsoleClient(
+    'https://terminal.example', () => 'paired-access',
+    vi.fn(async () => jsonResponse(qaSnapshot)),
+  )
+  const model = await client.snapshot()
+  expect(model.tasks[0]).toMatchObject({ state: 'qa', operationalStatus: 'qa' })
+})
+
+
 test('websocket ticket uses paired access auth and validates ticket contract', async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(new URL(input.toString()).pathname).toBe('/console/ws-ticket')

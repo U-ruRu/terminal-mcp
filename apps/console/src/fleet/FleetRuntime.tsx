@@ -93,9 +93,18 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
   const manager = useMemo(
     () => dependencies.manager ?? new FleetConnectionManager(
       registry,
-      browserFleetActorFactory({ credentialSource: registry }),
+      browserFleetActorFactory({
+        credentialSource: registry,
+        onRealtimeFailure: (profile, failure) => diagnostics.append({
+          type: 'connection_failure',
+          instanceId: profile.instanceId,
+          server: profile.displayName,
+          code: failure.code,
+          detail: failure.detail,
+        }),
+      }),
     ),
-    [dependencies.manager, registry],
+    [dependencies.manager, registry, diagnostics],
   )
   const directAuthority = useMemo(() => new BrowserDirectAuthorityClient(registry), [registry])
   const cache = useMemo(
