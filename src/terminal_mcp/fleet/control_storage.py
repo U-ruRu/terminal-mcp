@@ -1134,12 +1134,17 @@ class FleetControlStore(TopologyTransitionStore):
             try:
                 mesh = await (
                     await db.execute(
-                        "SELECT active FROM managed_meshes WHERE mesh_id=?",
+                        "SELECT active,display_name FROM managed_meshes WHERE mesh_id=?",
                         (mesh_id,),
                     )
                 ).fetchone()
                 if mesh is None or not bool(mesh[0]):
                     raise FleetControlError("managed_mesh_not_found")
+                # A repeated save, including a retry after a lost receipt,
+                # must not invent a topology revision.
+                if mesh[1] == display_name:
+                    await db.commit()
+                    return await self.control_state(include_secrets=False)
                 topology, _, _ = await self._control_revisions(db)
                 if expected_topology_revision is not None and topology != int(
                     expected_topology_revision

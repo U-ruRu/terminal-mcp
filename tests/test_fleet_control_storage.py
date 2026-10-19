@@ -93,6 +93,25 @@ async def test_mesh_rename_updates_the_display_name(managed):
 
 
 @pytest.mark.asyncio
+async def test_mesh_rename_retry_with_same_name_preserves_topology_and_timestamps(managed):
+    before = await managed.control_state()
+    result = await managed.rename_managed_mesh(
+        "mesh-a", "Alpha", expected_topology_revision=0
+    )
+
+    assert result["meshes"] == before["meshes"]
+    assert result["nodes"] == before["nodes"]
+    assert result["revisions"] == before["revisions"]
+    assert result["updated_at"] == before["updated_at"]
+
+    changed = await managed.rename_managed_mesh(
+        "mesh-a", "Renamed", expected_topology_revision=before["revisions"]["topology"]
+    )
+    assert changed["revisions"]["topology"] == before["revisions"]["topology"] + 1
+    assert changed["meshes"][0]["display_name"] == "Renamed"
+
+
+@pytest.mark.asyncio
 async def test_detaching_the_control_node_leaves_it_standalone(managed):
     result = await managed.detach_managed_node("home")
 
