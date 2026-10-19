@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 import threading
 from pathlib import Path
 
@@ -10,6 +12,10 @@ _CPU_SAMPLE: tuple[int, int] | None = None
 
 def _read_cpu_times() -> tuple[int, int] | None:
     try:
+        if sys.platform == "win32":
+            from terminal_mcp.host_resources_windows import cpu_times
+
+            return cpu_times()
         first = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()
         if not first or first[0] != "cpu":
             return None
@@ -68,15 +74,20 @@ def _cpu() -> dict[str, object]:
 
 def _memory() -> dict[str, object]:
     try:
-        values: dict[str, int] = {}
-        for raw in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-            key, _, tail = raw.partition(":")
-            if key not in {"MemTotal", "MemAvailable", "MemFree"}:
-                continue
-            token = tail.strip().split()[0]
-            values[key] = int(token) * 1024
-        total = values["MemTotal"]
-        available = values.get("MemAvailable", values.get("MemFree"))
+        if sys.platform == "win32":
+            from terminal_mcp.host_resources_windows import memory
+
+            total, available = memory()
+        else:
+            values: dict[str, int] = {}
+            for raw in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                key, _, tail = raw.partition(":")
+                if key not in {"MemTotal", "MemAvailable", "MemFree"}:
+                    continue
+                token = tail.strip().split()[0]
+                values[key] = int(token) * 1024
+            total = values["MemTotal"]
+            available = values.get("MemAvailable", values.get("MemFree"))
         if available is None:
             return _unavailable()
         used = max(0, total - available)
@@ -96,9 +107,13 @@ def _memory() -> dict[str, object]:
 
 def _filesystem(path: str | os.PathLike[str]) -> dict[str, object]:
     try:
-        stats = os.statvfs(path)
-        total = stats.f_frsize * stats.f_blocks
-        free = stats.f_frsize * stats.f_bavail
+        if sys.platform == "win32":
+            usage = shutil.disk_usage(path)
+            total, free = usage.total, usage.free
+        else:
+            stats = os.statvfs(path)
+            total = stats.f_frsize * stats.f_blocks
+            free = stats.f_frsize * stats.f_bavail
         used = max(0, total - free)
         result: dict[str, object] = {
             "status": "available",
@@ -116,7 +131,12 @@ def _filesystem(path: str | os.PathLike[str]) -> dict[str, object]:
 
 def _uptime() -> dict[str, object]:
     try:
-        seconds = int(float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0]))
+        if sys.platform == "win32":
+            from terminal_mcp.host_resources_windows import uptime_seconds
+
+            seconds = uptime_seconds()
+        else:
+            seconds = int(float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0]))
         return {"status": "available", "seconds": max(0, seconds)}
     except (OSError, ValueError, IndexError):
         return _unavailable()

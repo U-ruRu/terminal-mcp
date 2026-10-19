@@ -204,6 +204,8 @@ try {
     $activated = $false
     $migrationStarted = $false
     try {
+        Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','browser-origins',
+            '--root',$Root)
         $taskArguments = @('-m','terminal_mcp.deployment.windows_runtime','configure',
             '--root',$Root,'--python',$runtime)
         if ($PSBoundParameters.ContainsKey('TunnelName')) { $taskArguments += @('--tunnel-name',$TunnelName) }

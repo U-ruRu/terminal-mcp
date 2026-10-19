@@ -129,6 +129,44 @@ def schema(path: Path):
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
 
 
+def configure_browser_origins(root: Path) -> bool:
+    """Converge the installed Console origins while retaining operator additions."""
+    from terminal_mcp.config import Settings
+    from terminal_mcp.deployment._release_common import atomic, require
+    from terminal_mcp.http.browser_security import canonical_origin
+
+    env = root / "config/terminal-mcp.env"
+    settings = Settings(_env_file=env)
+    existing = [
+        canonical_origin(value)
+        for value in settings.console_allowed_origins.split(",")
+        if value.strip()
+    ]
+    required = ["https://localhost", canonical_origin(settings.console_public_base_url)]
+    merged = list(dict.fromkeys([*existing, *required]))
+    if existing == merged:
+        return False
+    original = env.read_bytes()
+    text = original.decode("utf-8-sig")
+    prefix = "TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="
+    lines = text.splitlines(keepends=True)
+    indices = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+    require(len(indices) <= 1, "duplicate_console_origins_configuration")
+    replacement = prefix + json.dumps(",".join(merged)) + "\n"
+    if indices:
+        lines[indices[0]] = replacement
+    else:
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += "\n"
+        lines.append(replacement)
+    backup = root / "backups" / ("console-origins-" + hashlib.sha256(original).hexdigest() + ".env")
+    if not backup.exists():
+        atomic(backup, original)
+    require(backup.read_bytes() == original, "console_origins_backup_mismatch")
+    atomic(env, "".join(lines).encode("utf-8"))
+    return True
+
+
 def snapshot(root: Path, destination: Path):
     """Run after SCM has stopped the service. Preserve identity sidecars and config."""
     from terminal_mcp.config import Settings
@@ -289,6 +327,7 @@ def main():
             "check-idle",
             "check-rollback",
             "probe",
+            "browser-origins",
         ),
     )
     parser.add_argument("--root", type=Path, required=True)
@@ -323,6 +362,8 @@ def main():
         args.output.write_text(service_xml(root, args.python), encoding="utf-8")
     elif args.action == "backup":
         snapshot(root, args.output)
+    elif args.action == "browser-origins":
+        configure_browser_origins(root)
     elif args.action == "migrate":
         asyncio.run(migrate(root, args.output))
     elif args.action == "check-migration":

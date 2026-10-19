@@ -13,6 +13,10 @@ PowerShell получает `-NoProfile -NonInteractive`. Доверенный b
 Отмена завершает дерево процессов. Проверка чужого PID использует Win32 observation.
 В health `uid` и `gid` равны `-1`; `user` содержит Windows account.
 
+Ресурсы Console используют Win32 `GetSystemTimes`, `GlobalMemoryStatusEx`,
+`GetTickCount64` и объём файловой системы рабочего диска. CPU usage вычисляется
+по разнице последовательных выборок.
+
 SCM запускает WinSW от LocalSystem в Session 0. Режим запуска — Automatic Delayed
 Start; восстановление — restart через 10 секунд. Session 0 обслуживает команды и
 фоновые программы. Интерактивные окна относятся к пользовательской desktop session.
@@ -38,6 +42,10 @@ identity anchor; `releases` — версии; `backups` — снимки; `work`
 ACL установки предоставляет FullControl SYSTEM и Administrators. Новые файлы наследуют
 эту ACL. Runtime проверяет ACL открытых credential-файлов. OAuth credentials
 создаются однократно в `config\credentials` и сохраняются при обновлении.
+
+Установщик объединяет настроенные CORS origins с `https://localhost` для Android
+WebView и адресом `console_public_base_url`. Исходный env сохраняется в
+`backups\console-origins-<sha256>.env`; повторный запуск использует полученный список.
 
 ```powershell
 .\deploy\windows\Manage-TerminalMCP.ps1 -Action Update -ExpectedCommit '<full-sha>'
