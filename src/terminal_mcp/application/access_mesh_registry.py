@@ -10,6 +10,7 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
 
 REGISTRY_BINDING = ContextVar("mesh_registry_binding", default=None)
+_OPERATOR_OPERATIONS = frozenset({"slots", "get", "defaults", "mutate"})
 _ACTOR_FIELDS = {
     "principal_id",
     "credential_id",
@@ -44,6 +45,15 @@ class AccessRegistryApplication:
         admission.require(
             "terminal:read" if operation in {"slots", "get", "defaults"} else "terminal:execute"
         )
+        if operation in _OPERATOR_OPERATIONS:
+            if actor.endpoint_role != "operator":
+                raise AccessMeshError("access_denied")
+            # Console delegates its verified principal, not an agent connection.
+            binding = None
+        elif operation == "session":
+            binding = self.connection_key(actor)
+        else:
+            raise AccessMeshError("invalid_request")
         payload = {name: getattr(actor, name) for name in _ACTOR_FIELDS}
         payload["scopes"] = sorted(actor.scopes)
         payload["provider_metadata"] = dict(actor.provider_metadata)
@@ -53,12 +63,12 @@ class AccessRegistryApplication:
                 "operation": operation,
                 "arguments": arguments,
                 "actor": payload,
-                "connection_key": self.connection_key(actor),
+                "connection_key": binding,
             }
         )
 
     async def accept_registry_request(self, payload, *, authenticated_peer_id):
-        """A trusted current member delegates its verified connector admission."""
+        """A current member delegates an admitted operator or agent connection."""
         if not self.registry_authoritative:
             raise AccessMeshError("mesh_not_primary")
         if (
@@ -71,39 +81,51 @@ class AccessRegistryApplication:
             raise AccessMeshError("access_mesh_untrusted_peer")
         raw = payload["actor"]
         binding = payload["connection_key"]
+        operation, arguments = payload["operation"], payload["arguments"]
         if (
             not isinstance(raw, dict)
             or set(raw) != _ACTOR_FIELDS
-            or not isinstance(payload["arguments"], dict)
-            or not isinstance(binding, str)
-            or len(binding) != 64
-            or any(c not in "0123456789abcdef" for c in binding)
+            or not isinstance(operation, str)
+            or not isinstance(arguments, dict)
         ):
             raise AccessMeshError("invalid_request")
         try:
             actor = ActorContext(**raw)
         except (TypeError, ValueError) as exc:
             raise AccessMeshError("invalid_request") from exc
+        if operation in _OPERATOR_OPERATIONS:
+            if actor.endpoint_role != "operator":
+                raise AccessMeshError("access_denied")
+            if binding is not None:
+                raise AccessMeshError("invalid_request")
+        elif operation == "session":
+            if (
+                not isinstance(binding, str)
+                or len(binding) != 64
+                or any(c not in "0123456789abcdef" for c in binding)
+            ):
+                raise AccessMeshError("invalid_request")
+            automatic = arguments.get("automatic") is True
+            allowed = (
+                {"action", "slot_id", "automatic"} if automatic
+                else {"action", "session_number"}
+            )
+            permitted_role = (
+                actor.endpoint_role in {"executor", "coordinator"}
+                if automatic else actor.endpoint_role == "access"
+            )
+            if (
+                not permitted_role or "action" not in arguments or set(arguments) - allowed
+                or (automatic and (
+                    arguments["action"] != "start" or "slot_id" not in arguments
+                ))
+            ):
+                raise AccessMeshError("access_denied")
+        else:
+            raise AccessMeshError("invalid_request")
         token = REGISTRY_BINDING.set(binding)
         try:
-            operation, arguments = payload["operation"], payload["arguments"]
             if operation == "session":
-                automatic = arguments.get("automatic") is True
-                allowed = (
-                    {"action", "slot_id", "automatic"} if automatic
-                    else {"action", "session_number"}
-                )
-                permitted_role = (
-                    actor.endpoint_role in {"executor", "coordinator"}
-                    if automatic else actor.endpoint_role == "access"
-                )
-                if (
-                    not permitted_role or "action" not in arguments or set(arguments) - allowed
-                    or (automatic and (
-                        arguments["action"] != "start" or "slot_id" not in arguments
-                    ))
-                ):
-                    raise AccessMeshError("access_denied")
                 return await self.issuer_session(actor, **arguments)
             from terminal_mcp.application.access_mesh_operator import AccessMeshOperator
 
