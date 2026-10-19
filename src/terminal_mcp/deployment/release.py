@@ -41,7 +41,7 @@ def offline_driver(profile: Path) -> NodeDriver:
     return driver
 
 
-async def migrate_stores(profile: dict, backup: Path, *, settings=None) -> dict:
+async def migrate_stores(profile: dict, backup: Path, *, settings=None, access_bridge=False) -> dict:
     # The process environment is supplied by the already-configured node; no .env
     # from the source checkout or packaging environment is inherited.
     from terminal_mcp.auth.identity_migration import (
@@ -51,6 +51,16 @@ async def migrate_stores(profile: dict, backup: Path, *, settings=None) -> dict:
 
     stores = profile["stores"]
     fresh = assert_identity_isolated(Path(stores["runtime"]), Path(stores["auth"]))
+    if access_bridge:
+        from terminal_mcp.deployment.access_bridge import prepare_access_v26, source_revision
+        from terminal_mcp.storage.sqlite import SqliteRepository
+
+        runtime_path = Path(stores["runtime"])
+        version = source_revision(runtime_path)
+        await SqliteRepository(runtime_path, Path(stores["output"])).initialize(
+            preserve_active_commands=True
+        )
+        prepare_access_v26(runtime_path, source_version=version)
     # Constructors perform synchronous schema preparation; the main service and
     # executor are already stopped and their entire persistent state snapshotted.
     from terminal_mcp.app import create_app

@@ -282,7 +282,13 @@ def migrate_unified_runtime(
                 revision=2,
                 policy=asdict(defaults),
                 inherit_policy=False,
-                parent={"source": "server", "revision": 1, "policy": asdict(defaults)},
+                parent={
+                    "source": "server",
+                    "revision": 1,
+                    "policy": asdict(defaults),
+                    "legacy_admission_enabled": False,
+                },
+                legacy_admission_enabled=False,
             )
         if existing_installation:
             columns = {r[1] for r in db.execute("PRAGMA table_info(access_mesh_registry_scope)")}

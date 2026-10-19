@@ -258,15 +258,19 @@ async def test_hot_application_lifespan_preserves_local_policy_and_registration(
     app = create_app(configured)
     async with app.router.lifespan_context(app):
         migrated = app.state.access_mesh.store
-        slot = migrated.slot_for_agent("old-persistent")
-        assert slot is not None and slot.policy == expected_policy and slot.inherit_policy
-        assert migrated.defaults()["policy"] == asdict(expected_policy)
         with migrated._connect() as db:
             receipt = json.loads(
                 db.execute(f"SELECT receipt_json FROM {MIGRATION_TABLE}").fetchone()[0]
             )
             assert receipt["preserved_local_defaults"] == asdict(expected_policy)
             assert db.execute("SELECT COUNT(*) FROM logical_agents").fetchone()[0] == 1
+        (registration,) = receipt["imported"]
+        assert registration["logical_agent_id"] == "old-persistent"
+        slot = migrated.slot(registration["issuer_id"], registration["slot_id"])
+        assert slot is not None and slot.policy == expected_policy and slot.inherit_policy
+        assert migrated.slot_for_agent("old-persistent") is None
+        assert migrated.defaults()["policy"] == asdict(expected_policy)
+        assert migrated.defaults()["legacy_admission_enabled"] is False
         assert prior_persistent_defaults(configured) is None
         assert app.state.access_mesh_replication._task is None
 

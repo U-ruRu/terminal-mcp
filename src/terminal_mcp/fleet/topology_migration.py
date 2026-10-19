@@ -130,7 +130,7 @@ def expected_single_mesh_rows(
     and empty declarations are recomputed from the before database; every other
     selected column remains part of the hash.
     """
-    from terminal_mcp.fleet.control_storage import FleetControlError
+    from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlStore
 
     if table not in {"control_meta", "managed_nodes", "managed_meshes", "control_namespace"}:
         return None
@@ -188,7 +188,7 @@ def expected_single_mesh_rows(
         stored["version"] != 1
         or receipt != expected
         or old_schema[0]["version"] >= 5
-        or _rows(after, "control_schema")[0]["version"] != 5
+        or _rows(after, "control_schema")[0]["version"] != FleetControlStore.SCHEMA_VERSION
     ):
         raise FleetControlError("mesh_migration_receipt_invalid")
     result = Counter()

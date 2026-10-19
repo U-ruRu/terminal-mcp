@@ -188,7 +188,7 @@ def check_idle(root: Path):
 
 async def migrate(root: Path, backup: Path):
     from terminal_mcp.config import Settings
-    from terminal_mcp.deployment._release_common import atomic, encoded
+    from terminal_mcp.deployment._release_common import atomic, encoded, sha256
     from terminal_mcp.deployment.release import migrate_stores
 
     if (backup / "migration.started.json").exists():
@@ -196,29 +196,42 @@ async def migrate(root: Path, backup: Path):
     settings = Settings(_env_file=root / "config/terminal-mcp.env")
     atomic(backup / "migration.started.json", encoded({"python": sys.executable}))
     versions = await migrate_stores(
-        {"stores": configured_stores(settings)}, backup, settings=settings
+        {"stores": configured_stores(settings)}, backup, settings=settings, access_bridge=True
     )
-    atomic(backup / "migration.completed.json", encoded({"versions": versions}))
+    atomic(
+        backup / "migration.completed.json",
+        encoded(
+            {
+                "format": 1,
+                "versions": versions,
+                "stores": configured_stores(settings),
+                "snapshot_sha256": sha256(backup / "snapshot.json"),
+            }
+        ),
+    )
 
 
 def check_migration(root: Path, backup: Path):
     from terminal_mcp.config import Settings
-    from terminal_mcp.deployment._release_common import read_json, require, sha256
-    from terminal_mcp.deployment.migration_preservation import receipt_cipher
-    from terminal_mcp.deployment.update import preserved_rows
+    from terminal_mcp.deployment._release_common import read_json, require, schema_versions, sha256
 
     require((backup / "migration.completed.json").is_file(), "migration_receipt_required")
     settings = Settings(_env_file=root / "config/terminal-mcp.env")
+    receipt = read_json(backup / "migration.completed.json")
+    stores = configured_stores(settings)
+    require(
+        receipt.get("format") == 1
+        and receipt.get("stores") == stores
+        and receipt.get("snapshot_sha256") == sha256(backup / "snapshot.json")
+        and receipt.get("versions") == schema_versions(stores),
+        "migration_receipt_mismatch",
+    )
     manifest = read_json(backup / "snapshot.json")
     for name, item in manifest["stores"].items():
         before = backup / item["backup"]
         require(sha256(before) == item["sha256"], "backup_tampered")
-        if name != "output":
-            preserved_rows(
-                before,
-                Path(item["path"]),
-                cipher=receipt_cipher(settings.database_path) if name == "runtime" else None,
-            )
+        # migrate_stores verified old rows before publishing this bound completion receipt.
+        # A resumed activation keeps legitimate writes made by the new runtime.
     for path, item in manifest["configs"].items():
         require(sha256(Path(path)) == item["sha256"], "protected_configuration_changed")
 

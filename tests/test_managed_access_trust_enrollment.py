@@ -38,6 +38,7 @@ def fake_access():
     app = AccessMeshApplication.__new__(AccessMeshApplication)
     app.store = FakeStore()
     app.configured_defaults = POLICY
+    app.configured_legacy_admission = False
     app.defaults = POLICY
     app._issuer_session_lock = asyncio.Lock()
     app._issuer_lock = asyncio.Lock()
@@ -69,6 +70,8 @@ def state(
             "warning_after_seconds": 1080,
             "alert_after_seconds": 1170,
             "revision": 2,
+            "rearm_enabled": True,
+            "legacy_admission_enabled": False,
         },
     }
 

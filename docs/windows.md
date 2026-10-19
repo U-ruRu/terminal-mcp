@@ -55,9 +55,15 @@ VPN-конфигурацией и identity sidecars. Затем выполняе
 снимает регистрацию службы; каталоги экземпляра сохраняются.
 
 Начало миграции фиксируется в `migration.started.json`, завершение — в
-`migration.completed.json` внутри backup. `service\release.json` хранит pending
+`migration.completed.json` внутри backup. Completion receipt связывает проверку
+с snapshot, путями хранилищ и версиями схем. `service\release.json` хранит pending
 release. `-Action Resume` проверяет завершённую миграцию и продолжает activation.
 Ошибка после начала миграции требует forward recovery с сохранением текущих данных.
+
+Offline update включает одноразовую подготовку Access v25 для штатного перехода
+v26 → v27. Поддерживаемый каталог v25 содержит состояния active и suspended.
+Перенос идентичности в session storage проверяется по исходному журналу событий;
+исходные коды и сроки входят в проверку сохранности.
 
 ## Console management
 

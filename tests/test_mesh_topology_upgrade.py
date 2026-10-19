@@ -73,7 +73,7 @@ async def test_single_mesh_upgrade_makes_its_existing_primary_a_member(control):
     assert (await control.managed_node("home"))["mesh_id"] == "mesh-a"
     assert (await control.managed_node("member"))["mesh_id"] == "mesh-a"
     assert await control.access_policy() == policy
-    assert await control.schema_version() == 5
+    assert await control.schema_version() == 6
 
 
 async def test_empty_old_grouping_does_not_create_a_mesh_on_standalone_upgrade(control):

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -94,7 +95,7 @@ def current_activity_app(tmp_path):
         {
             "message_hash": "node-a:localmsg:feed",
             "origin_node_id": "node-a",
-            "created_at": "2026-10-17T12:00:00Z",
+            "created_at": datetime.now(UTC).isoformat(),
             "sender_id": "la_sender",
             "sender_name": "Alpha-1",
             "target": "Bravo-1",
