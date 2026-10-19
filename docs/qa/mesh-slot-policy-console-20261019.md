@@ -179,3 +179,34 @@ authoritative converged Mesh policy parent, and `write_target=fleet_control`.
 The probe slot was absent from all four lists. The original shared policy values
 were preserved. Actual MCP terminal commands also ran successfully after the
 TokyoHH update using the existing logical agent binding.
+
+## Signed APK and cleanup
+
+Console source commit: `7e35d0a78c9699086c60718e308103575bc2a084`.
+The release build completed with the existing Java 21 / Android SDK toolchain.
+`android:verify:release` verified package `app.terminalmcp.console`, version
+`0.2.45` / code `47`, and the existing signing certificate.
+
+APK SHA-256:
+`4dded2d6d5d413172ebe9340e7309a74d3410fc06dd17f9c374d70a463c2c3b5`.
+APK size: 11,477,259 bytes.
+Signing certificate SHA-256:
+`aa9207e1051aa54c71421f02609ab8be6074ebf50963af59b6474a16d0d6e1c6`.
+
+The APK and update manifest were published on BacLOUD after checking that the
+previous manifest had not changed. The previous manifest was retained in the
+operational backup. A normal HTTPS download of both public files confirmed the
+source commit, version and exact APK hash:
+
+https://terminal-bc.elenis.org/downloads/android/terminal-mcp-console-0.2.45-47-7e35d0a.apk
+
+Only the four temporary Console devices created for this investigation were
+revoked. On each node the original device identity and OAuth client remained,
+all three identity sidecar hashes matched the backup, and the active device
+count returned to one. The temporary devices' OAuth rows and private probe files
+were removed. Temporary signing material on TokyoHH was removed after publishing.
+Extended health on all four nodes remained healthy with no running, stale or
+unowned terminal commands. Ordinary Tokyo was unchanged; Secondary was not used.
+
+The Android package was built and signature-checked; it was not installed or
+manually exercised on the user's physical phone in this session.
