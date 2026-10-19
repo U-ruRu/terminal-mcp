@@ -97,3 +97,30 @@ The canonical ref is fetched again before integration. Source is built from the
 resulting committed revision, and the published manifest identifies that exact
 revision. APK signature, package, version, public download hash, and manifest are
 verified before handoff.
+
+## Published artifact
+
+Source commit: `1ce207a4fbf9cf2ccc6df0f4330dcf67ec3629a8`. The normal
+fast-forward canonical push completed after a fresh fetch of `d028d1c`; the
+checkout was clean throughout the release build.
+
+[Console 0.2.46 (48) APK](https://terminal-bc.elenis.org/downloads/android/terminal-mcp-console-0.2.46-48-1ce207a.apk)
+
+| Check | Result |
+|---|---|
+| `npm run android:build:release` | PASS, 35.23 seconds; includes application TypeScript, Vite, Capacitor sync, branding verification and Gradle release packaging. |
+| `npm run android:verify:release` | PASS, 1.53 seconds. |
+| Package | `app.terminalmcp.console` |
+| Version | `0.2.46`, code `48` |
+| APK size | `11,478,455` bytes |
+| APK SHA-256 | `5886032f9111eb4d2f66463fd10b4371c5543fa79de99fa06ad4f784429fcda3` |
+| Signing certificate SHA-256 | `aa9207e1051aa54c71421f02609ab8be6074ebf50963af59b6474a16d0d6e1c6`, unchanged from release 47. |
+| Public verification | At 08:21 UTC, ordinary HTTPS downloads of both the APK and `latest.json` exactly matched the verified local artifact and manifest. |
+
+Publication preserves the previous manifest and checks it for concurrent changes.
+The first rename from `/run` to `/var` was rejected across filesystem boundaries
+before changing the public manifest. The completed publication stages temporary
+files on the destination filesystem and atomically replaces them there.
+
+Only this task's temporary signing copies and publication staging files are
+removed during release cleanup. The original signing material remains unchanged.
