@@ -219,7 +219,10 @@ async def test_preservation_receipt_does_not_exempt_unrelated_row_changes(store)
 
 
 @pytest.mark.asyncio
-async def test_hot_application_lifespan_preserves_local_policy_and_registration(tmp_path):
+@pytest.mark.parametrize("retained_required_flag", [False, True])
+async def test_hot_application_lifespan_preserves_local_policy_and_registration(
+    tmp_path, retained_required_flag
+):
     from terminal_mcp.app import create_app
     from terminal_mcp.auth.foundation import AuthFoundationStore
     from terminal_mcp.auth.identity_migration import initialize_fresh_identity
@@ -249,6 +252,13 @@ async def test_hot_application_lifespan_preserves_local_policy_and_registration(
     await PairingStore(configured.auth_database_path).initialize()
     initialize_fresh_identity(configured.database_path, configured.auth_database_path)
     with sqlite3.connect(configured.database_path) as db:
+        if retained_required_flag:
+            db.execute(
+                "CREATE TABLE access_mesh_operator_defaults("
+                "singleton INTEGER PRIMARY KEY,revision INTEGER NOT NULL,"
+                "policy_json TEXT NOT NULL,legacy_enabled INTEGER NOT NULL,"
+                "inherit_policy INTEGER NOT NULL DEFAULT 0,parent_json TEXT)"
+            )
         old_slot(db)
         db.execute("UPDATE logical_agent_work_sessions SET state='ended',ended_at=?", (END,))
         db.execute("DELETE FROM logical_agent_session_policies")
@@ -259,6 +269,9 @@ async def test_hot_application_lifespan_preserves_local_policy_and_registration(
     async with app.router.lifespan_context(app):
         migrated = app.state.access_mesh.store
         with migrated._connect() as db:
+            assert "legacy_enabled" not in {
+                row[1] for row in db.execute("PRAGMA table_info(access_mesh_operator_defaults)")
+            }
             receipt = json.loads(
                 db.execute(f"SELECT receipt_json FROM {MIGRATION_TABLE}").fetchone()[0]
             )

@@ -330,6 +330,8 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 )
             if "parent_json" not in default_columns:
                 db.execute("ALTER TABLE access_mesh_operator_defaults ADD COLUMN parent_json TEXT")
+            if "legacy_enabled" in default_columns:
+                db.execute("ALTER TABLE access_mesh_operator_defaults DROP COLUMN legacy_enabled")
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_slot_catalog (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT, issuer_id TEXT NOT NULL,
                 slot_id TEXT NOT NULL, UNIQUE(issuer_id,slot_id)
