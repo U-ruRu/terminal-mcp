@@ -1606,8 +1606,13 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 INSERT OR IGNORE INTO access_mesh_command_journal(command_hash) VALUES(NEW.hash);
                 END""")
 
-    def command_journal(self, *, after: int = 0, limit: int = 20) -> list[dict]:
-        if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 101:
+    def command_journal(self, *, before: int | None = None, limit: int = 20) -> list[dict]:
+        """Read newest first, then continue strictly before the last returned sequence."""
+        if (
+            (before is not None and (type(before) is not int or before < 0))
+            or type(limit) is not int
+            or not 1 <= limit <= 101
+        ):
             raise AccessMeshError("access_mesh_invalid_limit")
         with self._connect() as db:
             rows = db.execute(
@@ -1620,8 +1625,10 @@ class AccessMeshStore(AccessRegistryStore, LocalAccessMesh):
                 LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash
                 LEFT JOIN logical_agents l ON l.logical_agent_id=a.logical_agent_id
                 LEFT JOIN access_mesh_sessions m ON m.logical_agent_id=a.logical_agent_id
-                WHERE j.sequence>? ORDER BY j.sequence LIMIT ?""",
-                (after, limit),
+                """
+                + ("WHERE j.sequence < ? " if before is not None else "")
+                + "ORDER BY j.sequence DESC LIMIT ?",
+                (before, limit) if before is not None else (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
 

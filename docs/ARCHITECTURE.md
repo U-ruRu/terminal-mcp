@@ -16,6 +16,12 @@ Access catalog: `session`, `get_events`.
 
 Executor catalog: `session`, `task_list`, `command_run`, `command_read`, `command_cancel`, `command_recovery`, `task_claim`, `task_state`, `task_comment`, `message`.
 
+`command_read` without `cmd_hash` reads the local command journal newest-first.
+Its opaque cursor continues strictly before the oldest sequence returned on that page;
+new commands do not shift older pages. Restart journal reading without a cursor after
+an `invalid_cursor` from the previous ascending-journal contract. With `cmd_hash`,
+command output and its forward line cursor retain their existing contract.
+
 Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
 
 Operator slot and topology operations are authenticated HTTP use cases. They do not add shell execution to the application. Agent roles have no alternate start/end/interrupt implementation or alternate discovery catalog.

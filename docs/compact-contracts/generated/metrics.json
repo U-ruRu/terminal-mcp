@@ -727,19 +727,19 @@
     "executor": {
       "after": {
         "component_byte_shares": {
-          "descriptions": 0.903866,
-          "input_schemas": 0.007842,
-          "output_schemas": 0.007842
+          "descriptions": 0.904421,
+          "input_schemas": 0.007797,
+          "output_schemas": 0.007797
         },
         "component_utf8_bytes": {
-          "descriptions": 19594,
+          "descriptions": 19720,
           "input_schemas": 170,
           "output_schemas": 170
         },
         "serialized_tools_list": {
-          "characters": 21676,
-          "tokens": 5016,
-          "utf8_bytes": 21678
+          "characters": 21802,
+          "tokens": 5037,
+          "utf8_bytes": 21804
         },
         "tools": {
           "command_cancel": {
@@ -763,11 +763,11 @@
             "utf8_bytes": 2327
           },
           "command_read": {
-            "characters": 1674,
+            "characters": 1800,
             "description": {
-              "characters": 1467,
-              "tokens": 349,
-              "utf8_bytes": 1467
+              "characters": 1593,
+              "tokens": 370,
+              "utf8_bytes": 1593
             },
             "input_schema": {
               "characters": 17,
@@ -779,8 +779,8 @@
               "tokens": 5,
               "utf8_bytes": 17
             },
-            "tokens": 396,
-            "utf8_bytes": 1674
+            "tokens": 417,
+            "utf8_bytes": 1800
           },
           "command_recovery": {
             "characters": 2328,
@@ -946,19 +946,19 @@
       },
       "before": {
         "component_byte_shares": {
-          "descriptions": 0.140954,
-          "input_schemas": 0.339693,
-          "output_schemas": 0.423739
+          "descriptions": 0.146847,
+          "input_schemas": 0.337363,
+          "output_schemas": 0.420832
         },
         "component_utf8_bytes": {
-          "descriptions": 2571,
+          "descriptions": 2697,
           "input_schemas": 6196,
           "output_schemas": 7729
         },
         "serialized_tools_list": {
-          "characters": 18240,
-          "tokens": 4161,
-          "utf8_bytes": 18240
+          "characters": 18366,
+          "tokens": 4182,
+          "utf8_bytes": 18366
         },
         "tools": {
           "command_cancel": {
@@ -982,11 +982,11 @@
             "utf8_bytes": 1817
           },
           "command_read": {
-            "characters": 2046,
+            "characters": 2172,
             "description": {
-              "characters": 199,
-              "tokens": 40,
-              "utf8_bytes": 199
+              "characters": 325,
+              "tokens": 61,
+              "utf8_bytes": 325
             },
             "input_schema": {
               "characters": 478,
@@ -998,8 +998,8 @@
               "tokens": 282,
               "utf8_bytes": 1196
             },
-            "tokens": 477,
-            "utf8_bytes": 2046
+            "tokens": 498,
+            "utf8_bytes": 2172
           },
           "command_recovery": {
             "characters": 1818,
@@ -1165,21 +1165,21 @@
       },
       "delta": {
         "characters": {
-          "after": 21676,
-          "before": 18240,
-          "change_pct": 18.838,
+          "after": 21802,
+          "before": 18366,
+          "change_pct": 18.708,
           "delta": 3436
         },
         "tokens": {
-          "after": 5016,
-          "before": 4161,
-          "change_pct": 20.548,
+          "after": 5037,
+          "before": 4182,
+          "change_pct": 20.445,
           "delta": 855
         },
         "utf8_bytes": {
-          "after": 21678,
-          "before": 18240,
-          "change_pct": 18.849,
+          "after": 21804,
+          "before": 18366,
+          "change_pct": 18.719,
           "delta": 3438
         }
       },
@@ -1206,21 +1206,21 @@
         },
         "command_read": {
           "characters": {
-            "after": 1674,
-            "before": 2046,
-            "change_pct": -18.182,
+            "after": 1800,
+            "before": 2172,
+            "change_pct": -17.127,
             "delta": -372
           },
           "tokens": {
-            "after": 396,
-            "before": 477,
-            "change_pct": -16.981,
+            "after": 417,
+            "before": 498,
+            "change_pct": -16.265,
             "delta": -81
           },
           "utf8_bytes": {
-            "after": 1674,
-            "before": 2046,
-            "change_pct": -18.182,
+            "after": 1800,
+            "before": 2172,
+            "change_pct": -17.127,
             "delta": -372
           }
         },
@@ -1391,21 +1391,21 @@
   "serialization": "json.dumps(sort_keys=True,separators=(',', ':'),ensure_ascii=False)",
   "three_catalogs_total": {
     "characters": {
-      "after": 48748,
-      "before": 64285,
-      "change_pct": -24.169,
+      "after": 48874,
+      "before": 64411,
+      "change_pct": -24.122,
       "delta": -15537
     },
     "tokens": {
-      "after": 11295,
-      "before": 15251,
-      "change_pct": -25.939,
+      "after": 11316,
+      "before": 15272,
+      "change_pct": -25.904,
       "delta": -3956
     },
     "utf8_bytes": {
-      "after": 48752,
-      "before": 64285,
-      "change_pct": -24.163,
+      "after": 48878,
+      "before": 64411,
+      "change_pct": -24.115,
       "delta": -15533
     }
   },

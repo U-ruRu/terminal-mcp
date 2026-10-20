@@ -922,7 +922,9 @@ def build_role_mcp(
         elif tool.name == "command_read":
             tool.description = (
                 "Read any local command by cmd_hash, or omit cmd_hash for the local "
-                "command journal. A session number and active work cycle are unnecessary. "
+                "command journal, newest first. Journal cursors continue toward older commands; "
+                "a selected command's output cursor continues forward unchanged. "
+                "A session number and active work cycle are unnecessary. "
                 "Use the returned opaque cursor for the next bounded page."
             )
         elif tool.name == "agent_observe":

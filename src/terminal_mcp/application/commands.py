@@ -37,10 +37,18 @@ class CommandApplication(ApplicationCapability):
                         return pending
             except Exception:
                 pass
-        scope = {"kind": "command.journal", "node_id": mesh.store.local_node_id}
+        # Bind the direction here, not in the shared command-output cursor codec.
+        # Old ascending journal cursors must not be reinterpreted as backward anchors.
+        scope = {
+            "kind": "command.journal",
+            "node_id": mesh.store.local_node_id,
+            "order": "sequence_desc",
+        }
         try:
-            after = decode_cursor(cursor, scope)
-            rows = await asyncio.to_thread(mesh.store.command_journal, after=after, limit=limit + 1)
+            before = decode_cursor(cursor, scope) if cursor else None
+            rows = await asyncio.to_thread(
+                mesh.store.command_journal, before=before, limit=limit + 1
+            )
             data = [{key: value for key, value in row.items() if key != "sequence"} for row in rows]
             page, _ = bounded_page(data, limit=limit, cursor=None, scope=scope)
         except InvalidCursor as exc:

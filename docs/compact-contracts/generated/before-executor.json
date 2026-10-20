@@ -406,7 +406,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal. A session number and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.",
+      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal, newest first. Journal cursors continue toward older commands; a selected command's output cursor continues forward unchanged. A session number and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.",
       "inputSchema": {
         "properties": {
           "cmd_hash": {

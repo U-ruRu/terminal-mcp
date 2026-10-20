@@ -142,6 +142,7 @@ COMPONENT_MODULES = frozenset(
         "test_auth_foundation.py",
         "test_auth_path_policy.py",
         "test_backup_manifest.py",
+        "test_command_journal.py",
         "test_command_run_fast_path.py",
         "test_command_scope_atomic.py",
         "test_compact_contracts.py",
